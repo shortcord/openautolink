@@ -31,21 +31,39 @@ Phone ──WiFi TCP:5277──▶ SBC Bridge ──Ethernet──▶ Car Head U
 
 ## Quick Start
 
-### Build the App
-```powershell
-.\gradlew :app:assembleDebug
-```
+> **Play Store goal**: The long-term goal is to get the app certified and published on the Google Play Store so users can simply install it. Whether this will be possible (AAOS certification requirements, Google approval, etc.) is unknown at this point. Until then, you must self-publish as described below.
 
-### Build a Signed AAB (for Play Console)
-```powershell
-.\scripts\bundle-release-interactive.ps1
-```
+### Bridge (SBC)
 
-### Build the Bridge (on SBC)
+No building required — the install script downloads the latest pre-built binary from GitHub Releases. Follow the [Bridge Setup Guide](bridge/sbc/BUILD.md) which walks you through flashing an OS, getting SSH access, and running:
+
 ```bash
-cd /opt/openautolink-src/build
-cmake --build . --target openautolink-headless -j$(nproc)
+curl -fsSL https://raw.githubusercontent.com/mossyhub/openautolink/main/bridge/sbc/install.sh | sudo bash
 ```
+
+### App (AAOS Head Unit)
+
+Because this is an AAOS app (not a standard phone app), getting it onto your car requires publishing through the Google Play Console with an AAOS-specific release track. This is more involved than a typical Android app:
+
+1. **Create a [Google Play Console](https://play.google.com/console/) developer account** ($25 one-time fee)
+
+2. **Create a new app** in the Play Console and set up an **AAOS release track** (car-specific distribution)
+
+3. **Change the package name** — Google Play requires a unique application ID. In [app/build.gradle.kts](app/build.gradle.kts), change `com.openautolink.app` to your own unique package name (e.g. `com.yourname.openautolink`)
+
+4. **Generate a signing key**:
+   ```powershell
+   .\scripts\create-upload-keystore.ps1
+   ```
+   This creates a keystore at `secrets/upload-key.jks`. Keep this file safe — you need it for every update.
+
+5. **Build and sign the release AAB**:
+   ```powershell
+   .\scripts\bundle-release-interactive.ps1
+   ```
+   The signed `.aab` will be in `app/build/outputs/bundle/release/`.
+
+6. **Upload the AAB** to your Play Console AAOS release track, fill in the required store listing details, and roll out to your vehicle
 
 ### Run Tests
 ```powershell
