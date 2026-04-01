@@ -41,6 +41,22 @@ The SBC requires **two separate network connections** to your PC:
 
 > **Why two cables?** The onboard NIC is locked to the car network subnet (192.168.222.0/24) with a static IP. Mixing SSH and bridge traffic on one interface creates routing conflicts and doesn't match the real car topology.
 
+### SSH Connection via WiFi Sharing
+
+The simplest way to give the SBC an SSH-accessible IP from your dev PC:
+
+1. **Share your PC's WiFi to the SSH NIC** — In Windows: Settings → Network → Wi-Fi → Properties → "Share this connection" → select the NIC connected to the SBC's USB ethernet adapter
+2. Windows ICS (Internet Connection Sharing) runs a DHCP server on that NIC in the **`192.168.137.0/24`** subnet (the PC becomes `192.168.137.1`)
+3. The SBC's USB NIC gets a DHCP lease (e.g. `192.168.137.x`)
+4. **Discover the SBC's IP via ARP:**
+   ```powershell
+   # After the SBC boots and gets a DHCP lease:
+   arp -a | Select-String "192.168.137"
+   ```
+5. SSH in: `ssh khadas@192.168.137.x` (substitute your SBC's username and discovered IP)
+
+> **Tip:** The SBC's MAC address won't change, so Windows ICS will usually assign the same IP across reboots. Note it down after first discovery.
+
 ### IP Addressing
 
 This mirrors the real car environment:
@@ -49,10 +65,62 @@ This mirrors the real car environment:
 |--------|-----|------|
 | SBC onboard NIC (eth0) | `192.168.222.222` | Bridge — already configured by `setup-car-net.sh` |
 | Emulator (acting as head unit) | `192.168.222.108` | App — matches the IP the GM head unit assigns to its USB NIC |
-| SBC USB NIC (eth1+) | DHCP or static | SSH management — configured by `setup-eth-ssh.sh` |
-| PC SSH NIC | DHCP or static | SSH client access |
+| SBC USB NIC (eth1+) | DHCP from Windows ICS | SSH management — `192.168.137.x` subnet |
+| PC SSH NIC | `192.168.137.1` | SSH client access (Windows ICS gateway) |
 
-## 2. Emulator Setup
+## 2. SBC Initial Setup (First Time Only)
+
+Before the bridge can be built and deployed, the SBC needs a one-time setup for key-based SSH and passwordless sudo so that development tools (including Copilot) can work freely on the SBC.
+
+### 2a. OS Setup
+
+1. Flash the SBC's OS image per its manufacturer's instructions
+2. Boot the SBC and connect via SSH (password auth initially): `ssh <user>@<sbc-ip>`
+3. Update the OS:
+   ```bash
+   sudo apt update && sudo apt upgrade -y
+   ```
+
+### 2b. Key-Based SSH
+
+Generate an SSH key on your dev PC (if you don't have one) and copy it to the SBC:
+
+```powershell
+# On the dev PC (PowerShell)
+# Generate key if needed:
+ssh-keygen -t ed25519 -C "openautolink-dev"
+
+# Copy public key to SBC (will prompt for password one last time):
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <user>@<sbc-ip> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
+```
+
+Verify: `ssh <user>@<sbc-ip>` should now connect without a password prompt.
+
+### 2c. Passwordless Sudo
+
+On the SBC, add a sudoers rule so the dev user can run commands without a password:
+
+```bash
+# On the SBC:
+sudo visudo -f /etc/sudoers.d/dev-nopasswd
+# Add this line (replace <user> with your SBC username):
+<user> ALL=(ALL) NOPASSWD: ALL
+```
+
+Verify: `sudo whoami` should return `root` without a password prompt.
+
+> **Why passwordless sudo?** Copilot and deployment scripts (`scp`, `ssh` commands in `deploy-to-sbc.ps1`) need to restart services, install files to `/opt/openautolink/`, and run `systemctl` without interactive prompts.
+
+### 2d. Verify
+
+```powershell
+# From the dev PC — should work with no prompts:
+ssh <user>@<sbc-ip> "sudo systemctl status sshd"
+```
+
+Once complete, proceed to build and deploy the bridge per [bridge/sbc/BUILD.md](../bridge/sbc/BUILD.md).
+
+## 3. Emulator Setup
 
 ### Starting the Emulator
 
@@ -90,17 +158,7 @@ adb forward tcp:5290 tcp:5290
 
 With this approach, the bridge connects to `192.168.222.108:5288/5289/5290` and the traffic is forwarded into the emulator.
 
-#### Option B: Emulator Network Bridging (Advanced)
-
-If port forwarding causes issues (e.g., with connection direction — the app connects *to* the bridge, not vice versa), configure the emulator to bridge directly onto the physical network:
-
-```powershell
-# Not natively supported by the stock Android emulator.
-# Use TAP adapter + emulator's -netdev option if needed.
-# For most testing, Option A with reversed connection direction is sufficient.
-```
-
-#### Option C: Reverse ADB (App Connects Outbound)
+#### Option B: Reverse ADB (App Connects Outbound)
 
 Since the app initiates the TCP connections (app → bridge), you can use `adb reverse` to let the emulator reach the SBC:
 
@@ -113,9 +171,9 @@ adb reverse tcp:5290 tcp:5290
 
 Then configure the app to connect to `localhost` (or `127.0.0.1`) as the bridge address. The traffic will route through the host to the SBC at `192.168.222.222`.
 
-> **Recommended:** Option C is the most reliable for the app's connection model (app connects to bridge). Set the bridge IP in the app's settings to `127.0.0.1` and use `adb reverse` to tunnel.
+> **Recommended:** Option B is the most reliable for the app's connection model (app connects to bridge). Set the bridge IP in the app's settings to `127.0.0.1` and use `adb reverse` to tunnel.
 
-## 3. Installing and Running the App
+## 4. Installing and Running the App
 
 ### Build and Install
 
@@ -143,7 +201,7 @@ adb logcat --pid=$(adb shell pidof com.openautolink.app)
 adb logcat -s OAL:* Transport:* Video:* Audio:*
 ```
 
-## 4. Bridge Setup (SBC Side)
+## 5. Bridge Setup (SBC Side)
 
 ### Verify Car Network
 
@@ -175,7 +233,7 @@ From the PC, confirm the bridge is reachable:
 Test-NetConnection -ComputerName 192.168.222.222 -Port 5288
 ```
 
-## 5. End-to-End Test Workflow
+## 6. End-to-End Test Workflow
 
 1. **Boot SBC** — bridge starts automatically via systemd
 2. **SSH into SBC** — verify `eth0` is `192.168.222.222`, bridge is running
@@ -197,7 +255,7 @@ Test-NetConnection -ComputerName 192.168.222.222 -Port 5288
 | **Reconnection** | Kill bridge, restart | App shows "Connecting...", reconnects when bridge returns |
 | **Settings** | App settings screen | Bridge IP, codec preferences persisted via DataStore |
 
-## 6. Unit and Integration Tests
+## 7. Unit and Integration Tests
 
 These run without hardware:
 
@@ -209,22 +267,63 @@ These run without hardware:
 .\gradlew :app:connectedDebugAndroidTest
 ```
 
-## 7. Testing in the Real Car
+## 8. Testing in the Real Car
 
-When deployed to the actual GM head unit:
+In-car testing is harder than emulator testing but critical at key milestones — it's the only way to validate real hardware decoders, audio routing, VHAL integration, and actual reconnection behavior.
 
-- **No ADB access** — GM locks down ADB on production head units
-- **No logcat** — rely on the app's built-in diagnostics screen for status
-- **No hot-deploy** — install via sideloading (USB drive or network install)
-- **Bridge networking is automatic** — the car assigns `192.168.222.108` to its USB NIC; the SBC's onboard NIC is `192.168.222.222`
+### What's Different
 
-This is why emulator testing is critical — it's the only environment where you get full `adb` access to debug the app in real-time against a live bridge.
+- **No ADB access** — GM locks down ADB on production head units. No `logcat`, no `adb install`, no `adb reverse`
+- **No debug APKs** — the app must be built as a **signed AAB** (Android App Bundle) and uploaded to the **Google Play Console internal/closed testing track** for every new build
+- **No live debugging** — rely on the app's built-in diagnostics screen for status and error info
+- **Bridge SSH still works** — the second USB NIC cable from your laptop to the SBC provides SSH access, same as in emulator testing. You can still deploy bridge updates, view logs, and restart services from your laptop while sitting in the car
+
+### Deploying a Test Build
+
+```powershell
+# 1. Build signed AAB
+.\gradlew :app:bundleRelease
+
+# 2. Upload to Play Console
+#    Play Console → OpenAutoLink → Testing → Internal testing → Create new release
+#    Upload: app/build/outputs/bundle/release/app-release.aab
+#    Roll out to internal testers
+
+# 3. On the head unit: open Play Store → update the app
+#    (or wait for auto-update if already installed)
+```
+
+> **Turnaround time:** Play Console internal testing typically processes builds in minutes, but there's no instant deploy path. Plan testing sessions accordingly.
+
+### Bridge Access While In-Car
+
+SSH into the SBC from your laptop the same way as on the bench — share WiFi to your USB NIC, discover the SBC via ARP, and connect:
+
+```powershell
+arp -a | Select-String "192.168.137"
+ssh khadas@192.168.137.x
+# View bridge logs live:
+sudo journalctl -u openautolink.service -f
+```
+
+### What to Test In-Car (vs Emulator)
+
+| Area | Why in-car matters |
+|------|-------------------|
+| **Hardware video decoding** | Real Qualcomm C2 decoders behave differently than emulator software decoders |
+| **Audio routing** | Car audio system, steering wheel controls, multi-zone output |
+| **Reconnection** | Real power cycle — ignition off/on, SBC cold boot |
+| **Touch calibration** | Real touchscreen DPI, coordinate mapping on 2914×1134 display |
+| **VHAL data** | Real vehicle speed, gear, parking state |
+| **Network stability** | Real USB gadget/NIC behavior on the car's USB port |
+
+This is why emulator testing handles the bulk of development — it's the only environment with full `adb` access for rapid iteration. In-car testing validates what the emulator can't.
 
 ## Troubleshooting
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| Emulator can't reach `192.168.222.222` | Port forwarding / reverse not set up | Run `adb reverse` commands (Section 2, Option C) |
+| Emulator can't reach `192.168.222.222` | Port forwarding / reverse not set up | Run `adb reverse` commands (Section 3, Option B) |
 | Bridge can't reach `192.168.222.108` | PC NIC missing secondary IP | Add `192.168.222.108` to the PC NIC on the bridge subnet |
 | App shows "Connecting..." forever | Bridge not running or wrong IP in app | Check `systemctl status openautolink.service`; verify app bridge IP setting |
 | Video renders but no audio | Audio purpose routing mismatch | Check logcat for AudioTrack errors; see [embedded-knowledge.md](embedded-knowledge.md) |
