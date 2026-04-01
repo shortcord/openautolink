@@ -7,6 +7,7 @@ build/
 *.dex
 *.class
 *.jar
+!gradle/wrapper/gradle-wrapper.jar
 
 # Local properties (signing keys, SDK paths)
 local.properties
