@@ -33,7 +33,8 @@ jobs:
               apt-get update
               apt-get install -y cmake g++ make git \
                 libboost-all-dev libusb-1.0-0-dev \
-                libssl-dev libprotobuf-dev protobuf-compiler
+                libssl-dev libprotobuf-dev protobuf-compiler \
+                libabsl-dev
 
               mkdir -p build-bridge
               cd build-bridge
@@ -42,7 +43,8 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DPI_AA_ENABLE_AASDK_LIVE=ON \
                 -DPI_AA_AASDK_SOURCE_DIR=/src/external/opencardev-aasdk \
-                -DPI_AA_OPENAUTO_SOURCE_DIR=/src/external/opencardev-openauto
+                -DPI_AA_OPENAUTO_SOURCE_DIR=/src/external/opencardev-openauto \
+                -DSKIP_BUILD_ABSL=ON
 
               cmake --build . --target openautolink-headless -j$(nproc)
               strip -o openautolink-headless-stripped openautolink-headless
