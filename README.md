@@ -62,6 +62,10 @@ cmake --build . --target openautolink-headless -j$(nproc)
 
 Active development. See the [work plan](docs/work-plan.md) for current milestones.
 
+## Compatibility
+
+**Not known to be universally compatible with all AAOS vehicles.** Currently tested only on a **2024 Chevrolet Blazer EV**, which enumerates a USB NIC, assigns it an IP, and allows network traffic to reach apps. Other GM vehicles on the same AAOS head unit platform likely work, but this has not been verified. Non-GM AAOS vehicles may have different USB networking behavior or restrictions that prevent this approach from working.
+
 ## License
 
 TBD
