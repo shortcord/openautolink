@@ -16,6 +16,11 @@ applyTo: "bridge/openautolink/headless/**"
 - **Output sink** — thread-safe queue with mutex; aasdk callbacks enqueue, TCP threads dequeue
 - Never call aasdk methods from TCP threads directly
 
+## aasdk Submodule (Forked)
+- aasdk lives at `external/opencardev-aasdk/` — a git submodule pointing to **mossyhub/aasdk** branch `openautolink`
+- When modifying aasdk source (e.g. adding service handlers, extending channels): commit inside the submodule, push to fork, then update the parent repo's submodule pointer
+- Keep `origin` (opencardev/aasdk) as upstream remote for rebasing; `fork` (mossyhub/aasdk) is where our changes live
+
 ## aasdk v1.6 Requirements
 - Protocol version 1.6 in version exchange (phones respond 1.7)
 - ServiceDiscoveryResponse uses typed ServiceConfiguration (MediaSinkService, SensorSourceService, etc.)

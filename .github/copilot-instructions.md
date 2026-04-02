@@ -57,6 +57,15 @@ When modifying **app** code that talks to the bridge, **read the bridge source c
 - Uses OAL protocol exclusively (see [docs/protocol.md](docs/protocol.md))
 - **No USB adapter support** — TCP-only, bridge-only
 
+### External Dependencies (`external/`)
+
+| Submodule | Fork | Branch | Purpose |
+|-----------|------|--------|---------|
+| `external/opencardev-aasdk/` | [mossyhub/aasdk](https://github.com/mossyhub/aasdk) | `openautolink` | aasdk v1.6 with our NavigationStatus extensions |
+| `external/opencardev-openauto/` | upstream `opencardev/openauto` | `main` | Reference only — not modified |
+
+**aasdk is a forked submodule.** Changes to files in `external/opencardev-aasdk/` must be committed inside the submodule first (`cd external/opencardev-aasdk && git add/commit/push`), then the parent repo's submodule pointer updated (`cd <root> && git add external/opencardev-aasdk && git commit`). Do not leave aasdk changes as dirty working-tree edits.
+
 ### Bridge (`bridge/`)
 
 The bridge binary speaks OAL protocol over TCP to the car app.
