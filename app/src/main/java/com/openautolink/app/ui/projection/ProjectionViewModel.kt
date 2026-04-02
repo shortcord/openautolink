@@ -39,6 +39,9 @@ data class ProjectionUiState(
     val phoneBatteryLevel: Int? = null,
     val phoneBatteryCritical: Boolean = false,
     val voiceSessionActive: Boolean = false,
+    val displayMode: String = AppPreferences.DEFAULT_DISPLAY_MODE,
+    val customViewportWidth: Int = 0,
+    val customViewportHeight: Int = 0,
 )
 
 class ProjectionViewModel(application: Application) : AndroidViewModel(application) {
@@ -86,6 +89,9 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         sessionManager.phoneBatteryLevel,
         sessionManager.phoneBatteryCritical,
         sessionManager.voiceSessionActive,
+        preferences.displayMode,
+        preferences.customViewportWidth,
+        preferences.customViewportHeight,
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         ProjectionUiState(
@@ -101,6 +107,9 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             phoneBatteryLevel = values[9] as? Int,
             phoneBatteryCritical = values[10] as Boolean,
             voiceSessionActive = values[11] as Boolean,
+            displayMode = values[12] as String,
+            customViewportWidth = values[13] as Int,
+            customViewportHeight = values[14] as Int,
         )
     }.stateIn(
         viewModelScope,

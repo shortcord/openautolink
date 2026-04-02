@@ -65,6 +65,11 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val OVERLAY_SETTINGS_BUTTON = booleanPreferencesKey("overlay_settings_button")
         val OVERLAY_STATS_BUTTON = booleanPreferencesKey("overlay_stats_button")
 
+        // Custom viewport
+        val CUSTOM_VIEWPORT_WIDTH = intPreferencesKey("custom_viewport_width")
+        val CUSTOM_VIEWPORT_HEIGHT = intPreferencesKey("custom_viewport_height")
+        val VIEWPORT_ASPECT_RATIO_LOCKED = booleanPreferencesKey("viewport_aspect_ratio_locked")
+
         const val DEFAULT_BRIDGE_HOST = "192.168.0.100"
         const val DEFAULT_BRIDGE_PORT = 5288
         const val DEFAULT_VIDEO_CODEC = "h265"
@@ -95,6 +100,9 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_CALL_QUALITY = "hd"
         const val DEFAULT_OVERLAY_SETTINGS_BUTTON = true
         const val DEFAULT_OVERLAY_STATS_BUTTON = true
+        const val DEFAULT_CUSTOM_VIEWPORT_WIDTH = 0 // 0 = use full usable width
+        const val DEFAULT_CUSTOM_VIEWPORT_HEIGHT = 0 // 0 = use full usable height
+        const val DEFAULT_VIEWPORT_ASPECT_RATIO_LOCKED = true
     }
 
     val bridgeHost: Flow<String> = dataStore.data.map { prefs ->
@@ -217,6 +225,18 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[OVERLAY_STATS_BUTTON] ?: DEFAULT_OVERLAY_STATS_BUTTON
     }
 
+    val customViewportWidth: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[CUSTOM_VIEWPORT_WIDTH] ?: DEFAULT_CUSTOM_VIEWPORT_WIDTH
+    }
+
+    val customViewportHeight: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[CUSTOM_VIEWPORT_HEIGHT] ?: DEFAULT_CUSTOM_VIEWPORT_HEIGHT
+    }
+
+    val viewportAspectRatioLocked: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[VIEWPORT_ASPECT_RATIO_LOCKED] ?: DEFAULT_VIEWPORT_ASPECT_RATIO_LOCKED
+    }
+
     suspend fun setBridgeHost(host: String) {
         dataStore.edit { it[BRIDGE_HOST] = host }
     }
@@ -335,5 +355,17 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setOverlayStatsButton(visible: Boolean) {
         dataStore.edit { it[OVERLAY_STATS_BUTTON] = visible }
+    }
+
+    suspend fun setCustomViewportWidth(width: Int) {
+        dataStore.edit { it[CUSTOM_VIEWPORT_WIDTH] = width }
+    }
+
+    suspend fun setCustomViewportHeight(height: Int) {
+        dataStore.edit { it[CUSTOM_VIEWPORT_HEIGHT] = height }
+    }
+
+    suspend fun setViewportAspectRatioLocked(locked: Boolean) {
+        dataStore.edit { it[VIEWPORT_ASPECT_RATIO_LOCKED] = locked }
     }
 }

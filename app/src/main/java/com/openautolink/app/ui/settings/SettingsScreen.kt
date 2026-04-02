@@ -109,6 +109,11 @@ private val displayModes = listOf(
         "Fullscreen Immersive",
         "Hides all system bars. Swipe edge to reveal."
     ),
+    DisplayModeOption(
+        "custom_viewport",
+        "Custom Viewport",
+        "User-defined projection area with adjustable edges and aspect ratio snapping."
+    ),
 )
 
 @Composable
@@ -116,6 +121,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = viewModel(),
     onBack: () -> Unit = {},
     onNavigateToDiagnostics: () -> Unit = {},
+    onNavigateToViewportEditor: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val updateStatus by viewModel.updateStatus.collectAsStateWithLifecycle()
@@ -185,7 +191,7 @@ fun SettingsScreen(
                 when (selectedTab) {
                     SettingsTab.CONNECTION -> ConnectionTab(viewModel, uiState)
                     SettingsTab.BRIDGE -> BridgeTab(viewModel, uiState)
-                    SettingsTab.DISPLAY -> DisplayTab(viewModel, uiState)
+                    SettingsTab.DISPLAY -> DisplayTab(viewModel, uiState, onNavigateToViewportEditor)
                     SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
                     SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
                     SettingsTab.UPDATES -> UpdatesTab(viewModel, uiState, updateStatus)
@@ -516,7 +522,11 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
 }
 
 @Composable
-private fun DisplayTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
+private fun DisplayTab(
+    viewModel: SettingsViewModel,
+    uiState: SettingsUiState,
+    onNavigateToViewportEditor: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -557,6 +567,34 @@ private fun DisplayTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                     Text(
                         text = mode.description,
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        // Show "Edit Viewport" button when custom_viewport is selected
+        if (uiState.displayMode == "custom_viewport") {
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth(0.7f)
+                    .padding(start = 48.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilledTonalButton(
+                    onClick = onNavigateToViewportEditor,
+                    modifier = Modifier.testTag("editViewportButton"),
+                ) {
+                    Text("Edit Viewport")
+                }
+
+                if (uiState.customViewportWidth > 0 && uiState.customViewportHeight > 0) {
+                    Text(
+                        text = "${uiState.customViewportWidth} × ${uiState.customViewportHeight}",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }

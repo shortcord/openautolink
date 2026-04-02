@@ -1,6 +1,9 @@
 package com.openautolink.app.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -8,15 +11,21 @@ import androidx.navigation.compose.rememberNavController
 import com.openautolink.app.ui.diagnostics.DiagnosticsScreen
 import com.openautolink.app.ui.projection.ProjectionScreen
 import com.openautolink.app.ui.settings.SettingsScreen
+import com.openautolink.app.ui.settings.SettingsViewModel
+import com.openautolink.app.ui.settings.ViewportEditorScreen
 
 object AppDestinations {
     const val PROJECTION = "projection"
     const val SETTINGS = "settings"
     const val DIAGNOSTICS = "diagnostics"
+    const val VIEWPORT_EDITOR = "viewport_editor"
 }
 
 @Composable
 fun AppNavHost(navController: NavHostController = rememberNavController()) {
+    // Share SettingsViewModel across Settings and ViewportEditor screens
+    val settingsViewModel: SettingsViewModel = viewModel()
+
     NavHost(
         navController = navController,
         startDestination = AppDestinations.PROJECTION
@@ -30,15 +39,33 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
         }
         composable(AppDestinations.SETTINGS) {
             SettingsScreen(
+                viewModel = settingsViewModel,
                 onBack = { navController.popBackStack() },
                 onNavigateToDiagnostics = {
                     navController.navigate(AppDestinations.DIAGNOSTICS)
-                }
+                },
+                onNavigateToViewportEditor = {
+                    navController.navigate(AppDestinations.VIEWPORT_EDITOR)
+                },
             )
         }
         composable(AppDestinations.DIAGNOSTICS) {
             DiagnosticsScreen(
                 onBack = { navController.popBackStack() }
+            )
+        }
+        composable(AppDestinations.VIEWPORT_EDITOR) {
+            val uiState by settingsViewModel.uiState.collectAsStateWithLifecycle()
+            ViewportEditorScreen(
+                initialWidth = uiState.customViewportWidth,
+                initialHeight = uiState.customViewportHeight,
+                aspectRatioLocked = uiState.viewportAspectRatioLocked,
+                onDone = { width, height, ratioLocked ->
+                    settingsViewModel.updateCustomViewport(width, height)
+                    settingsViewModel.updateViewportAspectRatioLocked(ratioLocked)
+                    navController.popBackStack()
+                },
+                onBack = { navController.popBackStack() },
             )
         }
     }

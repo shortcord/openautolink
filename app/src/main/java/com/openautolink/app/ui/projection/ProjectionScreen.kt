@@ -39,6 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.openautolink.app.R
@@ -68,6 +70,24 @@ fun ProjectionScreen(
             .windowInsetsPadding(WindowInsets.systemBars)
             .testTag("projectionScreen")
     ) {
+        // Compute SurfaceView modifier based on display mode
+        val isCustomViewport = uiState.displayMode == "custom_viewport"
+                && uiState.customViewportWidth > 0
+                && uiState.customViewportHeight > 0
+        val density = LocalDensity.current
+        val surfaceModifier = if (isCustomViewport) {
+            val widthDp: Dp = with(density) { uiState.customViewportWidth.toDp() }
+            val heightDp: Dp = with(density) { uiState.customViewportHeight.toDp() }
+            Modifier
+                .align(Alignment.BottomStart)
+                .size(widthDp, heightDp)
+                .testTag("projectionSurface")
+        } else {
+            Modifier
+                .fillMaxSize()
+                .testTag("projectionSurface")
+        }
+
         // SurfaceView for video rendering — intercepts touch for forwarding to bridge
         @SuppressLint("ClickableViewAccessibility")
         AndroidView(
@@ -102,9 +122,7 @@ fun ProjectionScreen(
                     }
                 }
             },
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("projectionSurface")
+            modifier = surfaceModifier
         )
 
         // Connection status HUD — centered overlay, visible when not streaming

@@ -54,6 +54,10 @@ data class SettingsUiState(
     val syncAaTheme: Boolean = AppPreferences.DEFAULT_SYNC_AA_THEME,
     val hideAaClock: Boolean = AppPreferences.DEFAULT_HIDE_AA_CLOCK,
     val sendImuSensors: Boolean = AppPreferences.DEFAULT_SEND_IMU_SENSORS,
+    // Custom viewport
+    val customViewportWidth: Int = AppPreferences.DEFAULT_CUSTOM_VIEWPORT_WIDTH,
+    val customViewportHeight: Int = AppPreferences.DEFAULT_CUSTOM_VIEWPORT_HEIGHT,
+    val viewportAspectRatioLocked: Boolean = AppPreferences.DEFAULT_VIEWPORT_ASPECT_RATIO_LOCKED,
 )
 
 sealed class UpdateStatus {
@@ -110,6 +114,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         preferences.syncAaTheme,
         preferences.hideAaClock,
         preferences.sendImuSensors,
+        preferences.customViewportWidth,
+        preferences.customViewportHeight,
+        preferences.viewportAspectRatioLocked,
     ) { values: Array<Any> ->
         SettingsUiState(
             bridgeHost = values[0] as String,
@@ -142,6 +149,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             syncAaTheme = values[27] as Boolean,
             hideAaClock = values[28] as Boolean,
             sendImuSensors = values[29] as Boolean,
+            customViewportWidth = values[30] as Int,
+            customViewportHeight = values[31] as Int,
+            viewportAspectRatioLocked = values[32] as Boolean,
         )
     }.stateIn(
         viewModelScope,
@@ -291,6 +301,25 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun updateSendImuSensors(enabled: Boolean) {
         viewModelScope.launch { preferences.setSendImuSensors(enabled) }
+    }
+
+    fun updateCustomViewportWidth(width: Int) {
+        viewModelScope.launch { preferences.setCustomViewportWidth(width) }
+    }
+
+    fun updateCustomViewportHeight(height: Int) {
+        viewModelScope.launch { preferences.setCustomViewportHeight(height) }
+    }
+
+    fun updateViewportAspectRatioLocked(locked: Boolean) {
+        viewModelScope.launch { preferences.setViewportAspectRatioLocked(locked) }
+    }
+
+    fun updateCustomViewport(width: Int, height: Int) {
+        viewModelScope.launch {
+            preferences.setCustomViewportWidth(width)
+            preferences.setCustomViewportHeight(height)
+        }
     }
 
     fun updateSelfUpdateEnabled(enabled: String) {
