@@ -317,13 +317,23 @@ These items can only be validated on the actual GM head unit. No emulator can an
 - [x] **Mock bridge** (`scripts/mock_bridge.py`) — Python OAL mock, ffmpeg test pattern video + sine audio
 - [x] **Launcher** (`scripts/start-mock-bridge.ps1`) — PowerShell wrapper with resolution/fps/audio args
 - [x] **Audio header fix** — fixed struct packing bug (signed vs unsigned channels byte), removed broken `build_audio_header` duplicate
+- [x] **ffmpeg pre-warming** — pre-buffers initial H.264 output (SPS/PPS + first IDR) before accepting connections, eliminating startup reconnect loops. Also added `-pix_fmt yuv420p` for baseline profile compatibility
 - [x] **Media metadata simulation** — cycles through 5 fake tracks with position updates every 5s
 - [x] **Nav state simulation** — cycles through 5 maneuvers (turn_right, turn_left, straight, destination) every 10s
 - [x] **Bridge stats simulation** — sends stats messages every 30s
 - [x] `--no-simulate` flag to disable media/nav/stats simulation
 - [x] **Album art** — base64-encoded 64×64 colored PNGs, one per track
 - [x] **Nav images** — base64-encoded 48×48 colored PNGs per maneuver type
-- [ ] Validate with AAOS emulator end-to-end (manual test, not automatable)
+- [x] Validated with AAOS emulator end-to-end: video rendering, audio playback, session lifecycle, cluster relay, reconnection all confirmed working
+
+### Emulator Testing Setup
+- [x] **Two-AVD approach** documented in `docs/testing.md`:
+  - **BlazerEV_AAOS** (Google APIs, no Play Store): `adb root`, VHAL injection, primary testing
+  - **DD_AAOS_33** (Distant Display + Play Store): visual cluster rendering on secondary display
+- [x] Both AVDs configured at 2400×960 @ 160dpi to match the real GM Blazer EV
+- [x] **DD_AAOS_33 display fix**: secondary displays resized (400×240 + 800×240) to prevent oversized emulator window
+- [x] **VHAL permissions** added to AndroidManifest.xml: `CAR_SPEED`, `CAR_ENERGY`, `CAR_POWERTRAIN`, `CAR_EXTERIOR_ENVIRONMENT`, `CAR_INFO` — only properties confirmed available on 2024 Blazer EV
+- [x] **VHAL injection commands** documented for Blazer EV values: speed, gear, EV battery, temp, range, night mode, parking brake
 
 ### JVM Integration Tests
 - [x] **MockOalBridgeServer** (`app/src/test/.../transport/MockOalBridgeServer.kt`) — in-process TCP server on ephemeral ports, speaks OAL protocol
@@ -408,8 +418,33 @@ If Copilot starts losing context or producing lower quality output mid-milestone
 
 ---
 
-## Car Hardware Reference
-- **SoC:** Qualcomm Snapdragon (2024 Chevrolet Blazer EV)
-- **Display:** 2914×1134 physical, ~2628×800 usable (nav bar hidden)
+## Car Hardware Reference (2024 Chevrolet Blazer EV)
+- **SoC:** Qualcomm Snapdragon
+- **Display:** 2914×1134 physical, ~2628×800 usable (nav bar hidden), 2400×960 @ 160dpi as reported by the OS
+- **Screens:** 3 displays — main infotainment (17.7" touch), instrument cluster (digital gauges), HUD (windshield)
 - **HW Decoders:** H.264 (`c2.qti.avc.decoder`), H.265, VP9 — all 8K@480fps max
-- **Network:** USB Ethernet NIC (car USB port), 100Mbps (validate this as it might be gigabit). iIt is always assigned 192.168.222.108 by GM's AAOS.
+- **Network:** USB Ethernet NIC (car USB port), 100Mbps (validate — might be gigabit). Always assigned 192.168.222.108 by GM's AAOS
+
+### VHAL Properties Available on Blazer EV
+Confirmed from live car data capture:
+
+| Property | Status | Permission |
+|----------|--------|------------|
+| Vehicle speed | Available | `CAR_SPEED` |
+| Gear selection | Available | `CAR_POWERTRAIN` |
+| Parking brake | Available | `CAR_POWERTRAIN` |
+| Night mode | Available | `CAR_EXTERIOR_ENVIRONMENT` |
+| EV battery level (41550 Wh) | Available | `CAR_ENERGY` |
+| EV battery capacity (83010 Wh) | Available | `CAR_INFO` |
+| EV charge rate | Available | `CAR_ENERGY` |
+| Range remaining (214984 m) | Available | `CAR_ENERGY` |
+| Outside temperature (13°C) | Available | `CAR_EXTERIOR_ENVIRONMENT` |
+| Ignition state | Available | `CAR_POWERTRAIN` |
+| Charge port open/connected | Available | `CAR_ENERGY` |
+| Make/Model/Year | Available | `CAR_INFO` |
+| Steering angle | **Denied** | `READ_CAR_STEERING_3P` |
+| Odometer | **Not exposed** | — |
+| Headlights/turn signals | **Denied** | `READ_CAR_EXTERIOR_LIGHTS` |
+| Door locks | **Denied** | `CONTROL_CAR_DOORS` |
+| HVAC | **Denied** | `CONTROL_CAR_CLIMATE` |
+| Tire pressure | **Denied** | `CAR_TIRES_3P` |

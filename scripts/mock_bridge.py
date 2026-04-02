@@ -110,6 +110,7 @@ class VideoGenerator:
         self.video_file = video_file
         self._proc = None
         self._file = None
+        self._prebuf = b""
 
     def start(self):
         if self.video_file:
@@ -125,6 +126,7 @@ class VideoGenerator:
                 f"fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:"
                 f"box=1:boxcolor=black@0.5:boxborderw=10"
             ),
+            "-pix_fmt", "yuv420p",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "zerolatency",
@@ -139,6 +141,19 @@ class VideoGenerator:
         self._proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
+        # Pre-buffer: wait for ffmpeg to produce initial data (SPS/PPS + first IDR)
+        # This eliminates the startup delay that causes reconnect loops
+        self._prebuf = b""
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            chunk = self._proc.stdout.read(4096)
+            if chunk:
+                self._prebuf += chunk
+                # Once we have enough data (SPS/PPS + at least one frame), stop pre-buffering
+                if len(self._prebuf) > 1024:
+                    break
+        if self._prebuf:
+            print(f"[video] Pre-buffered {len(self._prebuf)} bytes from ffmpeg")
 
     def stop(self):
         if self._proc:
@@ -151,6 +166,10 @@ class VideoGenerator:
 
     def read_stream(self):
         """Yields raw bytes from the H.264 stream."""
+        # Yield pre-buffered data first (from ffmpeg startup)
+        if self._prebuf:
+            yield self._prebuf
+            self._prebuf = b""
         source = self._file if self._file else self._proc.stdout
         while True:
             chunk = source.read(4096)
@@ -464,6 +483,9 @@ class VideoStreamer:
 
     def __init__(self, args):
         self.args = args
+        # Pre-start the video generator so ffmpeg is warmed up before app connects
+        self._gen = VideoGenerator(args.width, args.height, args.fps, args.video_file)
+        self._gen.start()
 
     def stream(self, conn, addr, stop_event, phone_event):
         print(f"[video] App connected from {addr}")
@@ -475,9 +497,7 @@ class VideoStreamer:
         if stop_event.is_set():
             return
 
-        gen = VideoGenerator(self.args.width, self.args.height, self.args.fps,
-                             self.args.video_file)
-        gen.start()
+        gen = self._gen
         splitter = NalSplitter()
 
         pts_ms = 0

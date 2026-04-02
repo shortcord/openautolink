@@ -27,22 +27,16 @@ class VehicleDataForwarderImpl(
         // Minimum interval between vehicle data sends (ms)
         private const val SEND_INTERVAL_MS = 500L
 
-        // VHAL property IDs (from android.car.VehiclePropertyIds)
+        // VHAL property IDs — only properties confirmed available on 2024 Blazer EV.
+        // Properties that are "not exposed by this vehicle / HAL" (odometer) or
+        // "permission not granted" (steering, lights, doors, HVAC) are excluded.
         private const val PERF_VEHICLE_SPEED = 291504647        // float, m/s
         private const val GEAR_SELECTION = 289408000             // int, gear enum
         private const val PARKING_BRAKE_ON = 287310850           // boolean
         private const val NIGHT_MODE = 287310855                 // boolean
-        private const val TURN_SIGNAL_STATE = 289408008          // int
         private const val EV_BATTERY_LEVEL = 291504905           // float, Wh
-        private const val FUEL_LEVEL = 291504903                 // float, mL
-        private const val FUEL_LEVEL_LOW = 287310853             // boolean
-        private const val EV_BATTERY_DISPLAY_UNITS = 289408015   // int
-        private const val PERF_ODOMETER = 291504644              // float, km
         private const val ENV_OUTSIDE_TEMPERATURE = 291505923    // float, celsius
-        private const val PERF_STEERING_ANGLE = 291504649        // float, degrees
-        private const val HEADLIGHTS_STATE = 289407749           // int
-        private const val HAZARD_LIGHTS_STATE = 289407753        // int
-        private const val EV_BATTERY_INSTANTANEOUS_CHARGE_RATE = 291504908 // float
+        private const val EV_BATTERY_INSTANTANEOUS_CHARGE_RATE = 291504908 // float, W
         private const val RANGE_REMAINING = 291504904            // float, meters
     }
 
@@ -109,15 +103,9 @@ class VehicleDataForwarderImpl(
             GEAR_SELECTION,
             PARKING_BRAKE_ON,
             NIGHT_MODE,
-            TURN_SIGNAL_STATE,
             EV_BATTERY_LEVEL,
-            FUEL_LEVEL,
-            FUEL_LEVEL_LOW,
-            PERF_ODOMETER,
             ENV_OUTSIDE_TEMPERATURE,
-            PERF_STEERING_ANGLE,
-            HEADLIGHTS_STATE,
-            HAZARD_LIGHTS_STATE,
+            EV_BATTERY_INSTANTANEOUS_CHARGE_RATE,
             RANGE_REMAINING
         )
 
@@ -178,7 +166,7 @@ class VehicleDataForwarderImpl(
         // Register callback: registerCallback(callback, propertyId, rate)
         // rate = SENSOR_RATE_ONCHANGE (0.0f) for most, SENSOR_RATE_NORMAL (1.0f) for continuous
         val rate = when (propertyId) {
-            PERF_VEHICLE_SPEED, PERF_STEERING_ANGLE -> 1.0f // SENSOR_RATE_NORMAL
+            PERF_VEHICLE_SPEED -> 1.0f // SENSOR_RATE_NORMAL
             else -> 0.0f // SENSOR_RATE_ONCHANGE
         }
 
@@ -220,37 +208,29 @@ class VehicleDataForwarderImpl(
         val gear = gearInt?.let { gearToString(it) }
         val parkingBrake = currentValues[PARKING_BRAKE_ON] as? Boolean
         val nightMode = currentValues[NIGHT_MODE] as? Boolean
-        val turnSignalInt = currentValues[TURN_SIGNAL_STATE] as? Int
-        val turnSignal = turnSignalInt?.let { turnSignalToString(it) }
 
-        // Battery percentage — EV_BATTERY_LEVEL is in Wh, but we'll send the raw value
-        // and let the bridge handle conversion. For display, we'd need capacity info.
+        // EV battery level in Wh — send raw value, bridge handles conversion
         val batteryPct = (currentValues[EV_BATTERY_LEVEL] as? Float)?.toInt()
 
-        val fuelLevel = (currentValues[FUEL_LEVEL] as? Float)?.toInt()
-        val lowFuel = currentValues[FUEL_LEVEL_LOW] as? Boolean
-        val odometer = currentValues[PERF_ODOMETER] as? Float
         val ambientTemp = currentValues[ENV_OUTSIDE_TEMPERATURE] as? Float
-        val steeringAngle = currentValues[PERF_STEERING_ANGLE] as? Float
-        val headlight = currentValues[HEADLIGHTS_STATE] as? Int
-        val hazardLights = (currentValues[HAZARD_LIGHTS_STATE] as? Int)?.let { it != 0 }
+        val chargeRate = currentValues[EV_BATTERY_INSTANTANEOUS_CHARGE_RATE] as? Float
         val rangeRemaining = (currentValues[RANGE_REMAINING] as? Float)?.let { it / 1000f } // m → km
 
         return ControlMessage.VehicleData(
             speedKmh = speed,
             gear = gear,
             batteryPct = batteryPct,
-            turnSignal = turnSignal,
+            turnSignal = null,
             parkingBrake = parkingBrake,
             nightMode = nightMode,
-            fuelLevelPct = fuelLevel,
+            fuelLevelPct = null,
             rangeKm = rangeRemaining,
-            lowFuel = lowFuel,
-            odometerKm = odometer,
+            lowFuel = null,
+            odometerKm = null,
             ambientTempC = ambientTemp,
-            steeringAngleDeg = steeringAngle,
-            headlight = headlight,
-            hazardLights = hazardLights
+            steeringAngleDeg = null,
+            headlight = null,
+            hazardLights = null
         )
     }
 

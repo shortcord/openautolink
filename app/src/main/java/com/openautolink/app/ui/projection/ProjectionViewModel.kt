@@ -64,6 +64,12 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _audioStats = MutableStateFlow(AudioStats())
     private val _showStats = MutableStateFlow(false)
 
+    // Pending surface — stored when surfaceCreated fires before decoder exists.
+    // Attached to decoder on session start or when decoder becomes available.
+    private var pendingSurface: Surface? = null
+    private var pendingSurfaceWidth: Int = 0
+    private var pendingSurfaceHeight: Int = 0
+
     val uiState: StateFlow<ProjectionUiState> = combine(
         sessionManager.sessionState,
         sessionManager.statusMessage,
@@ -112,6 +118,12 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         // Collect video and audio stats when streaming
         viewModelScope.launch {
             sessionManager.sessionState.collect { state ->
+                // Attach pending surface when decoder becomes available
+                if (state == SessionState.BRIDGE_CONNECTED ||
+                    state == SessionState.PHONE_CONNECTED ||
+                    state == SessionState.STREAMING) {
+                    attachPendingSurface()
+                }
                 if (state == SessionState.STREAMING) {
                     sessionManager.videoStats?.let { statsFlow ->
                         launch {
@@ -164,12 +176,24 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
 
     /** Called when the SurfaceView surface is created or changed. */
     fun onSurfaceAvailable(surface: Surface, width: Int, height: Int) {
+        pendingSurface = surface
+        pendingSurfaceWidth = width
+        pendingSurfaceHeight = height
         sessionManager.videoDecoder?.attach(surface, width, height)
     }
 
     /** Called when the SurfaceView surface is destroyed. */
     fun onSurfaceDestroyed() {
+        pendingSurface = null
+        pendingSurfaceWidth = 0
+        pendingSurfaceHeight = 0
         sessionManager.videoDecoder?.detach()
+    }
+
+    /** Attach pending surface to a newly created decoder. Called by session observer. */
+    internal fun attachPendingSurface() {
+        val s = pendingSurface ?: return
+        sessionManager.videoDecoder?.attach(s, pendingSurfaceWidth, pendingSurfaceHeight)
     }
 
     override fun onCleared() {

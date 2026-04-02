@@ -63,6 +63,8 @@ class MediaCodecDecoder(private val codecPreference: String = "h264") : VideoDec
     @Volatile private var decodeStartTimeMs = 0L
 
     @Volatile private var _needsKeyframe = false
+    private var pendingWidth: Int? = null
+    private var pendingHeight: Int? = null
 
     override fun attach(surface: Surface, width: Int, height: Int) {
         this.surface = surface
@@ -85,6 +87,11 @@ class MediaCodecDecoder(private val codecPreference: String = "h264") : VideoDec
     }
 
     override fun onFrame(frame: VideoFrame) {
+        // Track video dimensions from frame headers
+        if (frame.width > 0 && frame.height > 0) {
+            pendingWidth = frame.width
+            pendingHeight = frame.height
+        }
         when {
             frame.isCodecConfig -> handleCodecConfig(frame)
             frame.isEndOfStream -> handleEndOfStream()
@@ -174,7 +181,13 @@ class MediaCodecDecoder(private val codecPreference: String = "h264") : VideoDec
                 return
             }
 
-            val format = MediaFormat.createVideoFormat(mimeType, surfaceWidth, surfaceHeight)
+            // Parse SPS to get actual video dimensions from codec config
+            val spsDims = NalParser.parseSpsResolution(configData)
+            val videoWidth = spsDims?.first ?: pendingWidth ?: surfaceWidth
+            val videoHeight = spsDims?.second ?: pendingHeight ?: surfaceHeight
+            Log.i(TAG, "Configuring codec with video dims: ${videoWidth}x${videoHeight} (surface: ${surfaceWidth}x${surfaceHeight})")
+
+            val format = MediaFormat.createVideoFormat(mimeType, videoWidth, videoHeight)
             format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(configData))
 
             val mc = MediaCodec.createByCodecName(decoderName)

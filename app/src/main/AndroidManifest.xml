@@ -11,6 +11,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
 
+    <!-- Car permissions for VHAL property monitoring.
+         Only properties confirmed available on 2024 Blazer EV are used.
+         Signature-level on production GM; grantable via adb on non-Play Store emulators. -->
+    <uses-permission android:name="android.car.permission.CAR_SPEED" />
+    <uses-permission android:name="android.car.permission.CAR_ENERGY" />
+    <uses-permission android:name="android.car.permission.CAR_POWERTRAIN" />
+    <uses-permission android:name="android.car.permission.CAR_EXTERIOR_ENVIRONMENT" />
+    <uses-permission android:name="android.car.permission.CAR_INFO" />
+
     <uses-feature
         android:name="android.hardware.type.automotive"
         android:required="true" />

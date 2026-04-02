@@ -93,8 +93,11 @@ class ClusterManager(private val context: Context) {
             // Bring main activity back — binding is IPC-based, doesn't need foreground
             handler.postDelayed({
                 try {
-                    val bringBack = Intent(context, context.javaClass).apply {
-                        flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NO_ANIMATION
+                    val mainActivity = Class.forName("${context.packageName}.MainActivity")
+                    val bringBack = Intent(context, mainActivity).apply {
+                        flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_NO_ANIMATION
                     }
                     context.startActivity(bringBack)
                     Log.i(TAG, "Brought main activity back to foreground")

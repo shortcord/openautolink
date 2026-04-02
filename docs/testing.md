@@ -22,7 +22,9 @@ Full end-to-end testing requires the AAOS app talking to the bridge over a real 
 ## Prerequisites
 
 - Android SDK with emulator and platform-tools installed
-- AAOS emulator AVD: **`BlazerEV_AAOS`** (Android 33 Automotive, x86_64, 2400×960 landscape)
+- AAOS emulator AVDs (see Emulator Setup below):
+  - **`BlazerEV_AAOS`** — Android 33 Automotive (Google APIs, no Play Store), x86_64, 2400×960. Supports `adb root` and VHAL injection. Primary testing image.
+  - **`DD_AAOS_33`** — Android 33 Automotive Distant Display (Google Play), x86_64, 2400×960 + cluster displays. For visual cluster testing. No `adb root`.
 - SBC with bridge built and running (see [bridge/sbc/BUILD.md](../bridge/sbc/BUILD.md))
 - Two ethernet cables
 - One USB ethernet adapter (for the SBC's SSH connection)
@@ -124,12 +126,82 @@ Once complete, proceed to build and deploy the bridge per [bridge/sbc/BUILD.md](
 
 ### Starting the Emulator
 
+We use **two AVDs** for complete testing coverage:
+
+| AVD | Image | Root | VHAL Injection | Cluster Visual | Use For |
+|-----|-------|------|---------------|----------------|---------|
+| **`BlazerEV_AAOS`** | `android-33;android-automotive;x86_64` | Yes | Yes | Logs only | Primary: VHAL, video, audio, session, reconnect |
+| **`DD_AAOS_33`** | `android-33;android-automotive-distant-display-playstore;x86_64` | No | No | Yes (visible panel) | Visual cluster verification |
+
+Both AVDs use **2400×960 @ 160dpi** to match the real GM Blazer EV display.
+
+#### Creating the AVDs (one-time)
+
 ```powershell
-# From Android SDK (typical path)
-& "$env:LOCALAPPDATA\Android\Sdk\emulator\emulator.exe" -avd BlazerEV_AAOS
+# Install system images
+sdkmanager "system-images;android-33;android-automotive;x86_64"
+sdkmanager "system-images;android-33;android-automotive-distant-display-playstore;x86_64"
+
+# Create AVDs
+echo "no" | avdmanager create avd --name "BlazerEV_AAOS" `
+  --package "system-images;android-33;android-automotive;x86_64" `
+  --device "automotive_1080p_landscape" --force
+
+echo "no" | avdmanager create avd --name "DD_AAOS_33" `
+  --package "system-images;android-33;android-automotive-distant-display-playstore;x86_64" `
+  --device "automotive_distant_display_with_play" --force
 ```
 
-Or launch from Android Studio → Device Manager → `BlazerEV_AAOS`.
+Then edit each AVD's `config.ini` (`~/.android/avd/<name>.avd/config.ini`):
+- Set `hw.lcd.width=2400`, `hw.lcd.height=960`, `hw.lcd.density=160` to match the Blazer EV
+- For `DD_AAOS_33`: shrink the secondary displays to avoid an oversized window:
+  ```
+  hw.display6.height=240
+  hw.display6.width=400
+  hw.display7.height=240
+  hw.display7.width=800
+  ```
+
+#### Launching
+
+```powershell
+# Primary testing (VHAL + root):
+emulator -avd BlazerEV_AAOS -no-audio -gpu swiftshader_indirect -no-boot-anim
+
+# Cluster visual testing (distant display):
+emulator -avd DD_AAOS_33 -no-audio -gpu swiftshader_indirect -no-boot-anim
+```
+
+#### VHAL Testing (BlazerEV_AAOS only)
+
+The non-Play Store image supports `adb root` and VHAL property injection:
+
+```powershell
+# Get root access
+adb root
+
+# Grant car permissions (required — declared in manifest)
+adb shell "pm grant com.openautolink.app android.car.permission.CAR_SPEED"
+adb shell "pm grant com.openautolink.app android.car.permission.CAR_ENERGY"
+adb shell "pm grant com.openautolink.app android.car.permission.CAR_POWERTRAIN"
+adb shell "pm grant com.openautolink.app android.car.permission.CAR_EXTERIOR_ENVIRONMENT"
+adb shell "pm grant com.openautolink.app android.car.permission.CAR_INFO"
+
+# Inject Blazer EV-like values
+adb shell "cmd car_service inject-vhal-event 291504647 0.0"      # speed: 0 m/s
+adb shell "cmd car_service inject-vhal-event 289408000 4"        # gear: PARK
+adb shell "cmd car_service inject-vhal-event 291504905 41550.0"  # EV battery: 41550 Wh
+adb shell "cmd car_service inject-vhal-event 291505923 13.0"     # outside temp: 13°C
+adb shell "cmd car_service inject-vhal-event 291504904 214984.4" # range: 214984 m
+adb shell "cmd car_service inject-vhal-event 287310855 0"        # night mode: off
+adb shell "cmd car_service inject-vhal-event 287310850 0"        # parking brake: off
+
+# Simulate driving
+adb shell "cmd car_service inject-vhal-event 291504647 16.7"     # speed: 60 km/h
+adb shell "cmd car_service inject-vhal-event 289408000 8"        # gear: DRIVE
+```
+
+> **Note:** VHAL injection requires the non-Play Store image (`BlazerEV_AAOS`). The distant display image (`DD_AAOS_33`) blocks `inject-vhal-event` with a security exception.
 
 ### Configuring the Emulator's Network for Bridge Traffic
 
@@ -291,11 +363,11 @@ The mock bridge (`scripts/mock_bridge.py`) lets you test the app's full video/au
 ### What You Can't Test (Requires Real SBC + Phone)
 
 - Actual AA phone session (Bluetooth, WiFi AP, aasdk)
-- Bridge protocol migration validation (B1)
 - Real H.265/VP9 codec negotiation
 - HFP call audio (B2)
-- VHAL/GNSS data from a real car
+- GNSS data from a real car (emulator GPS is simulated)
 - Hardware video decoder behavior (Qualcomm C2)
+- Real car VHAL properties that are permission-denied on Blazer EV (steering, lights, doors, HVAC)
 
 ### Setup
 
