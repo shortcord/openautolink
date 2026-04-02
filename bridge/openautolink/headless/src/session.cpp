@@ -1444,6 +1444,9 @@ std::optional<SessionMode> parse_session_mode(std::string_view value)
     if(value == "aasdk-live") {
         return SessionMode::AasdkLive;
     }
+    if(value == "oal-mock") {
+        return SessionMode::OalMock;
+    }
     return std::nullopt;
 }
 

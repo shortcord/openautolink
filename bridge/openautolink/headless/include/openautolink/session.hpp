@@ -42,6 +42,7 @@ enum class SessionMode {
     Stub,
     AasdkPlaceholder,
     AasdkLive,
+    OalMock,  // Synthetic OAL data — no phone/aasdk needed
 };
 
 class IAndroidAutoSession {

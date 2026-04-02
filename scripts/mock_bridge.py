@@ -147,10 +147,7 @@ class NalSplitter:
             if next_start > 0 and self._buffer[next_start - 1] == 0:
                 next_start -= 1
 
-            # Extract NAL (without start code)
-            sc_len = 4 if (pos3 > 0 and self._buffer[pos3 - 1] == 0 and start == pos3 - 1) else 3
-            nal_data = bytes(self._buffer[pos3 + 3 - (4 - sc_len) + (4 - sc_len):next_start])
-            # Simpler: just take from after start code to next start code
+            # Extract NAL with its start code (Annex B format for MediaCodec)
             nal_data = bytes(self._buffer[start:next_start])
 
             # Parse NAL type (first byte after start code, lower 5 bits)
@@ -197,18 +194,8 @@ def build_video_header(payload_length, width, height, pts_ms, flags):
 
 
 def build_audio_header(direction, purpose, sample_rate, channels, payload_length):
-    """Build an 8-byte OAL audio frame header."""
-    # payload_length is 3 bytes (u24le)
-    b0 = payload_length & 0xFF
-    b1 = (payload_length >> 8) & 0xFF
-    b2 = (payload_length >> 16) & 0xFF
-    return struct.pack("<BBBHB", direction, purpose, b0,
-                       sample_rate, channels) + bytes([b1, b2])
-
-
-def build_audio_header_correct(direction, purpose, sample_rate, channels, payload_length):
     """Build an 8-byte OAL audio frame header per protocol spec.
-    
+
     Offset  Size  Type    Field
     0       1     u8      direction
     1       1     u8      purpose
@@ -217,13 +204,29 @@ def build_audio_header_correct(direction, purpose, sample_rate, channels, payloa
     5       3     u24le   payload_length
     """
     pl_bytes = payload_length.to_bytes(3, "little")
-    return struct.pack("<BBHb", direction, purpose, sample_rate, channels) + pl_bytes
+    return struct.pack("<BBHB", direction, purpose, sample_rate, channels) + pl_bytes
 
 
 # ── Control Channel ──────────────────────────────────────────────────
 
 class ControlHandler:
     """Handles JSON-line control protocol on port 5288."""
+
+    FAKE_TRACKS = [
+        {"title": "Bohemian Rhapsody", "artist": "Queen", "album": "A Night at the Opera", "duration_ms": 354000},
+        {"title": "Hotel California", "artist": "Eagles", "album": "Hotel California", "duration_ms": 391000},
+        {"title": "Stairway to Heaven", "artist": "Led Zeppelin", "album": "Led Zeppelin IV", "duration_ms": 482000},
+        {"title": "Imagine", "artist": "John Lennon", "album": "Imagine", "duration_ms": 187000},
+        {"title": "Comfortably Numb", "artist": "Pink Floyd", "album": "The Wall", "duration_ms": 382000},
+    ]
+
+    FAKE_MANEUVERS = [
+        {"maneuver": "turn_right", "distance_meters": 500, "road": "Main St", "eta_seconds": 420},
+        {"maneuver": "turn_left", "distance_meters": 200, "road": "Oak Ave", "eta_seconds": 380},
+        {"maneuver": "straight", "distance_meters": 1200, "road": "Highway 101", "eta_seconds": 350},
+        {"maneuver": "turn_right", "distance_meters": 50, "road": "Elm Dr", "eta_seconds": 300},
+        {"maneuver": "destination", "distance_meters": 0, "road": "123 Elm Dr", "eta_seconds": 0},
+    ]
 
     def __init__(self, args):
         self.args = args
@@ -298,6 +301,21 @@ class ControlHandler:
                 phone_event.set()
                 print("[control] Simulated phone connection")
 
+                # Start simulation threads for media metadata and nav state
+                if not self.args.no_simulate:
+                    threading.Thread(
+                        target=self._simulate_media, args=(conn, stop_event),
+                        daemon=True, name="media-sim"
+                    ).start()
+                    threading.Thread(
+                        target=self._simulate_nav, args=(conn, stop_event),
+                        daemon=True, name="nav-sim"
+                    ).start()
+                    threading.Thread(
+                        target=self._simulate_stats, args=(conn, stop_event),
+                        daemon=True, name="stats-sim"
+                    ).start()
+
         print("[control] App disconnected")
         self._phone_connected = False
         phone_event.clear()
@@ -308,6 +326,80 @@ class ControlHandler:
             conn.sendall(line.encode())
         except (BrokenPipeError, OSError):
             pass
+
+    def _simulate_media(self, conn, stop_event):
+        """Cycle through fake tracks every 15 seconds."""
+        track_idx = 0
+        while not stop_event.is_set():
+            track = self.FAKE_TRACKS[track_idx % len(self.FAKE_TRACKS)]
+            position_ms = 0
+            # Send initial metadata
+            self._send(conn, {
+                "type": "media_metadata",
+                "title": track["title"],
+                "artist": track["artist"],
+                "album": track["album"],
+                "duration_ms": track["duration_ms"],
+                "position_ms": position_ms,
+                "playing": True,
+            })
+            print(f"[control] Now playing: {track['artist']} - {track['title']}")
+
+            # Update position every 5 seconds until track changes
+            for _ in range(3):
+                if stop_event.is_set():
+                    return
+                time.sleep(5)
+                position_ms += 5000
+                self._send(conn, {
+                    "type": "media_metadata",
+                    "title": track["title"],
+                    "artist": track["artist"],
+                    "album": track["album"],
+                    "duration_ms": track["duration_ms"],
+                    "position_ms": position_ms,
+                    "playing": True,
+                })
+
+            track_idx += 1
+
+    def _simulate_nav(self, conn, stop_event):
+        """Cycle through fake navigation maneuvers every 10 seconds."""
+        time.sleep(3)  # Brief delay before nav starts
+        maneuver_idx = 0
+        while not stop_event.is_set():
+            maneuver = self.FAKE_MANEUVERS[maneuver_idx % len(self.FAKE_MANEUVERS)]
+            self._send(conn, {
+                "type": "nav_state",
+                **maneuver,
+            })
+            print(f"[control] Nav: {maneuver['maneuver']} in {maneuver['distance_meters']}m → {maneuver['road']}")
+            maneuver_idx += 1
+            for _ in range(10):
+                if stop_event.is_set():
+                    return
+                time.sleep(1)
+
+    def _simulate_stats(self, conn, stop_event):
+        """Send bridge stats every 30 seconds."""
+        start = time.time()
+        video_frames = 0
+        audio_frames = 0
+        while not stop_event.is_set():
+            for _ in range(30):
+                if stop_event.is_set():
+                    return
+                time.sleep(1)
+            uptime = int(time.time() - start)
+            # Approximate frame counts based on elapsed time
+            video_frames = uptime * self.args.fps
+            audio_frames = uptime * 50  # ~50 audio chunks/sec at 20ms
+            self._send(conn, {
+                "type": "stats",
+                "video_frames_sent": video_frames,
+                "audio_frames_sent": audio_frames,
+                "uptime_seconds": uptime,
+            })
 
 
 # ── Video Streamer ────────────────────────────────────────────────────
@@ -359,14 +451,15 @@ class VideoStreamer:
 
                     # Got a non-config NAL — send pending config first
                     if config_nals and not config_sent:
+                        config_bytes = bytes(config_nals)
                         hdr = build_video_header(
-                            len(config_nals), self.args.width, self.args.height,
+                            len(config_bytes), self.args.width, self.args.height,
                             0, FLAG_CODEC_CONFIG
                         )
-                        conn.sendall(hdr + config_nals)
+                        conn.sendall(hdr + config_bytes)
                         config_sent = True
                         config_nals = bytearray()
-                        print(f"[video] Sent codec config ({len(hdr) + len(config_nals)} bytes)")
+                        print(f"[video] Sent codec config ({len(config_bytes)} bytes)")
 
                     if config_nals:
                         # New config mid-stream (IDR with fresh SPS/PPS)
@@ -443,7 +536,7 @@ class AudioStreamer:
                     AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, chunk_ms, frequency, t_offset
                 )
 
-                hdr = build_audio_header_correct(
+                hdr = build_audio_header(
                     AUDIO_DIR_PLAYBACK, AUDIO_PURPOSE_MEDIA,
                     AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, len(pcm)
                 )
@@ -501,6 +594,8 @@ def main():
     parser.add_argument("--height", type=int, default=1080, help="Video height (default: 1080)")
     parser.add_argument("--fps", type=int, default=30, help="Video FPS (default: 30)")
     parser.add_argument("--no-audio", action="store_true", help="Disable audio streaming")
+    parser.add_argument("--no-simulate", action="store_true",
+                        help="Disable media/nav/stats simulation on control channel")
     parser.add_argument("--video-file", type=str, help="Use a raw H.264 Annex B file instead of ffmpeg")
     parser.add_argument("--bind", type=str, default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     args = parser.parse_args()
@@ -520,6 +615,7 @@ def main():
     print(f"  Video:   {args.bind}:{VIDEO_PORT} ({args.width}x{args.height} @ {args.fps}fps)")
     print(f"  Audio:   {args.bind}:{AUDIO_PORT} ({'disabled' if args.no_audio else '48kHz stereo'})")
     print(f"  Source:  {'file: ' + args.video_file if args.video_file else 'ffmpeg test pattern'}")
+    print(f"  Simulate: {'off' if args.no_simulate else 'media + nav + stats'}")
     print("=" * 50)
     print("  Waiting for app connection...")
     print()

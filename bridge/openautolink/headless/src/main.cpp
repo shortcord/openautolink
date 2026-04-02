@@ -10,6 +10,8 @@
 #include "openautolink/sco_audio.hpp"
 #include "openautolink/tcp_car_transport.hpp"
 
+#include "openautolink/oal_mock_session.hpp"
+
 #ifdef PI_AA_ENABLE_AASDK_LIVE
 #include "openautolink/live_session.hpp"
 #endif
@@ -151,6 +153,72 @@ int main(int argc, char* argv[])
         c.bt_mac = bt_mac;
         return c;
     };
+
+    // ── OAL mock mode ─────────────────────────────────────────────
+    // Synthetic data generation — no phone or aasdk needed.
+    // Use --session-mode=oal-mock --tcp-car-port=5288
+    if (tcp_car_port > 0 && session_mode == openautolink::SessionMode::OalMock) {
+        std::cerr << "[main] OAL mock mode: control=" << tcp_car_port
+                  << " audio=" << (tcp_car_port + 1)
+                  << " video=" << (tcp_car_port + 2) << std::endl;
+
+        auto config = build_config();
+        config.media_fd = -1;
+
+        openautolink::TcpCarTransport tcp_control(tcp_car_port);
+        openautolink::TcpCarTransport tcp_audio(tcp_car_port + 1);
+        openautolink::TcpCarTransport tcp_video(tcp_car_port + 2);
+
+        tcp_control.start_discovery();
+
+        openautolink::OalSession oal(tcp_control, tcp_video, tcp_audio, config);
+        openautolink::OalMockSession mock(oal, config);
+
+        // Video transport: accept + flush
+        std::thread video_thread([&tcp_video, &oal]() {
+            std::cerr << "[main] video TCP (mock) listening" << std::endl;
+            tcp_video.run_oal_sink(
+                []() { std::cerr << "[main] video client connected (mock)" << std::endl; },
+                [&oal]() -> bool { return oal.flush_one_video(); }
+            );
+        });
+        video_thread.detach();
+
+        // Audio transport: bidirectional
+        std::thread audio_thread([&tcp_audio, &oal]() {
+            std::cerr << "[main] audio TCP (mock) listening" << std::endl;
+            tcp_audio.run_oal_audio(
+                []() { std::cerr << "[main] audio client connected (mock)" << std::endl; },
+                [&oal]() -> bool { return oal.flush_one_audio(); },
+                [&oal](const openautolink::OalAudioHeader& hdr,
+                       const uint8_t* pcm, size_t len) {
+                    oal.on_app_audio_frame(hdr, pcm, len);
+                }
+            );
+        });
+        audio_thread.detach();
+
+        // Start mock data generation
+        mock.start();
+
+        // Control transport: blocking accept + JSON line loop
+        std::cerr << "[main] starting OAL mock control loop on port " << tcp_car_port << std::endl;
+        tcp_control.run_oal_control(
+            [&oal](const std::string& line) {
+                oal.on_app_json_line(line);
+            },
+            [&oal, &mock]() {
+                oal.on_app_connected();
+                mock.on_app_connected();
+            },
+            [&oal, &mock]() {
+                oal.on_app_disconnected();
+                mock.on_app_disconnected();
+            }
+        );
+        mock.stop();
+        return 0;
+    }
 
 #ifdef PI_AA_ENABLE_AASDK_LIVE
     // ── OAL protocol mode ────────────────────────────────────────────
