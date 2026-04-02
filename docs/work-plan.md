@@ -321,26 +321,28 @@ These items can only be validated on the actual GM head unit. No emulator can an
 - [x] **Nav state simulation** — cycles through 5 maneuvers (turn_right, turn_left, straight, destination) every 10s
 - [x] **Bridge stats simulation** — sends stats messages every 30s
 - [x] `--no-simulate` flag to disable media/nav/stats simulation
-- [ ] Validate with AAOS emulator end-to-end
-- [ ] Add album art (base64 PNG) to media metadata simulation
-- [ ] Add nav_image_base64 to nav state simulation
+- [x] **Album art** — base64-encoded 64×64 colored PNGs, one per track
+- [x] **Nav images** — base64-encoded 48×48 colored PNGs per maneuver type
+- [ ] Validate with AAOS emulator end-to-end (manual test, not automatable)
 
 ### JVM Integration Tests
 - [x] **MockOalBridgeServer** (`app/src/test/.../transport/MockOalBridgeServer.kt`) — in-process TCP server on ephemeral ports, speaks OAL protocol
-- [x] **TransportIntegrationTest** (`app/src/test/.../transport/TransportIntegrationTest.kt`) — 17 tests covering:
+- [x] **TransportIntegrationTest** (`app/src/test/.../transport/TransportIntegrationTest.kt`) — 20 tests covering:
   - Control channel: hello, phone_connected/disconnected, audio_start/stop, nav_state, media_metadata, error, touch, keyframe_request, full handshake sequence
   - Video channel: codec config, IDR keyframe, config→IDR→P-frame sequence, large (100KB) payload
   - Audio channel: media playback, all 5 purpose types, navigation mono 16kHz
+  - **Mic send**: assistant mic (16kHz mono), phone call mic (8kHz mono) — app→bridge direction=1
+  - **Reconnect**: ConnectionManager exponential backoff reconnection after control channel drop
 - [x] `testOptions.unitTests.isReturnDefaultValues = true` in build.gradle.kts (allows android.util.Log in JVM tests)
-- [ ] Add ConnectionManager integration test (reconnect with exponential backoff)
-- [ ] Add mic audio send test (app→bridge direction=1)
+- [x] `MockOalBridgeServer.startOnPorts()` — fixed-port restart for reconnect testing
+- [x] `MockOalBridgeServer` mic frame reading — parses app→bridge audio frames (direction=1)
 
 ### CI / Automated Testing
 - [x] **CI workflow** (`.github/workflows/ci.yml`) — runs on every PR and push to main
   - **unit-tests job**: JDK 21, Android SDK, `./gradlew :app:testDebugUnitTest`, uploads test reports
   - **emulator-smoke-test job** (main only): boots AAOS emulator, installs APK, starts mock bridge with `adb reverse`, verifies app process is alive
-- [ ] Add test result badge to README
-- [ ] Add bridge C++ build verification to CI (x86 stub mode)
+  - **bridge-build job**: C++ stub build verification on x86 Linux (no aasdk/ARM64 required)
+- [x] **Test result badge** in README — links to CI workflow status
 
 ### C++ Bridge Mock Mode
 - [x] **OalMockSession** (`bridge/.../include/openautolink/oal_mock_session.hpp`) — header-only mock session
@@ -349,8 +351,8 @@ These items can only be validated on the actual GM head unit. No emulator can an
   - Simulates phone_connected, media metadata cycling, nav state cycling on control channel
 - [x] **SessionMode::OalMock** added to session.hpp, parsed as `--session-mode=oal-mock`
 - [x] **main.cpp integration** — `--session-mode=oal-mock --tcp-car-port=5288` launches full OAL mock
-- [ ] Add keyframe request handling (re-send SPS/PPS+IDR on demand)
-- [ ] Add mic echo mode (echo received mic audio back as media playback for testing)
+- [x] **Keyframe request handling** — re-sends SPS/PPS + IDR on `keyframe_request` from app
+- [x] **Mic echo mode** — `set_mic_echo(true)` loops received mic audio back as media playback for testing
 
 ---
 
