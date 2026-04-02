@@ -316,9 +316,41 @@ These items can only be validated on the actual GM head unit. No emulator can an
 ### Mock Bridge (Local Testing)
 - [x] **Mock bridge** (`scripts/mock_bridge.py`) — Python OAL mock, ffmpeg test pattern video + sine audio
 - [x] **Launcher** (`scripts/start-mock-bridge.ps1`) — PowerShell wrapper with resolution/fps/audio args
+- [x] **Audio header fix** — fixed struct packing bug (signed vs unsigned channels byte), removed broken `build_audio_header` duplicate
+- [x] **Media metadata simulation** — cycles through 5 fake tracks with position updates every 5s
+- [x] **Nav state simulation** — cycles through 5 maneuvers (turn_right, turn_left, straight, destination) every 10s
+- [x] **Bridge stats simulation** — sends stats messages every 30s
+- [x] `--no-simulate` flag to disable media/nav/stats simulation
 - [ ] Validate with AAOS emulator end-to-end
-- [ ] Add media metadata simulation (album art, track info) for M8 cluster testing
-- [ ] Add nav state simulation (maneuvers, distance) for M7/M8 testing
+- [ ] Add album art (base64 PNG) to media metadata simulation
+- [ ] Add nav_image_base64 to nav state simulation
+
+### JVM Integration Tests
+- [x] **MockOalBridgeServer** (`app/src/test/.../transport/MockOalBridgeServer.kt`) — in-process TCP server on ephemeral ports, speaks OAL protocol
+- [x] **TransportIntegrationTest** (`app/src/test/.../transport/TransportIntegrationTest.kt`) — 17 tests covering:
+  - Control channel: hello, phone_connected/disconnected, audio_start/stop, nav_state, media_metadata, error, touch, keyframe_request, full handshake sequence
+  - Video channel: codec config, IDR keyframe, config→IDR→P-frame sequence, large (100KB) payload
+  - Audio channel: media playback, all 5 purpose types, navigation mono 16kHz
+- [x] `testOptions.unitTests.isReturnDefaultValues = true` in build.gradle.kts (allows android.util.Log in JVM tests)
+- [ ] Add ConnectionManager integration test (reconnect with exponential backoff)
+- [ ] Add mic audio send test (app→bridge direction=1)
+
+### CI / Automated Testing
+- [x] **CI workflow** (`.github/workflows/ci.yml`) — runs on every PR and push to main
+  - **unit-tests job**: JDK 21, Android SDK, `./gradlew :app:testDebugUnitTest`, uploads test reports
+  - **emulator-smoke-test job** (main only): boots AAOS emulator, installs APK, starts mock bridge with `adb reverse`, verifies app process is alive
+- [ ] Add test result badge to README
+- [ ] Add bridge C++ build verification to CI (x86 stub mode)
+
+### C++ Bridge Mock Mode
+- [x] **OalMockSession** (`bridge/.../include/openautolink/oal_mock_session.hpp`) — header-only mock session
+  - Generates synthetic H.264 SPS/PPS + IDR/P-frames at configured FPS
+  - Generates PCM sine wave audio at 48kHz stereo, 20ms chunks, pitch cycling
+  - Simulates phone_connected, media metadata cycling, nav state cycling on control channel
+- [x] **SessionMode::OalMock** added to session.hpp, parsed as `--session-mode=oal-mock`
+- [x] **main.cpp integration** — `--session-mode=oal-mock --tcp-car-port=5288` launches full OAL mock
+- [ ] Add keyframe request handling (re-send SPS/PPS+IDR on demand)
+- [ ] Add mic echo mode (echo received mic audio back as media playback for testing)
 
 ---
 
