@@ -193,37 +193,52 @@ private fun VideoStatsOverlay(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.Black.copy(alpha = 0.65f))
-            .padding(10.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.72f))
+            .padding(14.dp)
             .testTag("videoStatsOverlay")
     ) {
         Column {
             StatLine("Stats for nerds", "", header = true)
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             StatLine("Session", sessionState.name)
 
             if (stats.codec != "none") {
-                StatLine("Codec", stats.codec)
+                Spacer(modifier = Modifier.height(4.dp))
+                StatLine("Codec", "${stats.codec}${if (stats.isHardware) " HW" else " SW"}")
+                if (stats.decoderName.isNotBlank()) {
+                    StatLine("Decoder", stats.decoderName)
+                }
                 if (stats.width > 0) {
                     StatLine("Resolution", "${stats.width}x${stats.height}")
                 }
                 StatLine("FPS", "${"%.1f".format(stats.fps)} fps",
-                    valueColor = if (stats.fps >= 25) Color.Green else Color.Red)
-                StatLine("Decoded", stats.framesDecoded.toString())
+                    valueColor = when {
+                        stats.fps >= 50 -> Color.Green
+                        stats.fps >= 25 -> Color(0xFFFFFF00)
+                        else -> Color.Red
+                    })
+                StatLine("Frames", "Rx:${stats.framesReceived}  Dec:${stats.framesDecoded}")
                 if (stats.framesDropped > 0) {
                     StatLine("Dropped", stats.framesDropped.toString(),
                         valueColor = Color(0xFFFFAB00))
+                }
+                if (stats.codecResets > 0) {
+                    StatLine("Resets", stats.codecResets.toString(),
+                        valueColor = Color(0xFFFF6E40))
                 }
             } else {
                 StatLine("Video", "not active")
             }
 
             // Audio stats section
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             if (audioStats.activePurposes.isNotEmpty()) {
                 StatLine("Audio", audioStats.activePurposes.joinToString(", ") { it.name.lowercase() })
+                if (audioStats.sampleRate > 0) {
+                    StatLine("Rate", "${audioStats.sampleRate} Hz")
+                }
                 audioStats.underruns.forEach { (purpose, count) ->
                     if (count > 0) {
                         StatLine("${purpose.name.lowercase()} xrun", count.toString(),
@@ -244,24 +259,24 @@ private fun StatLine(
     header: Boolean = false,
     valueColor: Color = Color.White,
 ) {
-    Row(modifier = Modifier.padding(vertical = 0.5.dp)) {
+    Row(modifier = Modifier.padding(vertical = 1.dp)) {
         Text(
             text = label,
             color = if (header) Color(0xFF64FFDA) else Color(0xFFB0BEC5),
-            fontSize = if (header) 11.sp else 9.sp,
+            fontSize = if (header) 16.sp else 13.sp,
             fontWeight = if (header) FontWeight.Bold else FontWeight.Normal,
             fontFamily = FontFamily.Monospace,
-            lineHeight = if (header) 14.sp else 11.sp,
-            modifier = Modifier.width(if (header) 140.dp else 72.dp),
+            lineHeight = if (header) 20.sp else 16.sp,
+            modifier = Modifier.width(if (header) 200.dp else 100.dp),
         )
         if (value.isNotEmpty()) {
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = value,
                 color = valueColor,
-                fontSize = 9.sp,
+                fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
-                lineHeight = 11.sp,
+                lineHeight = 16.sp,
             )
         }
     }

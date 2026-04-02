@@ -68,5 +68,6 @@ data class AudioFrame(
 data class AudioStats(
     val activePurposes: Set<AudioPurpose> = emptySet(),
     val underruns: Map<AudioPurpose, Long> = emptyMap(),
-    val framesWritten: Map<AudioPurpose, Long> = emptyMap()
+    val framesWritten: Map<AudioPurpose, Long> = emptyMap(),
+    val sampleRate: Int = 0,
 )

@@ -234,6 +234,12 @@ object ControlMessageSerializer {
                 message.config.forEach { (k, v) -> put(k, v) }
             }
 
+            is ControlMessage.RestartServices -> buildJsonObject {
+                put("type", "restart_services")
+                put("wireless", message.wireless.toString())
+                put("bluetooth", message.bluetooth.toString())
+            }
+
             is ControlMessage.Button -> buildJsonObject {
                 put("type", "button")
                 put("keycode", message.keycode)

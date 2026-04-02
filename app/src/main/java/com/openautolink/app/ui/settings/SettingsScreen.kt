@@ -1513,11 +1513,35 @@ private fun BridgeTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        HorizontalDivider(modifier = Modifier.fillMaxWidth(0.5f))
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         Text(
-            text = "Bridge settings are sent to the SBC and may require a session restart to take effect.",
+            text = "Bridge settings are sent to the SBC automatically. Press below to restart the bridge " +
+                    "and force the phone to renegotiate (required after codec, resolution, or WiFi changes).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 12.dp),
         )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Button(
+                onClick = { viewModel.saveAndRestart(restartWireless = true, restartBluetooth = false) },
+                modifier = Modifier.testTag("saveAndRestartButton"),
+            ) {
+                Text("Save & Restart Bridge")
+            }
+
+            FilledTonalButton(
+                onClick = { viewModel.saveAndRestart(restartWireless = true, restartBluetooth = true) },
+                modifier = Modifier.testTag("fullRestartButton"),
+            ) {
+                Text("Full Restart (+ WiFi/BT)")
+            }
+        }
     }
 }
 

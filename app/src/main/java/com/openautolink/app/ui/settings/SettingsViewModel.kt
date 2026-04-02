@@ -414,4 +414,18 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private suspend fun sendBridgeConfig(vararg pairs: Pair<String, String>) {
         ConfigUpdateSender.sendConfigUpdate(pairs.toMap())
     }
+
+    /**
+     * Send all pending config changes to the bridge, then restart bridge services.
+     * The bridge saves config to env, then restarts itself (and optionally WiFi/BT).
+     * The phone will reconnect and renegotiate (e.g., new codec, resolution).
+     */
+    fun saveAndRestart(restartWireless: Boolean = true, restartBluetooth: Boolean = false) {
+        viewModelScope.launch {
+            ConfigUpdateSender.sendRestart(
+                restartWireless = restartWireless,
+                restartBluetooth = restartBluetooth,
+            )
+        }
+    }
 }

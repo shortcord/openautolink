@@ -42,11 +42,15 @@ data class VideoFrame(
 
 data class VideoStats(
     val fps: Float = 0f,
+    val framesReceived: Long = 0,
     val framesDecoded: Long = 0,
     val framesDropped: Long = 0,
     val codec: String = "none",
+    val decoderName: String = "",
+    val isHardware: Boolean = false,
     val width: Int = 0,
-    val height: Int = 0
+    val height: Int = 0,
+    val codecResets: Int = 0,
 )
 
 enum class DecoderState {

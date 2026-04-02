@@ -161,6 +161,10 @@ sealed class ControlMessage {
     ) : ControlMessage()
 
     data class ConfigUpdate(val config: Map<String, String>) : ControlMessage()
+    data class RestartServices(
+        val wireless: Boolean = false,
+        val bluetooth: Boolean = false
+    ) : ControlMessage()
     object KeyframeRequest : ControlMessage()
 
     // App → Bridge: diagnostic messages

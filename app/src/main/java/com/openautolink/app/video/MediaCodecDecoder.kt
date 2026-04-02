@@ -56,6 +56,7 @@ class MediaCodecDecoder(private val codecPreference: String = "h264") : VideoDec
     // Stats tracking
     private val framesDecoded = AtomicLong(0)
     private val framesDropped = AtomicLong(0)
+    private var codecResetCount = 0
     private var lastStatsTime = 0L
     private var lastStatsFrames = 0L
     @Volatile private var currentFps = 0f
@@ -314,6 +315,7 @@ class MediaCodecDecoder(private val codecPreference: String = "h264") : VideoDec
         try {
             codec?.release()
         } catch (_: Exception) {}
+        if (codec != null) codecResetCount++
         codec = null
         receivedIdr = false
     }
@@ -338,11 +340,23 @@ class MediaCodecDecoder(private val codecPreference: String = "h264") : VideoDec
 
     private fun updateStats(codecName: String?) {
         val current = _stats.value
+        val isHw = codecName?.let {
+            try { android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS)
+                .codecInfos.firstOrNull { info -> info.name == it }
+                ?.isHardwareAccelerated == true
+            } catch (_: Exception) { false }
+        } ?: current.isHardware
         _stats.value = current.copy(
             fps = currentFps,
+            framesReceived = (framesDecoded.get() + framesDropped.get()),
             framesDecoded = framesDecoded.get(),
             framesDropped = framesDropped.get(),
-            codec = codecName ?: current.codec
+            codec = codecName ?: current.codec,
+            decoderName = codecName ?: current.decoderName,
+            isHardware = isHw,
+            width = pendingWidth ?: current.width,
+            height = pendingHeight ?: current.height,
+            codecResets = codecResetCount,
         )
     }
 }

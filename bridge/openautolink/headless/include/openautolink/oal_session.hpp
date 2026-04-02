@@ -125,6 +125,7 @@ private:
     void handle_gnss(const std::string& json);
     void handle_vehicle_data(const std::string& json);
     void handle_config_update(const std::string& json);
+    void handle_restart_services(const std::string& json);
     void handle_keyframe_request();
     void handle_app_log(const std::string& json);
     void handle_app_telemetry(const std::string& json);

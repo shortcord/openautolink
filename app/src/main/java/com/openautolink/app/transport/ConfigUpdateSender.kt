@@ -16,7 +16,25 @@ object ConfigUpdateSender {
     private val _configUpdates = MutableSharedFlow<Map<String, String>>(extraBufferCapacity = 8)
     val configUpdates: SharedFlow<Map<String, String>> = _configUpdates.asSharedFlow()
 
+    private val _restartRequests = MutableSharedFlow<ControlMessage.RestartServices>(extraBufferCapacity = 4)
+    val restartRequests: SharedFlow<ControlMessage.RestartServices> = _restartRequests.asSharedFlow()
+
     suspend fun sendConfigUpdate(config: Map<String, String>) {
         _configUpdates.emit(config)
+    }
+
+    /** Send config_update followed by restart_services. The bridge saves config then restarts. */
+    suspend fun sendConfigAndRestart(
+        config: Map<String, String>,
+        restartWireless: Boolean = false,
+        restartBluetooth: Boolean = false
+    ) {
+        _configUpdates.emit(config)
+        _restartRequests.emit(ControlMessage.RestartServices(restartWireless, restartBluetooth))
+    }
+
+    /** Restart bridge services without config changes. */
+    suspend fun sendRestart(restartWireless: Boolean = false, restartBluetooth: Boolean = false) {
+        _restartRequests.emit(ControlMessage.RestartServices(restartWireless, restartBluetooth))
     }
 }

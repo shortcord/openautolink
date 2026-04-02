@@ -263,6 +263,16 @@ class SessionManager(
                 }
             }
 
+            // Forward restart requests from settings to bridge
+            launch {
+                com.openautolink.app.transport.ConfigUpdateSender.restartRequests.collect { restart ->
+                    if (connectionManager.connectionState.value != ConnectionState.DISCONNECTED) {
+                        connectionManager.sendControlMessage(restart)
+                        Log.i(TAG, "Sent restart_services to bridge: wireless=${restart.wireless} bt=${restart.bluetooth}")
+                    }
+                }
+            }
+
             // Watch for decoder errors — auto-reset codec and request keyframe
             decoderWatchJob?.cancel()
             decoderWatchJob = launch {

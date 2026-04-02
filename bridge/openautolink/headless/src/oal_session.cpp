@@ -415,6 +415,8 @@ void OalSession::on_app_json_line(const std::string& line) {
         handle_vehicle_data(line);
     } else if (type == "config_update") {
         handle_config_update(line);
+    } else if (type == "restart_services") {
+        handle_restart_services(line);
     } else if (type == "keyframe_request") {
         handle_keyframe_request();
     } else if (type == "app_log") {
@@ -714,6 +716,37 @@ void OalSession::handle_config_update(const std::string& json) {
     }
 
     send_config_echo();
+}
+
+void OalSession::handle_restart_services(const std::string& json) {
+    // Restart bridge and optionally WiFi/BT services.
+    // The app sends this after config_update to force the phone to renegotiate (e.g., codec change).
+    bool restart_wireless = oal_json_extract_string(json, "wireless") == "true";
+    bool restart_bt = oal_json_extract_string(json, "bluetooth") == "true";
+
+    std::cerr << "[OAL] restart_services: wireless=" << restart_wireless
+              << " bt=" << restart_bt << std::endl;
+
+    // Build the systemd restart command. The bridge service restarts itself last,
+    // which terminates this process — the app will reconnect automatically.
+    std::string cmd;
+    if (restart_wireless) {
+        cmd += "sudo systemctl restart openautolink-wireless 2>/dev/null; ";
+    }
+    if (restart_bt) {
+        cmd += "sudo systemctl restart openautolink-bt 2>/dev/null; ";
+    }
+    // Always restart the bridge itself (this kills us, app auto-reconnects)
+    cmd += "sudo systemctl restart openautolink.service &";
+
+    // Notify app that restart is happening
+    send_control_line(R"({"type":"event","event_type":"restarting","wireless":)" +
+                 std::string(restart_wireless ? "true" : "false") +
+                 R"(,"bluetooth":)" + std::string(restart_bt ? "true" : "false") + "}");
+
+    // Short delay so the event reaches the app before we die
+    usleep(200000);
+    system(cmd.c_str());
 }
 
 void OalSession::handle_keyframe_request() {
