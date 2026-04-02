@@ -205,14 +205,14 @@ Enable OTA-style self-updating so new builds can be deployed without AAB/Play St
 This unblocks all car-specific validation items listed in the Car Testing Unknowns section below.
 
 **App Side:**
-- [ ] `diagnostics/` island: `RemoteDiagnostics` interface + `RemoteDiagnosticsImpl`
-- [ ] `app_log` message type: structured log events with `ts`, `level`, `tag`, `msg`
-- [ ] `app_telemetry` message type: periodic (5s) snapshot of video/audio/session/cluster stats
-- [ ] Rate limiter: max 20 log messages/second (ring buffer, newest wins)
-- [ ] DataStore preference: remote diagnostics enabled (default: off)
-- [ ] DataStore preference: minimum log level to send (default: INFO)
-- [ ] Settings UI: toggle + log level selector in diagnostics tab
-- [ ] Instrument key subsystems with diagnostic log points:
+- [x] `diagnostics/` island: `RemoteDiagnostics` interface + `RemoteDiagnosticsImpl`
+- [x] `app_log` message type: structured log events with `ts`, `level`, `tag`, `msg`
+- [x] `app_telemetry` message type: periodic (5s) snapshot of video/audio/session/cluster stats
+- [x] Rate limiter: max 20 log messages/second (ring buffer, newest wins)
+- [x] DataStore preference: remote diagnostics enabled (default: off)
+- [x] DataStore preference: minimum log level to send (default: INFO)
+- [x] Settings UI: toggle + log level selector in diagnostics tab
+- [x] Instrument key subsystems with diagnostic log points:
   - `video`: codec selection, codec reset, first frame timing, decode errors
   - `audio`: AudioTrack creation, underruns, purpose routing, focus changes
   - `cluster`: bind/unbind events, GM kill detection, rebind attempts
@@ -221,12 +221,12 @@ This unblocks all car-specific validation items listed in the Car Testing Unknow
   - `input`: key event interception success/failure (voice button, media keys)
   - `transport`: connection timing, reconnect events, channel failures
   - `system`: Android version, SoC, display metrics (sent once on connect)
-- [ ] Add `app_log` and `app_telemetry` to `ControlMessageSerializer` (app→bridge direction)
+- [x] Add `app_log` and `app_telemetry` to `ControlMessageSerializer` (app→bridge direction)
 
 **Bridge Side:**
-- [ ] Handle `app_log` in `on_app_json_line()`: write to stderr with `[CAR]` prefix + level + tag
-- [ ] Handle `app_telemetry` in `on_app_json_line()`: write to stderr with `[CAR] TELEM` prefix
-- [ ] Both types are fire-and-forget — no response, no parsing beyond prefix formatting
+- [x] Handle `app_log` in `on_app_json_line()`: write to stderr with `[CAR]` prefix + level + tag
+- [x] Handle `app_telemetry` in `on_app_json_line()`: write to stderr with `[CAR] TELEM` prefix
+- [x] Both types are fire-and-forget — no response, no parsing beyond prefix formatting
 
 **Protocol:** See [docs/protocol.md](protocol.md) → Remote Diagnostics Channel section.
 
