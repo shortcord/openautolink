@@ -25,6 +25,17 @@ if [ -n "${OAL_BT_MAC:-}" ]; then
     ARGS+=(--bt-mac="${OAL_BT_MAC}")
 fi
 
+# Session UI flags (P2: AA status bar)
+if [ "${OAL_AA_HIDE_CLOCK:-true}" = "true" ]; then
+    ARGS+=(--hide-clock)
+fi
+if [ "${OAL_AA_HIDE_PHONE_SIGNAL:-false}" = "true" ]; then
+    ARGS+=(--hide-phone-signal)
+fi
+if [ "${OAL_AA_HIDE_BATTERY:-false}" = "true" ]; then
+    ARGS+=(--hide-battery)
+fi
+
 # Wired AA: phone connects via USB host port
 if [ "${OAL_PHONE_MODE:-wireless}" = "usb" ]; then
     ARGS+=(--usb)

@@ -130,6 +130,32 @@ object ControlMessageSerializer {
                 uptimeSeconds = obj["uptime_seconds"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0
             )
 
+            "phone_battery" -> ControlMessage.PhoneBattery(
+                level = obj["level"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                timeRemainingSeconds = obj["time_remaining_s"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                critical = obj["critical"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+            )
+
+            "voice_session" -> ControlMessage.VoiceSession(
+                started = obj["status"]?.jsonPrimitive?.content == "start"
+            )
+
+            "phone_status" -> {
+                val calls = obj["calls"]?.jsonArray?.map { callEl ->
+                    val callObj = callEl.jsonObject
+                    ControlMessage.PhoneCall(
+                        state = callObj["state"]?.jsonPrimitive?.content ?: "unknown",
+                        durationSeconds = callObj["duration_s"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                        callerNumber = callObj["caller_number"]?.jsonPrimitive?.content,
+                        callerId = callObj["caller_id"]?.jsonPrimitive?.content
+                    )
+                } ?: emptyList()
+                ControlMessage.PhoneStatus(
+                    signalStrength = obj["signal_strength"]?.jsonPrimitive?.content?.toIntOrNull(),
+                    calls = calls
+                )
+            }
+
             else -> null
         }
     }
@@ -186,6 +212,21 @@ object ControlMessageSerializer {
                 message.steeringAngleDeg?.let { put("steering_angle_deg", it) }
                 message.headlight?.let { put("headlight", it) }
                 message.hazardLights?.let { put("hazard_lights", it) }
+                // P5: IMU sensors
+                message.accelXe3?.let { put("accel_x_e3", it) }
+                message.accelYe3?.let { put("accel_y_e3", it) }
+                message.accelZe3?.let { put("accel_z_e3", it) }
+                message.gyroRxe3?.let { put("gyro_rx_e3", it) }
+                message.gyroRye3?.let { put("gyro_ry_e3", it) }
+                message.gyroRze3?.let { put("gyro_rz_e3", it) }
+                message.compassBearingE6?.let { put("compass_bearing_e6", it) }
+                message.compassPitchE6?.let { put("compass_pitch_e6", it) }
+                message.compassRollE6?.let { put("compass_roll_e6", it) }
+                // P5: GPS satellites
+                message.satInUse?.let { put("sat_in_use", it) }
+                message.satInView?.let { put("sat_in_view", it) }
+                // P6: RPM
+                message.rpmE3?.let { put("rpm_e3", it) }
             }
 
             is ControlMessage.ConfigUpdate -> buildJsonObject {

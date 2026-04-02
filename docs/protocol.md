@@ -43,6 +43,11 @@ Bidirectional newline-delimited JSON. Each message is a single JSON object follo
 {"type":"config_echo","video_codec":"h264","video_width":1920,"video_height":1080,"video_fps":60,"aa_resolution":"1080p"}
 {"type":"error","code":100,"message":"Phone connection lost"}
 {"type":"stats","video_frames_sent":1200,"audio_frames_sent":3400,"uptime_seconds":120}
+{"type":"phone_battery","level":85,"time_remaining_s":14400,"critical":false}
+{"type":"voice_session","status":"start"}
+{"type":"voice_session","status":"end"}
+{"type":"phone_status","signal_strength":3,"calls":[{"state":"in_call","duration_s":45,"caller_number":"+15550123","caller_id":"Mom"}]}
+{"type":"phone_status","signal_strength":4,"calls":[]}
 ```
 
 ### App → Bridge
@@ -53,10 +58,78 @@ Bidirectional newline-delimited JSON. Each message is a single JSON object follo
 {"type":"touch","action":2,"pointers":[{"id":0,"x":100,"y":200},{"id":1,"x":300,"y":400}]}
 {"type":"button","keycode":87,"down":true,"metastate":0,"longpress":false}
 {"type":"gnss","nmea":"$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A"}
-{"type":"vehicle_data","speed_kmh":65.0,"gear":"D","battery_pct":72,"turn_signal":"left"}
+{"type":"vehicle_data","speed_kmh":65.0,"gear":"D","battery_pct":72,"turn_signal":"left","parking_brake":false,"night_mode":false}
+{"type":"vehicle_data","accel_x_e3":123,"accel_y_e3":-9810,"accel_z_e3":45,"gyro_rx_e3":10,"gyro_ry_e3":-5,"gyro_rz_e3":2,"compass_bearing_e6":127500000,"sat_in_use":8,"sat_in_view":12}
+{"type":"vehicle_data","rpm_e3":2500000}
 {"type":"config_update","video_codec":"h265","video_fps":30}
 {"type":"keyframe_request"}
 ```
+
+### Bridge → App: `phone_battery`
+
+Phone battery status forwarded from the AA session's `BatteryStatusNotification`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `level` | int | Battery percentage (0–100) |
+| `time_remaining_s` | int | Estimated seconds of battery remaining |
+| `critical` | bool | True if phone reports critical battery |
+
+### Bridge → App: `voice_session`
+
+Google Assistant voice session status from the AA session's `VoiceSessionNotification`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | `"start"` or `"end"` |
+
+### Bridge → App: `phone_status`
+
+Phone signal strength and active call state from the AA `PhoneStatusService` channel.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `signal_strength` | int | Signal bars (0–4), -1 if unknown |
+| `calls` | array | Active calls (empty array = no calls) |
+| `calls[].state` | string | `"in_call"`, `"unknown"` |
+| `calls[].duration_s` | int | Call duration in seconds |
+| `calls[].caller_number` | string? | Phone number (optional) |
+| `calls[].caller_id` | string? | Contact name (optional) |
+
+### App → Bridge: `vehicle_data`
+
+Batched vehicle sensor data from AAOS VHAL properties and device sensors.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `speed_kmh` | float? | Vehicle speed in km/h |
+| `gear` | string? | `"P"`, `"R"`, `"N"`, `"D"`, `"1"`–`"4"` |
+| `battery_pct` | int? | EV battery level (Wh raw value) |
+| `turn_signal` | string? | `"none"`, `"left"`, `"right"` |
+| `parking_brake` | bool? | Parking brake engaged |
+| `night_mode` | bool? | AAOS night mode active |
+| `fuel_level_pct` | int? | Fuel level percentage (ICE vehicles) |
+| `range_km` | float? | Remaining range in km |
+| `low_fuel` | bool? | Low fuel warning |
+| `odometer_km` | float? | Odometer reading in km |
+| `ambient_temp_c` | float? | Outside temperature °C |
+| `steering_angle_deg` | float? | Steering angle (if available) |
+| `headlight` | int? | Headlight state enum |
+| `hazard_lights` | bool? | Hazard lights active |
+| `accel_x_e3` | int? | Accelerometer X (m/s² × 1000) |
+| `accel_y_e3` | int? | Accelerometer Y (m/s² × 1000) |
+| `accel_z_e3` | int? | Accelerometer Z (m/s² × 1000) |
+| `gyro_rx_e3` | int? | Gyroscope rotation X (rad/s × 1000) |
+| `gyro_ry_e3` | int? | Gyroscope rotation Y (rad/s × 1000) |
+| `gyro_rz_e3` | int? | Gyroscope rotation Z (rad/s × 1000) |
+| `compass_bearing_e6` | int? | Compass bearing (degrees × 1,000,000) |
+| `compass_pitch_e6` | int? | Pitch (degrees × 1,000,000) |
+| `compass_roll_e6` | int? | Roll (degrees × 1,000,000) |
+| `sat_in_use` | int? | GPS satellites used in fix |
+| `sat_in_view` | int? | GPS satellites visible |
+| `rpm_e3` | int? | Engine RPM × 1000 (ICE only, null on EV) |
+
+IMU fields (`accel_*`, `gyro_*`, `compass_*`) are sent by the app's `ImuForwarder` at ~10 Hz as a separate `vehicle_data` message (not batched with VHAL data). VHAL fields are sent by `VehicleDataForwarder` at ≤2 Hz. All fields are optional — null/absent means unavailable.
 
 ### Touch Action Codes
 | Code | Meaning |
@@ -239,6 +312,9 @@ Bridge advertises `_openautolink._tcp` via Avahi. TXT records include:
 
 ### Manual
 User enters bridge IP in app settings. Control port 5288 is default.
+
+### UDP Broadcast
+Bridge responds to UDP broadcast on port 5287 with a JSON discovery response.
 
 ## Design Rationale
 

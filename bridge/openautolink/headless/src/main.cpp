@@ -32,6 +32,9 @@ std::string_view kMediaFdFlag = "--media-fd=";
 std::string_view kTcpCarPortFlag = "--tcp-car-port=";
 std::string_view kUsbFlag = "--usb";
 std::string_view kBtMacFlag = "--bt-mac=";
+std::string_view kHideClockFlag = "--hide-clock";
+std::string_view kHidePhoneSignalFlag = "--hide-phone-signal";
+std::string_view kHideBatteryFlag = "--hide-battery";
 
 } // namespace
 
@@ -49,6 +52,9 @@ int main(int argc, char* argv[])
     int tcp_car_port = 0;    // TCP port for car app (e.g. 5288)
     bool use_usb = false;    // Wired AA: phone via USB host port
     std::string bt_mac;      // BT MAC override (empty = auto-detect)
+    bool hide_clock = true;
+    bool hide_phone_signal = false;
+    bool hide_battery = false;
     for(int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         if(argument.rfind(kSessionModeFlag, 0) == 0) {
@@ -127,6 +133,18 @@ int main(int argc, char* argv[])
             bt_mac = std::string(argument.substr(kBtMacFlag.size()));
             continue;
         }
+        if(argument == kHideClockFlag) {
+            hide_clock = true;
+            continue;
+        }
+        if(argument == kHidePhoneSignalFlag) {
+            hide_phone_signal = true;
+            continue;
+        }
+        if(argument == kHideBatteryFlag) {
+            hide_battery = true;
+            continue;
+        }
     }
 
     // Thread-safe output sink — aasdk callbacks run on a worker thread.
@@ -151,6 +169,9 @@ int main(int argc, char* argv[])
         if (media_fd >= 0) c.media_fd = media_fd;
         c.use_usb_host = use_usb;
         c.bt_mac = bt_mac;
+        c.hide_clock = hide_clock;
+        c.hide_phone_signal = hide_phone_signal;
+        c.hide_battery_level = hide_battery;
         return c;
     };
 

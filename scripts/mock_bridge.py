@@ -385,6 +385,14 @@ class ControlHandler:
                         target=self._simulate_stats, args=(conn, stop_event),
                         daemon=True, name="stats-sim"
                     ).start()
+                    threading.Thread(
+                        target=self._simulate_phone_battery, args=(conn, stop_event),
+                        daemon=True, name="battery-sim"
+                    ).start()
+                    threading.Thread(
+                        target=self._simulate_voice_session, args=(conn, stop_event),
+                        daemon=True, name="voice-sim"
+                    ).start()
 
         print("[control] App disconnected")
         self._phone_connected = False
@@ -474,6 +482,47 @@ class ControlHandler:
                 "audio_frames_sent": audio_frames,
                 "uptime_seconds": uptime,
             })
+
+    def _simulate_phone_battery(self, conn, stop_event):
+        """Send phone_battery status every 30 seconds with simulated drain."""
+        level = 85
+        while not stop_event.is_set():
+            critical = level <= 15
+            self._send(conn, {
+                "type": "phone_battery",
+                "level": level,
+                "time_remaining_s": level * 180,
+                "critical": critical,
+            })
+            level = max(5, level - 5)
+            if level <= 5:
+                level = 85  # reset cycle
+            for _ in range(30):
+                if stop_event.is_set():
+                    return
+                time.sleep(1)
+
+    def _simulate_voice_session(self, conn, stop_event):
+        """Simulate voice session start/end pairs every 60 seconds."""
+        while not stop_event.is_set():
+            for _ in range(20):
+                if stop_event.is_set():
+                    return
+                time.sleep(1)
+            # Start voice session
+            self._send(conn, {"type": "voice_session", "status": "start"})
+            print("[control] Voice session: start")
+            for _ in range(5):
+                if stop_event.is_set():
+                    return
+                time.sleep(1)
+            # End voice session
+            self._send(conn, {"type": "voice_session", "status": "end"})
+            print("[control] Voice session: end")
+            for _ in range(35):
+                if stop_event.is_set():
+                    return
+                time.sleep(1)
 
 
 # ── Video Streamer ────────────────────────────────────────────────────

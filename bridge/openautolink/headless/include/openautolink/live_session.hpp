@@ -30,6 +30,8 @@
 #include <aasdk/Channel/NavigationStatus/NavigationStatusService.hpp>
 #include <aasdk/Channel/MediaPlaybackStatus/IMediaPlaybackStatusServiceEventHandler.hpp>
 #include <aasdk/Channel/MediaPlaybackStatus/MediaPlaybackStatusService.hpp>
+#include <aasdk/Channel/PhoneStatus/IPhoneStatusServiceEventHandler.hpp>
+#include <aasdk/Channel/PhoneStatus/PhoneStatusService.hpp>
 #include <aasdk/Messenger/ICryptor.hpp>
 #include <aasdk/Messenger/IMessenger.hpp>
 #include <aasdk/Transport/ITransport.hpp>
@@ -64,6 +66,7 @@ class HeadlessInputHandler;
 class HeadlessBluetoothHandler;
 class HeadlessNavStatusHandler;
 class HeadlessMediaStatusHandler;
+class HeadlessPhoneStatusHandler;
 
 // The core entity that orchestrates the aasdk control channel.
 class HeadlessAutoEntity
@@ -88,6 +91,9 @@ public:
     std::shared_ptr<HeadlessAudioInputHandler> audio_input_handler() const { return audio_input_handler_; }
 
     bool is_active() const { return active_; }
+
+    // P6: Send call availability status to phone
+    void sendCallAvailability(bool available);
 
     using DisconnectCallback = std::function<void()>;
     void set_disconnect_callback(DisconnectCallback cb) { disconnect_cb_ = std::move(cb); }
@@ -142,6 +148,7 @@ private:
     std::shared_ptr<HeadlessBluetoothHandler> bluetooth_handler_;
     std::shared_ptr<HeadlessNavStatusHandler> nav_status_handler_;
     std::shared_ptr<HeadlessMediaStatusHandler> media_status_handler_;
+    std::shared_ptr<HeadlessPhoneStatusHandler> phone_status_handler_;
 
     // OAL session — propagated to video/audio handlers
     class OalSession* oal_session_ = nullptr;
@@ -213,6 +220,9 @@ public:
     // Restart the AA session with updated config.
     void restart_with_config(const HeadlessConfig& new_config);
 
+    // P6: Notify phone that calls are available/unavailable (BT HFP state)
+    void notify_call_availability(bool available);
+
 private:
     void start_dual_mode();
     void start_tcp_server();
@@ -250,6 +260,10 @@ private:
 
     class OalSession* oal_session_ = nullptr;
 
+    // P3: GNSS parsing state
+    bool gnss_first_fix_logged_ = false;
+    double last_gps_alt_ = 0.0;
+
     // Raw SSL for TCP wireless (TLS at socket level, not in aasdk cryptor)
     void* ssl_ = nullptr;      // SSL*
     void* ssl_ctx_ = nullptr;  // SSL_CTX*
@@ -278,6 +292,9 @@ public:
     void sendAck(uint32_t session, uint32_t value);
     // Replay cached SPS/PPS+IDR to CPC session (call when car app connects)
     void replayCachedKeyframe();
+
+    // Send AA UI theme update to phone (dark/light based on car night mode)
+    void sendUiThemeUpdate(bool night_mode);
 
     // Forward a touch event into the AA input channel (if input handler is set)
     void set_input_handler(std::shared_ptr<HeadlessInputHandler> handler) { input_handler_ = handler; }
@@ -308,6 +325,8 @@ private:
     class OalSession* oal_session_ = nullptr;
     // Cached SPS/PPS + first IDR for replay when car app connects late
     std::vector<uint8_t> cached_sps_pps_;
+    // Track last night mode sent to avoid redundant updates
+    int last_night_mode_sent_ = -1;  // -1 = never sent
     std::vector<uint8_t> cached_idr_;
     bool has_cached_keyframe_ = false;
 };
@@ -414,6 +433,15 @@ public:
     void sendLight(int headlight, int turn_indicator, bool hazard);
     void sendTirePressure(const std::vector<int>& pressures_e2);
     void sendHvac(int target_temp_e3, int current_temp_e3);
+
+    // P5: IMU sensors
+    void sendAccelerometer(int x_e3, int y_e3, int z_e3);
+    void sendGyroscope(int rx_e3, int ry_e3, int rz_e3);
+    void sendCompass(int bearing_e6, int pitch_e6, int roll_e6);
+    void sendGpsSatellites(int in_use, int in_view);
+
+    // P6: RPM
+    void sendRpm(int rpm_e3);
 
 private:
     void onChannelOpenRequest(const aap_protobuf::service::control::message::ChannelOpenRequest& request) override;
@@ -553,6 +581,31 @@ private:
     int last_duration_ms_ = 0;
     int last_position_ms_ = 0;
     bool last_playing_ = false;
+};
+
+class HeadlessPhoneStatusHandler
+    : public aasdk::channel::phonestatus::IPhoneStatusServiceEventHandler
+    , public std::enable_shared_from_this<HeadlessPhoneStatusHandler>
+{
+public:
+    HeadlessPhoneStatusHandler(boost::asio::io_service& io_service,
+                               aasdk::messenger::IMessenger::Pointer messenger,
+                               ThreadSafeOutputSink& output);
+
+    void start();
+    void stop();
+
+    void set_oal_session(class OalSession* session) { oal_session_ = session; }
+
+private:
+    void onChannelOpenRequest(const aap_protobuf::service::control::message::ChannelOpenRequest& request) override;
+    void onPhoneStatusUpdate(const aap_protobuf::service::phonestatus::message::PhoneStatus& status) override;
+    void onChannelError(const aasdk::error::Error& e) override;
+
+    boost::asio::io_service::strand strand_;
+    std::shared_ptr<aasdk::channel::phonestatus::PhoneStatusService> channel_;
+    ThreadSafeOutputSink& output_;
+    class OalSession* oal_session_ = nullptr;
 };
 
 } // namespace openautolink

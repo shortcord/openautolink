@@ -78,6 +78,28 @@ sealed class ControlMessage {
         val uptimeSeconds: Long
     ) : ControlMessage()
 
+    data class PhoneBattery(
+        val level: Int,
+        val timeRemainingSeconds: Int,
+        val critical: Boolean
+    ) : ControlMessage()
+
+    data class VoiceSession(
+        val started: Boolean
+    ) : ControlMessage()
+
+    data class PhoneStatus(
+        val signalStrength: Int?,
+        val calls: List<PhoneCall>
+    ) : ControlMessage()
+
+    data class PhoneCall(
+        val state: String,
+        val durationSeconds: Int,
+        val callerNumber: String?,
+        val callerId: String?
+    )
+
     // App → Bridge
     data class AppHello(
         val version: Int,
@@ -113,7 +135,22 @@ sealed class ControlMessage {
         val ambientTempC: Float? = null,
         val steeringAngleDeg: Float? = null,
         val headlight: Int? = null,
-        val hazardLights: Boolean? = null
+        val hazardLights: Boolean? = null,
+        // P5: IMU sensors
+        val accelXe3: Int? = null,
+        val accelYe3: Int? = null,
+        val accelZe3: Int? = null,
+        val gyroRxe3: Int? = null,
+        val gyroRye3: Int? = null,
+        val gyroRze3: Int? = null,
+        val compassBearingE6: Int? = null,
+        val compassPitchE6: Int? = null,
+        val compassRollE6: Int? = null,
+        // P5: GPS satellites
+        val satInUse: Int? = null,
+        val satInView: Int? = null,
+        // P6: RPM
+        val rpmE3: Int? = null
     ) : ControlMessage()
 
     data class Button(

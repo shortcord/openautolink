@@ -16,6 +16,7 @@ import com.openautolink.app.diagnostics.RemoteDiagnosticsImpl
 import com.openautolink.app.diagnostics.TelemetryCollector
 import com.openautolink.app.input.GnssForwarder
 import com.openautolink.app.input.GnssForwarderImpl
+import com.openautolink.app.input.ImuForwarder
 import com.openautolink.app.input.VehicleDataForwarder
 import com.openautolink.app.input.VehicleDataForwarderImpl
 import com.openautolink.app.media.OalMediaSessionManager
@@ -98,6 +99,9 @@ class SessionManager(
     // Vehicle data forwarder — sends VHAL properties to bridge → phone
     private var _vehicleDataForwarder: VehicleDataForwarder? = null
 
+    // IMU forwarder — sends accelerometer/gyro/compass to bridge → phone
+    private var _imuForwarder: ImuForwarder? = null
+
     // Navigation display — processes nav_state from bridge
     private val _navigationDisplay: NavigationDisplay = NavigationDisplayImpl()
     val navigationDisplay: NavigationDisplay get() = _navigationDisplay
@@ -109,6 +113,20 @@ class SessionManager(
 
     val currentManeuver: StateFlow<ManeuverState?>
         get() = _navigationDisplay.currentManeuver
+
+    // Phone battery state from bridge
+    private val _phoneBatteryLevel = MutableStateFlow<Int?>(null)
+    val phoneBatteryLevel: StateFlow<Int?> = _phoneBatteryLevel.asStateFlow()
+    private val _phoneBatteryCritical = MutableStateFlow(false)
+    val phoneBatteryCritical: StateFlow<Boolean> = _phoneBatteryCritical.asStateFlow()
+
+    // Voice session active state
+    private val _voiceSessionActive = MutableStateFlow(false)
+    val voiceSessionActive: StateFlow<Boolean> = _voiceSessionActive.asStateFlow()
+
+    // Phone signal strength (0-4, null if unknown)
+    private val _phoneSignalStrength = MutableStateFlow<Int?>(null)
+    val phoneSignalStrength: StateFlow<Int?> = _phoneSignalStrength.asStateFlow()
 
     // Media session — publishes now-playing to AAOS system UI + cluster
     private var _mediaSessionManager: OalMediaSessionManager? = null
@@ -155,6 +173,14 @@ class SessionManager(
         _vehicleDataForwarder = context?.let { ctx ->
             VehicleDataForwarderImpl(ctx) { vehicleData ->
                 scope.launch { connectionManager.sendControlMessage(vehicleData) }
+            }
+        }
+
+        // Create IMU forwarder
+        _imuForwarder?.stop()
+        _imuForwarder = context?.let { ctx ->
+            ImuForwarder(ctx) { imuData ->
+                scope.launch { connectionManager.sendControlMessage(imuData) }
             }
         }
 
@@ -268,6 +294,8 @@ class SessionManager(
         _gnssForwarder = null
         _vehicleDataForwarder?.stop()
         _vehicleDataForwarder = null
+        _imuForwarder?.stop()
+        _imuForwarder = null
         _navigationDisplay.clear()
         ClusterNavigationState.clear()
         _mediaSessionManager?.release()
@@ -281,6 +309,10 @@ class SessionManager(
         _sessionState.value = SessionState.IDLE
         _statusMessage.value = "Disconnected"
         _bridgeInfo.value = null
+        _phoneBatteryLevel.value = null
+        _phoneBatteryCritical.value = false
+        _voiceSessionActive.value = false
+        _phoneSignalStrength.value = null
     }
 
     suspend fun sendAppHello(displayWidth: Int, displayHeight: Int, displayDpi: Int) {
@@ -392,6 +424,7 @@ class SessionManager(
                 // Start GNSS and vehicle data forwarding
                 _gnssForwarder?.start()
                 _vehicleDataForwarder?.start()
+                _imuForwarder?.start()
             }
             is ControlMessage.PhoneDisconnected -> {
                 _remoteDiagnostics?.log(DiagnosticLevel.INFO, "session", "Phone disconnected: ${message.reason}")
@@ -400,6 +433,7 @@ class SessionManager(
                 stopAudioChannel()
                 _gnssForwarder?.stop()
                 _vehicleDataForwarder?.stop()
+                _imuForwarder?.stop()
                 _navigationDisplay.clear()
                 ClusterNavigationState.clear()
             }
@@ -447,6 +481,21 @@ class SessionManager(
                 Log.e(TAG, "Bridge error ${message.code}: ${message.message}")
                 _remoteDiagnostics?.log(DiagnosticLevel.ERROR, "transport", "Bridge error ${message.code}: ${message.message}")
                 _statusMessage.value = "Error: ${message.message}"
+            }
+            is ControlMessage.PhoneBattery -> {
+                _phoneBatteryLevel.value = message.level
+                _phoneBatteryCritical.value = message.critical
+                Log.d(TAG, "Phone battery: ${message.level}% critical=${message.critical}")
+            }
+            is ControlMessage.VoiceSession -> {
+                _voiceSessionActive.value = message.started
+                Log.d(TAG, "Voice session: ${if (message.started) "start" else "end"}")
+            }
+            is ControlMessage.PhoneStatus -> {
+                _phoneSignalStrength.value = message.signalStrength
+                if (message.calls.isNotEmpty()) {
+                    Log.d(TAG, "Phone status: signal=${message.signalStrength}, calls=${message.calls.size}")
+                }
             }
             else -> {} // Other messages handled by island-specific collectors
         }

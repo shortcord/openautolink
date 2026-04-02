@@ -38,6 +38,7 @@ class VehicleDataForwarderImpl(
         private const val ENV_OUTSIDE_TEMPERATURE = 291505923    // float, celsius
         private const val EV_BATTERY_INSTANTANEOUS_CHARGE_RATE = 291504908 // float, W
         private const val RANGE_REMAINING = 291504904            // float, meters
+        private const val PERF_ENGINE_RPM = 291504901            // float, RPM (ICE only, likely unavailable on EV)
     }
 
     override var isActive: Boolean = false
@@ -106,7 +107,8 @@ class VehicleDataForwarderImpl(
             EV_BATTERY_LEVEL,
             ENV_OUTSIDE_TEMPERATURE,
             EV_BATTERY_INSTANTANEOUS_CHARGE_RATE,
-            RANGE_REMAINING
+            RANGE_REMAINING,
+            PERF_ENGINE_RPM
         )
 
         val pmClass = pm::class.java
@@ -215,6 +217,8 @@ class VehicleDataForwarderImpl(
         val ambientTemp = currentValues[ENV_OUTSIDE_TEMPERATURE] as? Float
         val chargeRate = currentValues[EV_BATTERY_INSTANTANEOUS_CHARGE_RATE] as? Float
         val rangeRemaining = (currentValues[RANGE_REMAINING] as? Float)?.let { it / 1000f } // m → km
+        val rpmRaw = currentValues[PERF_ENGINE_RPM] as? Float
+        val rpmE3 = rpmRaw?.let { (it * 1000).toInt() }  // RPM × 1000
 
         return ControlMessage.VehicleData(
             speedKmh = speed,
@@ -230,7 +234,8 @@ class VehicleDataForwarderImpl(
             ambientTempC = ambientTemp,
             steeringAngleDeg = null,
             headlight = null,
-            hazardLights = null
+            hazardLights = null,
+            rpmE3 = rpmE3
         )
     }
 

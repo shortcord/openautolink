@@ -36,6 +36,9 @@ data class ProjectionUiState(
     val audioStats: AudioStats = AudioStats(),
     val showStats: Boolean = false,
     val maneuver: ManeuverState? = null,
+    val phoneBatteryLevel: Int? = null,
+    val phoneBatteryCritical: Boolean = false,
+    val voiceSessionActive: Boolean = false,
 )
 
 class ProjectionViewModel(application: Application) : AndroidViewModel(application) {
@@ -80,6 +83,9 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         _audioStats,
         _showStats,
         sessionManager.currentManeuver,
+        sessionManager.phoneBatteryLevel,
+        sessionManager.phoneBatteryCritical,
+        sessionManager.voiceSessionActive,
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         ProjectionUiState(
@@ -92,6 +98,9 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             audioStats = values[6] as AudioStats,
             showStats = values[7] as Boolean,
             maneuver = values[8] as? ManeuverState,
+            phoneBatteryLevel = values[9] as? Int,
+            phoneBatteryCritical = values[10] as Boolean,
+            voiceSessionActive = values[11] as Boolean,
         )
     }.stateIn(
         viewModelScope,

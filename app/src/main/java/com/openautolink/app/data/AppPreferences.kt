@@ -41,6 +41,9 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val NETWORK_INTERFACE = stringPreferencesKey("network_interface")
         val REMOTE_DIAGNOSTICS_ENABLED = booleanPreferencesKey("remote_diagnostics_enabled")
         val REMOTE_DIAGNOSTICS_MIN_LEVEL = stringPreferencesKey("remote_diagnostics_min_level")
+        val SYNC_AA_THEME = booleanPreferencesKey("sync_aa_theme")
+        val HIDE_AA_CLOCK = booleanPreferencesKey("hide_aa_clock")
+        val SEND_IMU_SENSORS = booleanPreferencesKey("send_imu_sensors")
 
         const val DEFAULT_BRIDGE_HOST = "192.168.0.100"
         const val DEFAULT_BRIDGE_PORT = 5288
@@ -53,6 +56,9 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_NETWORK_INTERFACE = "" // empty = auto-select first available
         const val DEFAULT_REMOTE_DIAGNOSTICS_ENABLED = false
         const val DEFAULT_REMOTE_DIAGNOSTICS_MIN_LEVEL = "INFO"
+        const val DEFAULT_SYNC_AA_THEME = true
+        const val DEFAULT_HIDE_AA_CLOCK = true
+        const val DEFAULT_SEND_IMU_SENSORS = true
     }
 
     val bridgeHost: Flow<String> = dataStore.data.map { prefs ->
@@ -99,6 +105,18 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[REMOTE_DIAGNOSTICS_MIN_LEVEL] ?: DEFAULT_REMOTE_DIAGNOSTICS_MIN_LEVEL
     }
 
+    val syncAaTheme: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[SYNC_AA_THEME] ?: DEFAULT_SYNC_AA_THEME
+    }
+
+    val hideAaClock: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[HIDE_AA_CLOCK] ?: DEFAULT_HIDE_AA_CLOCK
+    }
+
+    val sendImuSensors: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[SEND_IMU_SENSORS] ?: DEFAULT_SEND_IMU_SENSORS
+    }
+
     suspend fun setBridgeHost(host: String) {
         dataStore.edit { it[BRIDGE_HOST] = host }
     }
@@ -141,5 +159,17 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setRemoteDiagnosticsMinLevel(level: String) {
         dataStore.edit { it[REMOTE_DIAGNOSTICS_MIN_LEVEL] = level }
+    }
+
+    suspend fun setSyncAaTheme(enabled: Boolean) {
+        dataStore.edit { it[SYNC_AA_THEME] = enabled }
+    }
+
+    suspend fun setHideAaClock(enabled: Boolean) {
+        dataStore.edit { it[HIDE_AA_CLOCK] = enabled }
+    }
+
+    suspend fun setSendImuSensors(enabled: Boolean) {
+        dataStore.edit { it[SEND_IMU_SENSORS] = enabled }
     }
 }

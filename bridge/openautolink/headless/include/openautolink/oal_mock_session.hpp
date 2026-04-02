@@ -282,6 +282,9 @@ private:
         phone_announced_.store(true);
         std::cerr << "[mock] simulated phone connection" << std::endl;
 
+        // Send initial phone battery
+        oal_.send_phone_battery(85, 14400, false);
+
         size_t track_idx = 0;
         size_t maneuver_idx = 0;
         int tick = 0;
@@ -289,6 +292,23 @@ private:
         while (running_.load() && app_connected_.load()) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             tick++;
+
+            // Simulate phone battery drain every 30 seconds
+            if (tick % 30 == 0) {
+                int battery = 85 - (tick / 30) % 70; // cycle 85 → 15
+                bool critical = battery <= 15;
+                oal_.send_phone_battery(battery, battery * 180, critical);
+            }
+
+            // Simulate voice session every 60 seconds (5 second burst)
+            if (tick % 60 == 20) {
+                oal_.send_voice_session(true);
+                std::cerr << "[mock] voice session start" << std::endl;
+            }
+            if (tick % 60 == 25) {
+                oal_.send_voice_session(false);
+                std::cerr << "[mock] voice session end" << std::endl;
+            }
 
             // Update media metadata every 15 seconds
             if (tick % 15 == 1) {

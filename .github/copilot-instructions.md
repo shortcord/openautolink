@@ -47,7 +47,7 @@ When modifying **app** code that talks to the bridge, **read the bridge source c
 | `transport/` | TCP connection manager (3 channels: control, video, audio), reconnect, discovery | Unit: message serialization, reconnect logic. Integration: mock TCP server |
 | `video/` | MediaCodec lifecycle, Surface rendering, codec detection | Unit: frame header parsing. Integration: decode test streams |
 | `audio/` | Multi-purpose AudioTrack (5 slots), mic capture, ring buffer | Unit: purpose routing, ring buffer. Integration: PCM playback |
-| `input/` | Touch forwarding, GNSS, vehicle data (VHAL) | Unit: coordinate scaling, NMEA formatting. Integration: VHAL mock |
+| `input/` | Touch forwarding, GNSS, vehicle data (VHAL), IMU sensors (accel/gyro/compass) | Unit: coordinate scaling, NMEA formatting. Integration: VHAL mock |
 | `ui/` | Compose screens — projection surface, settings, diagnostics | Unit: ViewModel state. Integration: Compose test rules |
 | `navigation/` | Nav state from bridge, maneuver icons, cluster service | Unit: maneuver mapping. Integration: cluster IPC |
 | `session/` | Session orchestrator — connects islands, manages lifecycle | Integration: full session with mock bridge |

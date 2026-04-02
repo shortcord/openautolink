@@ -346,6 +346,8 @@ These items can only be validated on the actual GM head unit. No emulator can an
 - [x] **Nav state simulation** — cycles through 5 maneuvers (turn_right, turn_left, straight, destination) every 10s
 - [x] **Bridge stats simulation** — sends stats messages every 30s
 - [x] `--no-simulate` flag to disable media/nav/stats simulation
+- [x] **Phone battery simulation** — cycles battery level 85→5% every 30s, critical flag at ≤15%
+- [x] **Voice session simulation** — start/end pair every 60s (5s burst)
 - [x] **Album art** — base64-encoded 64×64 colored PNGs, one per track
 - [x] **Nav images** — base64-encoded 48×48 colored PNGs per maneuver type
 - [x] Validated with AAOS emulator end-to-end: video rendering, audio playback, session lifecycle, cluster relay, reconnection all confirmed working
@@ -382,7 +384,7 @@ These items can only be validated on the actual GM head unit. No emulator can an
 - [x] **OalMockSession** (`bridge/.../include/openautolink/oal_mock_session.hpp`) — header-only mock session
   - Generates synthetic H.264 SPS/PPS + IDR/P-frames at configured FPS
   - Generates PCM sine wave audio at 48kHz stereo, 20ms chunks, pitch cycling
-  - Simulates phone_connected, media metadata cycling, nav state cycling on control channel
+  - Simulates phone_connected, media metadata cycling, nav state cycling, phone battery drain, voice session bursts on control channel
 - [x] **SessionMode::OalMock** added to session.hpp, parsed as `--session-mode=oal-mock`
 - [x] **main.cpp integration** — `--session-mode=oal-mock --tcp-car-port=5288` launches full OAL mock
 - [x] **Keyframe request handling** — re-sends SPS/PPS + IDR on `keyframe_request` from app
@@ -435,16 +437,16 @@ aasdk v1.6 defines ~260 protobuf messages across 12 service channels. The bridge
 **Effort:** Tiny. Bridge already receives both messages — just logs and drops them.
 
 **Bridge Side:**
-- [ ] `onBatteryStatusNotification()`: extract `battery_level` (0-100), `time_remaining_s`, `critical_battery` → forward as OAL `phone_battery` JSON control message
-- [ ] `onVoiceSessionRequest()`: extract `VoiceSessionStatus` (START/END) → forward as OAL `voice_session` JSON control message
-- [ ] Add both new message types to mock bridge (`OalMockSession`) for testing
+- [x] `onBatteryStatusNotification()`: extract `battery_level` (0-100), `time_remaining_s`, `critical_battery` → forward as OAL `phone_battery` JSON control message
+- [x] `onVoiceSessionRequest()`: extract `VoiceSessionStatus` (START/END) → forward as OAL `voice_session` JSON control message
+- [x] Add both new message types to mock bridge (`OalMockSession`) for testing
 
 **App Side:**
-- [ ] Add `PhoneBattery` and `VoiceSession` to `ControlMessage` sealed class
-- [ ] Parse both in `ControlMessageSerializer`
-- [ ] `SessionManager`: handle `phone_battery` → update `SessionState` with phone battery level
-- [ ] `SessionManager`: handle `voice_session` → update `SessionState` with assistant active flag
-- [ ] `ProjectionViewModel`: expose phone battery + voice session state to UI
+- [x] Add `PhoneBattery` and `VoiceSession` to `ControlMessage` sealed class
+- [x] Parse both in `ControlMessageSerializer`
+- [x] `SessionManager`: handle `phone_battery` → update `SessionState` with phone battery level
+- [x] `SessionManager`: handle `voice_session` → update `SessionState` with assistant active flag
+- [x] `ProjectionViewModel`: expose phone battery + voice session state to UI
 - [ ] Status bar indicator: phone battery icon (optional, small)
 - [ ] Voice session indicator: visual cue when Google Assistant is listening on the phone (e.g., mic icon pulse, subtle overlay tint)
 - [ ] Consider: duck or mute touch forwarding during active voice session (phone is listening, touches may interfere)
@@ -464,34 +466,34 @@ Bridge → App:
 **Effort:** Small. Bridge needs to send one new protobuf message to the phone and tweak existing ServiceDiscoveryResponse flags.
 
 **Bridge Side — Theme Sync:**
-- [ ] When car app sends `vehicle_data` with `night_mode` change, send `UpdateUiConfigRequest` to phone via control channel with `UiTheme::UI_THEME_DARK` or `UI_THEME_LIGHT`
-- [ ] Track `last_night_mode_sent_` to avoid redundant sends (only send on change)
-- [ ] Include `#include <aap_protobuf/service/media/shared/message/UiConfig.pb.h>` and `UiTheme.pb.h`
-- [ ] Add `sendUiConfigUpdate()` method to `HeadlessAutoEntity` or control channel wrapper
+- [x] When car app sends `vehicle_data` with `night_mode` change, send `UpdateUiConfigRequest` to phone via control channel with `UiTheme::UI_THEME_DARK` or `UI_THEME_LIGHT`
+- [x] Track `last_night_mode_sent_` to avoid redundant sends (only send on change)
+- [x] Include `#include <aap_protobuf/service/media/shared/message/UiConfig.pb.h>` and `UiTheme.pb.h`
+- [x] Add `sendUiConfigUpdate()` method to `HeadlessAutoEntity` or control channel wrapper
 
 **Bridge Side — Session Flags:**
-- [ ] Make `hide_clock` configurable via env var `OAL_AA_HIDE_CLOCK` (default: `true` — AAOS has its own clock, no need for duplicate)
-- [ ] Make `hide_phone_signal` configurable via env var `OAL_AA_HIDE_PHONE_SIGNAL` (default: `false`)
-- [ ] Make `hide_battery_level` configurable via env var `OAL_AA_HIDE_BATTERY` (default: `false`)
-- [ ] Set in ServiceDiscoveryResponse `set_hide_clock()` / session config flags from env
+- [x] Make `hide_clock` configurable via env var `OAL_AA_HIDE_CLOCK` (default: `true` — AAOS has its own clock, no need for duplicate)
+- [x] Make `hide_phone_signal` configurable via env var `OAL_AA_HIDE_PHONE_SIGNAL` (default: `false`)
+- [x] Make `hide_battery_level` configurable via env var `OAL_AA_HIDE_BATTERY` (default: `false`)
+- [x] Set in ServiceDiscoveryResponse `set_hide_clock()` / session config flags from env
 
 **App Side:**
-- [ ] Send night mode changes immediately (currently batched in 500ms vehicle_data — acceptable, night mode changes are infrequent)
-- [ ] Settings toggle: "Sync AA theme with car" (default: on)
-- [ ] Settings toggle: "Hide AA clock" (default: on) — sent to bridge via `config_update`
+- [x] Send night mode changes immediately (currently batched in 500ms vehicle_data — acceptable, night mode changes are infrequent)
+- [x] Settings toggle: "Sync AA theme with car" (default: on)
+- [x] Settings toggle: "Hide AA clock" (default: on) — sent to bridge via `config_update`
 - [ ] Bridge reads config_update for clock/signal/battery hide preferences, applies on next phone connection
 
 ### P3: GNSS → Phone GPS Feed
 
-**Effort:** Medium. The bridge already receives `gnss` NMEA from the app and has a `// TODO` to parse it. The `sendGpsLocation()` method on the sensor handler is fully implemented and tested with vehicle_data — just needs NMEA parsing to call it.
+**Effort:** Medium. The bridge receives `gnss` NMEA from the app. The `sendGpsLocation()` method on the sensor handler is fully implemented. NMEA parsing ($GPRMC + $GPGGA) is now complete with coordinate conversion, fix validation, and altitude tracking.
 
 **Bridge Side:**
-- [ ] In `LiveAasdkSession::on_gnss()`: parse NMEA `$GPRMC` sentence for lat, lon, speed, bearing, date/time
-- [ ] In `LiveAasdkSession::on_gnss()`: parse NMEA `$GPGGA` sentence for altitude, fix quality, satellite count
-- [ ] Call `sensor_handler_->sendGpsLocation(lat, lon, alt, speed, bearing, timestamp_ms)` after successful parse
-- [ ] Handle coordinate format conversion: NMEA `ddmm.mmmm` → decimal degrees
-- [ ] Validate: only forward if fix quality > 0 (skip invalid/no-fix sentences)
-- [ ] Log first successful GPS forward for diagnostics
+- [x] In `LiveAasdkSession::on_gnss()`: parse NMEA `$GPRMC` sentence for lat, lon, speed, bearing, date/time
+- [x] In `LiveAasdkSession::on_gnss()`: parse NMEA `$GPGGA` sentence for altitude, fix quality, satellite count
+- [x] Call `sensor_handler_->sendGpsLocation(lat, lon, alt, speed, bearing, timestamp_ms)` after successful parse
+- [x] Handle coordinate format conversion: NMEA `ddmm.mmmm` → decimal degrees
+- [x] Validate: only forward if fix quality > 0 (skip invalid/no-fix sentences)
+- [x] Log first successful GPS forward for diagnostics
 
 **Why this matters:** Currently the phone uses only its own GPS. The car's GPS receiver (via AAOS LocationManager) can be more accurate in urban canyons, tunnels (with dead reckoning), and areas with poor phone signal. Feeding car GPS to the phone improves AA navigation accuracy.
 
@@ -502,21 +504,21 @@ Bridge → App:
 **Effort:** Medium-high. Requires aasdk fork change — the `PhoneStatusService::messageHandler()` in aasdk currently receives `PHONE_STATUS` messages but drops them in the `default:` case without parsing.
 
 **aasdk Fork (`external/opencardev-aasdk/`):**
-- [ ] `IPhoneStatusServiceEventHandler`: add `virtual void onPhoneStatusUpdate(const aap_protobuf::service::phonestatus::message::PhoneStatus& status) = 0;`
-- [ ] `PhoneStatusService::messageHandler()`: add case for `PhoneStatusMessageId::PHONE_STATUS` → parse payload, call `eventHandler->onPhoneStatusUpdate()`
+- [x] `IPhoneStatusServiceEventHandler`: add `virtual void onPhoneStatusUpdate(const aap_protobuf::service::phonestatus::message::PhoneStatus& status) = 0;`
+- [x] `PhoneStatusService::messageHandler()`: add case for `PhoneStatusMessageId::PHONE_STATUS` → parse payload, call `eventHandler->onPhoneStatusUpdate()`
 - [ ] Commit inside submodule, push to `openautolink` branch
 
 **Bridge Side:**
-- [ ] Add PhoneStatus channel to ServiceDiscoveryResponse: `svc->set_id(ChannelId::PHONE_STATUS); svc->mutable_phone_status_service();`
-- [ ] Create `HeadlessPhoneStatusHandler` (same pattern as `HeadlessMediaStatusHandler`): implements `IPhoneStatusServiceEventHandler`, opens channel, receives messages
-- [ ] `onPhoneStatusUpdate()`: extract `signal_strength`, `calls[]` (state, duration, caller_number, caller_id) → forward as OAL `phone_status` JSON
-- [ ] Start handler after ServiceDiscoveryResponse sent (alongside other handlers)
+- [x] Add PhoneStatus channel to ServiceDiscoveryResponse: `svc->set_id(ChannelId::PHONE_STATUS); svc->mutable_phone_status_service();`
+- [x] Create `HeadlessPhoneStatusHandler` (same pattern as `HeadlessMediaStatusHandler`): implements `IPhoneStatusServiceEventHandler`, opens channel, receives messages
+- [x] `onPhoneStatusUpdate()`: extract `signal_strength`, `calls[]` (state, duration, caller_number, caller_id) → forward as OAL `phone_status` JSON
+- [x] Start handler after ServiceDiscoveryResponse sent (alongside other handlers)
 
 **App Side:**
-- [ ] Add `PhoneStatus` to `ControlMessage` sealed class: `signalStrength: Int?, calls: List<PhoneCall>?`
-- [ ] `PhoneCall` data class: `state: String, durationSeconds: Int, callerNumber: String?, callerId: String?`
-- [ ] Parse in `ControlMessageSerializer`
-- [ ] `SessionManager`: handle `phone_status` → update `SessionState`
+- [x] Add `PhoneStatus` to `ControlMessage` sealed class: `signalStrength: Int?, calls: List<PhoneCall>?`
+- [x] `PhoneCall` data class: `state: String, durationSeconds: Int, callerNumber: String?, callerId: String?`
+- [x] Parse in `ControlMessageSerializer`
+- [x] `SessionManager`: handle `phone_status` → update `SessionState`
 - [ ] UI: phone signal bars in status area (0-4 bars)
 - [ ] UI: incoming call notification overlay (caller name/number)
 
@@ -541,22 +543,22 @@ Bridge → App:
 | GPS Satellites | `SENSOR_GPS_SATELLITE_DATA` | `GnssStatus` callback | Yes (standard Android) |
 
 **Bridge Side:**
-- [ ] Add `SENSOR_ACCELEROMETER_DATA`, `SENSOR_GYROSCOPE_DATA`, `SENSOR_COMPASS`, `SENSOR_GPS_SATELLITE_DATA` to ServiceDiscoveryResponse sensor list
-- [ ] Add `sendAccelerometer(int x_e3, int y_e3, int z_e3)` to sensor handler
-- [ ] Add `sendGyroscope(int rx_e3, int ry_e3, int rz_e3)` to sensor handler
-- [ ] Add `sendCompass(int bearing_e6, int pitch_e6, int roll_e6)` to sensor handler
-- [ ] Add `sendGpsSatellites(int in_use, int in_view, vector<SatInfo>)` to sensor handler
-- [ ] Parse new fields from `vehicle_data` JSON in `on_vehicle_data()`
+- [x] Add `SENSOR_ACCELEROMETER_DATA`, `SENSOR_GYROSCOPE_DATA`, `SENSOR_COMPASS`, `SENSOR_GPS_SATELLITE_DATA` to ServiceDiscoveryResponse sensor list
+- [x] Add `sendAccelerometer(int x_e3, int y_e3, int z_e3)` to sensor handler
+- [x] Add `sendGyroscope(int rx_e3, int ry_e3, int rz_e3)` to sensor handler
+- [x] Add `sendCompass(int bearing_e6, int pitch_e6, int roll_e6)` to sensor handler
+- [x] Add `sendGpsSatellites(int in_use, int in_view, vector<SatInfo>)` to sensor handler
+- [x] Parse new fields from `vehicle_data` JSON in `on_vehicle_data()`
 
 **App Side:**
-- [ ] New `ImuForwarder` in `input/` island: registers `SensorEventListener` for `TYPE_ACCELEROMETER`, `TYPE_GYROSCOPE`, `TYPE_MAGNETIC_FIELD`
-- [ ] Rate-limit IMU samples: ~10 Hz max (AA doesn't need 100 Hz inertial data, and control channel bandwidth matters)
-- [ ] Convert magnetic field to compass bearing (requires `SensorManager.getRotationMatrix()` + `getOrientation()`)
-- [ ] Add IMU fields to `vehicle_data` message: `accel_x_e3`, `accel_y_e3`, `accel_z_e3`, `gyro_rx_e3`, `gyro_ry_e3`, `gyro_rz_e3`, `compass_bearing_e6`
-- [ ] New `GnssSatelliteForwarder` in `input/` island: registers `GnssStatus.Callback` via `LocationManager`
-- [ ] Add satellite data to `vehicle_data` message or as separate `gnss_satellites` message: `sat_in_use`, `sat_in_view`
+- [x] New `ImuForwarder` in `input/` island: registers `SensorEventListener` for `TYPE_ACCELEROMETER`, `TYPE_GYROSCOPE`, `TYPE_MAGNETIC_FIELD`
+- [x] Rate-limit IMU samples: ~10 Hz max (AA doesn't need 100 Hz inertial data, and control channel bandwidth matters)
+- [x] Convert magnetic field to compass bearing (requires `SensorManager.getRotationMatrix()` + `getOrientation()`)
+- [x] Add IMU fields to `vehicle_data` message: `accel_x_e3`, `accel_y_e3`, `accel_z_e3`, `gyro_rx_e3`, `gyro_ry_e3`, `gyro_rz_e3`, `compass_bearing_e6`
+- [x] New `GnssSatelliteForwarder` in `input/` island: registers `GnssStatus.Callback` via `LocationManager`
+- [x] Add satellite data to `vehicle_data` message or as separate `gnss_satellites` message: `sat_in_use`, `sat_in_view`
 - [ ] Settings toggle: "Send IMU sensors to phone" (default: on) — some users may want to save bandwidth
-- [ ] Graceful degradation: if `SensorManager` returns null for a sensor type, skip it
+- [x] Graceful degradation: if `SensorManager` returns null for a sensor type, skip it
 
 **Skip `SENSOR_DEAD_RECKONING_DATA`** — requires steering angle (`READ_CAR_STEERING_3P` denied on GM) and per-wheel speed (not exposed via VHAL).
 
@@ -567,15 +569,15 @@ Bridge → App:
 **Effort:** Small. Incremental additions to the existing sensor and control infrastructure.
 
 **RPM (`SENSOR_RPM`):**
-- [ ] Bridge: add `SENSOR_RPM` to SDR sensor list
-- [ ] Bridge: add `sendRpm(int rpm_e3)` to sensor handler
-- [ ] Bridge: parse `rpm_e3` from `vehicle_data` JSON in `on_vehicle_data()`
-- [ ] App: read VHAL `PERF_ENGINE_RPM` (property 291504901) — likely unavailable on EV (no engine), but include for ICE vehicles
-- [ ] App: add `rpm_e3` field to `vehicle_data` message (null if unavailable)
+- [x] Bridge: add `SENSOR_RPM` to SDR sensor list
+- [x] Bridge: add `sendRpm(int rpm_e3)` to sensor handler
+- [x] Bridge: parse `rpm_e3` from `vehicle_data` JSON in `on_vehicle_data()`
+- [x] App: read VHAL `PERF_ENGINE_RPM` (property 291504901) — likely unavailable on EV (no engine), but include for ICE vehicles
+- [x] App: add `rpm_e3` field to `vehicle_data` message (null if unavailable)
 
 **CallAvailability:**
-- [ ] Bridge: send `CallAvailabilityStatus { call_available = true }` after BT HFP is established
-- [ ] This tells the phone's AA that the head unit supports in-car calling — may enable the call button in AA UI
+- [x] Bridge: send `CallAvailabilityStatus { call_available = true }` after BT HFP is established
+- [x] This tells the phone's AA that the head unit supports in-car calling — may enable the call button in AA UI
 - [ ] Send `call_available = false` if HFP drops
 
 **GPS Satellites (moved from P5 if preferred):**

@@ -25,6 +25,11 @@ struct HeadlessConfig {
     int media_fd = -1;  // Binary media pipe fd (-1 = disabled)
     bool use_usb_host = false;  // true = wired AA (phone via USB), false = wireless AA (phone via WiFi)
     std::string bt_mac;  // BT MAC for ServiceDiscovery (empty = auto-detect)
+
+    // P2: Session UI flags (AA status bar)
+    bool hide_clock = true;          // AAOS has its own clock — hide AA's
+    bool hide_phone_signal = false;
+    bool hide_battery_level = false;
 };
 
 } // namespace openautolink

@@ -71,6 +71,13 @@
 #include <aap_protobuf/service/navigationstatus/message/NavigationNextTurnDistanceEvent.pb.h>
 #include <aap_protobuf/service/mediaplayback/message/MediaPlaybackMetadata.pb.h>
 #include <aap_protobuf/service/mediaplayback/message/MediaPlaybackStatus.pb.h>
+#include <aap_protobuf/service/control/message/UpdateUiConfigRequest.pb.h>
+#include <aap_protobuf/service/media/shared/message/UiConfig.pb.h>
+#include <aap_protobuf/service/media/shared/message/UiTheme.pb.h>
+#include <aap_protobuf/service/media/sink/MediaMessageId.pb.h>
+#include <aap_protobuf/service/phonestatus/message/PhoneStatus.pb.h>
+#include <aap_protobuf/service/control/message/CallAvailabilityStatus.pb.h>
+#include <aap_protobuf/service/control/ControlMessageType.pb.h>
 
 #include "openautolink/contract.hpp"
 
@@ -245,6 +252,7 @@ HeadlessAutoEntity::HeadlessAutoEntity(
     bluetooth_handler_ = std::make_shared<HeadlessBluetoothHandler>(io_service_, messenger_, output_);
     nav_status_handler_ = std::make_shared<HeadlessNavStatusHandler>(io_service_, messenger_, output_);
     media_status_handler_ = std::make_shared<HeadlessMediaStatusHandler>(io_service_, messenger_, output_);
+    phone_status_handler_ = std::make_shared<HeadlessPhoneStatusHandler>(io_service_, messenger_, output_);
 
     video_handler_->set_input_handler(input_handler_);
 }
@@ -258,6 +266,7 @@ void HeadlessAutoEntity::set_oal_session(OalSession* session) {
     if (audio_input_handler_) audio_input_handler_->set_oal_session(session);
     if (nav_status_handler_) nav_status_handler_->set_oal_session(session);
     if (media_status_handler_) media_status_handler_->set_oal_session(session);
+    if (phone_status_handler_) phone_status_handler_->set_oal_session(session);
 }
 
 void HeadlessAutoEntity::start() {
@@ -414,6 +423,19 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
     response.set_can_play_native_media_during_vr(false);
     response.set_can_play_native_media_during_vr(false);
 
+    // Session configuration flags (P2: hide AA status bar elements)
+    int session_config = 0;
+    if (config_.hide_clock) session_config |= 1;       // UI_CONFIG_HIDE_CLOCK
+    if (config_.hide_phone_signal) session_config |= 2; // UI_CONFIG_HIDE_PHONE_SIGNAL
+    if (config_.hide_battery_level) session_config |= 4; // UI_CONFIG_HIDE_BATTERY_LEVEL
+    if (session_config != 0) {
+        response.set_session_configuration(session_config);
+        std::cerr << "[aasdk] session_configuration=" << session_config
+                  << " (clock=" << config_.hide_clock
+                  << " signal=" << config_.hide_phone_signal
+                  << " battery=" << config_.hide_battery_level << ")" << std::endl;
+    }
+
     // v1.6 ServiceConfiguration channels
     // using namespace removed - opencardev uses typed service configs
 
@@ -492,7 +514,12 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
       ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_DOOR_DATA);
       ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_LIGHT_DATA);
       ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_TIRE_PRESSURE_DATA);
-      ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_HVAC_DATA); }
+      ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_HVAC_DATA);
+      ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_ACCELEROMETER_DATA);
+      ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_GYROSCOPE_DATA);
+      ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_COMPASS);
+      ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_GPS_SATELLITE_DATA);
+      ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_RPM); }
     // Input — touch dimensions match the AA resolution tier
     { auto* svc = response.add_channels();
       svc->set_id(static_cast<int32_t>(aasdk::messenger::ChannelId::INPUT_SOURCE));
@@ -532,6 +559,10 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
     { auto* svc = response.add_channels();
       svc->set_id(static_cast<int32_t>(aasdk::messenger::ChannelId::MEDIA_PLAYBACK_STATUS));
       svc->mutable_media_playback_service(); }
+    // Phone Status — receive signal strength and call state from phone
+    { auto* svc = response.add_channels();
+      svc->set_id(static_cast<int32_t>(aasdk::messenger::ChannelId::PHONE_STATUS));
+      svc->mutable_phone_status_service(); }
 
     std::cerr << "[aasdk] sending ServiceDiscoveryResponse with " << response.channels_size() << " channels" << std::endl;
     std::cerr << "[aasdk] Cryptor active=" << cryptor_->isActive() << std::endl;
@@ -556,6 +587,7 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
             bluetooth_handler_->start();
             nav_status_handler_->start();
             media_status_handler_->start();
+            phone_status_handler_->start();
 
             // Start pinging to keep connection alive
             sendPing();
@@ -687,6 +719,34 @@ void HeadlessAutoEntity::sendPing() {
     request.set_timestamp(std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
     control_channel_->sendPingRequest(request, std::move(promise));
+}
+
+void HeadlessAutoEntity::sendCallAvailability(bool available) {
+    if (!active_) return;
+    strand_.dispatch([this, self = shared_from_this(), available]() {
+        // Send CallAvailabilityStatus as a control message
+        auto message = std::make_shared<aasdk::messenger::Message>(
+            aasdk::messenger::ChannelId::CONTROL,
+            aasdk::messenger::EncryptionType::ENCRYPTED,
+            aasdk::messenger::MessageType::SPECIFIC);
+        message->insertPayload(
+            aasdk::messenger::MessageId(
+                aap_protobuf::service::control::message::ControlMessageType::MESSAGE_CALL_AVAILABILITY_STATUS).getData());
+
+        aap_protobuf::service::control::message::CallAvailabilityStatus status;
+        status.set_call_available(available);
+        message->insertPayload(status);
+
+        auto promise = aasdk::channel::SendPromise::defer(strand_);
+        promise->then(
+            [available]() {
+                std::cerr << "[aasdk] call availability sent: " << (available ? "true" : "false") << std::endl;
+            },
+            [](auto e) {
+                std::cerr << "[aasdk] call availability send failed: " << e.what() << std::endl;
+            });
+        control_channel_->send(std::move(message), std::move(promise));
+    });
 }
 
 void HeadlessAutoEntity::emitLifecycle(const std::string& event) {
@@ -994,8 +1054,9 @@ void LiveAasdkSession::on_gnss(const ParsedInputMessage& message) {
         auto decoded = base64_decode(*message.payload_b64);
         state_.last_gnss_input_bytes = static_cast<int>(decoded.size());
         state_.gnss_uplink_bytes += state_.last_gnss_input_bytes;
+        // NMEA parsing is done in forward_oal_gnss() for OAL protocol path.
+        // This legacy CPC path only tracks stats.
     }
-    // TODO: parse NMEA from payload and feed to sensor_handler_->sendGpsLocation(...)
 }
 
 void LiveAasdkSession::on_vehicle_data(const ParsedInputMessage& message) {
@@ -1096,6 +1157,10 @@ void LiveAasdkSession::on_vehicle_data(const ParsedInputMessage& message) {
     // Night mode: night_mode (bool)
     if (auto v = extract_bool("night_mode")) {
         sh->sendNightMode(*v);
+        // P2: Sync AA UI theme with car night mode
+        if (entity_ && entity_->video_handler()) {
+            entity_->video_handler()->sendUiThemeUpdate(*v);
+        }
     }
     // Driving status: driving (bool) — true=moving (unrestricted AA UI)
     if (auto v = extract_bool("driving")) {
@@ -1138,6 +1203,34 @@ void LiveAasdkSession::on_vehicle_data(const ParsedInputMessage& message) {
     if (auto target = extract_int("hvac_target_e3")) {
         auto current = extract_int("hvac_current_e3").value_or(0);
         sh->sendHvac(*target, current);
+    }
+
+    // P5: Accelerometer: accel_x_e3, accel_y_e3, accel_z_e3 (m/s² × 1000)
+    if (auto ax = extract_int("accel_x_e3")) {
+        auto ay = extract_int("accel_y_e3").value_or(0);
+        auto az = extract_int("accel_z_e3").value_or(0);
+        sh->sendAccelerometer(*ax, ay, az);
+    }
+    // P5: Gyroscope: gyro_rx_e3, gyro_ry_e3, gyro_rz_e3 (rad/s × 1000)
+    if (auto rx = extract_int("gyro_rx_e3")) {
+        auto ry = extract_int("gyro_ry_e3").value_or(0);
+        auto rz = extract_int("gyro_rz_e3").value_or(0);
+        sh->sendGyroscope(*rx, ry, rz);
+    }
+    // P5: Compass: compass_bearing_e6 (degrees × 1e6)
+    if (auto bearing = extract_int("compass_bearing_e6")) {
+        auto pitch = extract_int("compass_pitch_e6").value_or(0);
+        auto roll = extract_int("compass_roll_e6").value_or(0);
+        sh->sendCompass(*bearing, pitch, roll);
+    }
+    // P5: GPS satellites: sat_in_use, sat_in_view
+    if (auto in_use = extract_int("sat_in_use")) {
+        auto in_view = extract_int("sat_in_view").value_or(*in_use);
+        sh->sendGpsSatellites(*in_use, in_view);
+    }
+    // P6: RPM: rpm_e3 (RPM × 1000)
+    if (auto rpm = extract_int("rpm_e3")) {
+        sh->sendRpm(*rpm);
     }
 
     std::cerr << "[aasdk] vehicle_data processed" << std::endl;
@@ -1239,10 +1332,90 @@ void LiveAasdkSession::forward_oal_mic_audio(const uint8_t* pcm, size_t len) {
 }
 
 void LiveAasdkSession::forward_oal_gnss(const std::string& nmea) {
-    // TODO: Parse NMEA sentences and feed to sensor handler
     if (!entity_ || !entity_->sensor_handler()) return;
-    std::cerr << "[aasdk] OAL gnss: " << nmea.substr(0, 40) << std::endl;
-    // Full NMEA parsing → sendGpsLocation() will come with the M7 integration
+
+    // Parse NMEA sentences to extract GPS data for aasdk SensorBatch
+    // Supported: $GPRMC (lat, lon, speed, bearing, date/time), $GPGGA (altitude, fix, sats)
+    if (nmea.size() < 10) return;
+
+    auto sh = entity_->sensor_handler();
+
+    // Helper: parse NMEA ddmm.mmmm → decimal degrees
+    auto parse_coord = [](const std::string& field, const std::string& dir) -> double {
+        if (field.empty() || dir.empty()) return 0.0;
+        auto dot_pos = field.find('.');
+        if (dot_pos == std::string::npos || dot_pos < 2) return 0.0;
+        double degrees = std::stod(field.substr(0, dot_pos - 2));
+        double minutes = std::stod(field.substr(dot_pos - 2));
+        double result = degrees + minutes / 60.0;
+        if (dir == "S" || dir == "W") result = -result;
+        return result;
+    };
+
+    // Split NMEA sentence by commas
+    auto split = [](const std::string& s) -> std::vector<std::string> {
+        std::vector<std::string> parts;
+        std::string part;
+        for (char c : s) {
+            if (c == ',' || c == '*') {
+                parts.push_back(part);
+                part.clear();
+            } else {
+                part += c;
+            }
+        }
+        parts.push_back(part);
+        return parts;
+    };
+
+    auto parts = split(nmea);
+    if (parts.empty()) return;
+
+    // $GPRMC or $GNRMC: lat, lon, speed (knots), bearing, date/time
+    if ((parts[0] == "$GPRMC" || parts[0] == "$GNRMC") && parts.size() >= 10) {
+        // Field 2: status (A=valid, V=void)
+        if (parts[2] != "A") return;
+
+        double lat = parse_coord(parts[3], parts[4]);
+        double lon = parse_coord(parts[5], parts[6]);
+        float speed_knots = parts[7].empty() ? 0.0f : std::stof(parts[7]);
+        float speed_ms = speed_knots * 0.514444f;
+        float bearing = parts[8].empty() ? 0.0f : std::stof(parts[8]);
+
+        // Parse timestamp from fields 1 (hhmmss.ss) and 9 (ddmmyy)
+        uint64_t timestamp_ms = 0;
+        if (parts[1].size() >= 6 && parts[9].size() >= 6) {
+            // Simple epoch calculation (approximate — good enough for GPS forwarding)
+            struct tm t = {};
+            t.tm_hour = std::stoi(parts[1].substr(0, 2));
+            t.tm_min = std::stoi(parts[1].substr(2, 2));
+            t.tm_sec = std::stoi(parts[1].substr(4, 2));
+            t.tm_mday = std::stoi(parts[9].substr(0, 2));
+            t.tm_mon = std::stoi(parts[9].substr(2, 2)) - 1;
+            int year = std::stoi(parts[9].substr(4, 2));
+            t.tm_year = (year < 80 ? year + 100 : year);
+            time_t epoch = timegm(&t);
+            if (epoch > 0) timestamp_ms = static_cast<uint64_t>(epoch) * 1000;
+        }
+
+        if (!gnss_first_fix_logged_) {
+            std::cerr << "[aasdk] first GNSS fix: lat=" << lat << " lon=" << lon
+                      << " speed=" << speed_ms << " bearing=" << bearing << std::endl;
+            gnss_first_fix_logged_ = true;
+        }
+
+        sh->sendGpsLocation(lat, lon, last_gps_alt_, speed_ms, bearing, timestamp_ms);
+    }
+    // $GPGGA or $GNGGA: altitude, fix quality, satellite count
+    else if ((parts[0] == "$GPGGA" || parts[0] == "$GNGGA") && parts.size() >= 10) {
+        // Field 6: fix quality (0=invalid)
+        int fix_quality = parts[6].empty() ? 0 : std::stoi(parts[6]);
+        if (fix_quality == 0) return;
+
+        if (!parts[9].empty()) {
+            last_gps_alt_ = std::stod(parts[9]);
+        }
+    }
 }
 
 void LiveAasdkSession::forward_oal_vehicle_data(const std::string& json) {
@@ -1258,15 +1431,20 @@ void LiveAasdkSession::request_fresh_idr() {
     }
 }
 
+void LiveAasdkSession::notify_call_availability(bool available) {
+    if (entity_) {
+        entity_->sendCallAvailability(available);
+    }
+}
+
 void LiveAasdkSession::on_vehicle_data(const std::string& json) {
-    // TODO: Parse JSON vehicle data and build SensorBatch protobuf
-    // For now, log receipt — full implementation needs HeadlessSensorHandler::sendVehicleData()
+    // Legacy CPC path — vehicle data parsing is done in forward_oal_vehicle_data()
+    // which calls on_vehicle_data(ParsedInputMessage&) for OAL protocol.
     std::cerr << "[aasdk] vehicle_data received (" << json.size() << " bytes)" << std::endl;
 }
 
 void LiveAasdkSession::on_vehicle_gnss(const uint8_t* nmea, size_t len) {
-    // TODO: Forward GNSS to aasdk sensor channel
-    // For now, log receipt — full implementation needs HeadlessSensorHandler::sendLocationData()
+    // Legacy CPC path — GNSS parsing is done in forward_oal_gnss() for OAL protocol.
     std::cerr << "[aasdk] gnss_data received (" << len << " bytes)" << std::endl;
 }
 
@@ -1638,6 +1816,39 @@ void HeadlessVideoHandler::sendVideoFocusIndication() {
     indication.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
     indication.set_unsolicited(false);
     channel_->sendVideoFocusIndication(indication, std::move(promise));
+}
+
+void HeadlessVideoHandler::sendUiThemeUpdate(bool night_mode) {
+    int mode = night_mode ? 1 : 0;
+    if (mode == last_night_mode_sent_) return;  // already sent this mode
+    last_night_mode_sent_ = mode;
+
+    // Build UpdateUiConfigRequest and send via video channel's messenger
+    auto message = std::make_shared<aasdk::messenger::Message>(
+        aasdk::messenger::ChannelId::MEDIA_SINK_VIDEO,
+        aasdk::messenger::EncryptionType::ENCRYPTED,
+        aasdk::messenger::MessageType::SPECIFIC);
+    message->insertPayload(
+        aasdk::messenger::MessageId(
+            aap_protobuf::service::media::sink::MediaMessageId::MEDIA_MESSAGE_UPDATE_UI_CONFIG_REQUEST).getData());
+
+    aap_protobuf::service::control::message::UpdateUiConfigRequest request;
+    auto* ui_config = request.mutable_ui_config();
+    ui_config->set_ui_theme(night_mode
+        ? aap_protobuf::service::media::shared::message::UI_THEME_DARK
+        : aap_protobuf::service::media::shared::message::UI_THEME_LIGHT);
+    message->insertPayload(request);
+
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then(
+        [night_mode]() {
+            std::cerr << "[aasdk] UI theme update sent: "
+                      << (night_mode ? "dark" : "light") << std::endl;
+        },
+        [](auto e) {
+            std::cerr << "[aasdk] UI theme update send failed: " << e.what() << std::endl;
+        });
+    channel_->send(std::move(message), std::move(promise));
 }
 
 void HeadlessVideoHandler::replayCachedKeyframe() {
@@ -2303,6 +2514,58 @@ void HeadlessSensorHandler::sendHvac(int target_temp_e3, int current_temp_e3) {
     channel_->sendSensorEventIndication(indication, std::move(promise));
 }
 
+void HeadlessSensorHandler::sendAccelerometer(int x_e3, int y_e3, int z_e3) {
+    aap_protobuf::service::sensorsource::message::SensorBatch indication;
+    auto* ad = indication.add_accelerometer_data();
+    ad->set_acceleration_x_e3(x_e3);
+    ad->set_acceleration_y_e3(y_e3);
+    ad->set_acceleration_z_e3(z_e3);
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([]() {}, [](auto) {});
+    channel_->sendSensorEventIndication(indication, std::move(promise));
+}
+
+void HeadlessSensorHandler::sendGyroscope(int rx_e3, int ry_e3, int rz_e3) {
+    aap_protobuf::service::sensorsource::message::SensorBatch indication;
+    auto* gd = indication.add_gyroscope_data();
+    gd->set_rotation_speed_x_e3(rx_e3);
+    gd->set_rotation_speed_y_e3(ry_e3);
+    gd->set_rotation_speed_z_e3(rz_e3);
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([]() {}, [](auto) {});
+    channel_->sendSensorEventIndication(indication, std::move(promise));
+}
+
+void HeadlessSensorHandler::sendCompass(int bearing_e6, int pitch_e6, int roll_e6) {
+    aap_protobuf::service::sensorsource::message::SensorBatch indication;
+    auto* cd = indication.add_compass_data();
+    cd->set_bearing_e6(bearing_e6);
+    cd->set_pitch_e6(pitch_e6);
+    cd->set_roll_e6(roll_e6);
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([]() {}, [](auto) {});
+    channel_->sendSensorEventIndication(indication, std::move(promise));
+}
+
+void HeadlessSensorHandler::sendGpsSatellites(int in_use, int in_view) {
+    aap_protobuf::service::sensorsource::message::SensorBatch indication;
+    auto* sd = indication.add_gps_satellite_data();
+    sd->set_number_in_use(in_use);
+    sd->set_number_in_view(in_view);
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([]() {}, [](auto) {});
+    channel_->sendSensorEventIndication(indication, std::move(promise));
+}
+
+void HeadlessSensorHandler::sendRpm(int rpm_e3) {
+    aap_protobuf::service::sensorsource::message::SensorBatch indication;
+    auto* rd = indication.add_rpm_data();
+    rd->set_rpm_e3(rpm_e3);
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([]() {}, [](auto) {});
+    channel_->sendSensorEventIndication(indication, std::move(promise));
+}
+
 void HeadlessSensorHandler::onChannelOpenRequest(
     const aap_protobuf::service::control::message::ChannelOpenRequest&)
 {
@@ -2584,13 +2847,25 @@ std::unique_ptr<IAndroidAutoSession> create_live_session(
 
 void HeadlessAutoEntity::onVoiceSessionRequest(
     const aap_protobuf::service::control::message::VoiceSessionNotification& request) {
-    // Suppress frequent voice session notifications (Google Assistant status) 
+    bool started = request.has_status() &&
+        request.status() == aap_protobuf::service::control::message::VOICE_SESSION_START;
+    std::cerr << "[aasdk] voice session: " << (started ? "start" : "end") << std::endl;
+    if (oal_session_) {
+        oal_session_->send_voice_session(started);
+    }
     control_channel_->receive(shared_from_this());
 }
 
 void HeadlessAutoEntity::onBatteryStatusNotification(
     const aap_protobuf::service::control::message::BatteryStatusNotification& notification) {
-    std::cerr << "[aasdk] battery status notification" << std::endl;
+    int level = notification.battery_level();
+    int time_remaining = notification.has_time_remaining_s() ? notification.time_remaining_s() : 0;
+    bool critical = notification.has_critical_battery() && notification.critical_battery();
+    std::cerr << "[aasdk] battery: level=" << level << " remaining=" << time_remaining
+              << "s critical=" << critical << std::endl;
+    if (oal_session_) {
+        oal_session_->send_phone_battery(level, time_remaining, critical);
+    }
     control_channel_->receive(shared_from_this());
 }
 void HeadlessBluetoothHandler::onBluetoothAuthenticationResult(
@@ -3089,6 +3364,84 @@ void HeadlessMediaStatusHandler::onPlaybackUpdate(
 void HeadlessMediaStatusHandler::onChannelError(const aasdk::error::Error& e) {
     output_.emit(R"({"type":"event","event_type":"media_status_error","error":")" +
                  std::string(e.what()) + R"("})");
+}
+
+// ============================================================================
+// HeadlessPhoneStatusHandler
+// ============================================================================
+
+HeadlessPhoneStatusHandler::HeadlessPhoneStatusHandler(
+    boost::asio::io_service& io_service,
+    aasdk::messenger::IMessenger::Pointer messenger,
+    ThreadSafeOutputSink& output)
+    : strand_(io_service)
+    , channel_(std::make_shared<aasdk::channel::phonestatus::PhoneStatusService>(strand_, std::move(messenger)))
+    , output_(output)
+{
+}
+
+void HeadlessPhoneStatusHandler::start() {
+    strand_.dispatch([this, self = shared_from_this()]() {
+        channel_->receive(self);
+    });
+}
+
+void HeadlessPhoneStatusHandler::stop() {
+}
+
+void HeadlessPhoneStatusHandler::onChannelOpenRequest(
+    const aap_protobuf::service::control::message::ChannelOpenRequest& request) {
+    std::cerr << "[aasdk] PhoneStatus channel open request" << std::endl;
+
+    aap_protobuf::service::control::message::ChannelOpenResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_OK);
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([]() {}, [](auto) {});
+    channel_->sendChannelOpenResponse(response, std::move(promise));
+    channel_->receive(shared_from_this());
+}
+
+void HeadlessPhoneStatusHandler::onPhoneStatusUpdate(
+    const aap_protobuf::service::phonestatus::message::PhoneStatus& status) {
+    int signal = status.has_signal_strength() ? status.signal_strength() : -1;
+    std::cerr << "[aasdk] phone status: signal=" << signal
+              << " calls=" << status.calls_size() << std::endl;
+
+    // Build calls JSON array
+    std::ostringstream calls_oss;
+    calls_oss << "[";
+    for (int i = 0; i < status.calls_size(); ++i) {
+        auto& call = status.calls(i);
+        if (i > 0) calls_oss << ",";
+        calls_oss << R"({"state":)";
+        switch (call.phone_state()) {
+            case aap_protobuf::service::phonestatus::message::PhoneStatus::IN_CALL:
+                calls_oss << R"("in_call")";
+                break;
+            default:
+                calls_oss << R"("unknown")";
+                break;
+        }
+        calls_oss << R"(,"duration_s":)" << call.call_duration_seconds();
+        if (call.has_caller_number()) {
+            calls_oss << R"(,"caller_number":")" << oal_json_escape(call.caller_number()) << R"(")";
+        }
+        if (call.has_caller_id()) {
+            calls_oss << R"(,"caller_id":")" << oal_json_escape(call.caller_id()) << R"(")";
+        }
+        calls_oss << "}";
+    }
+    calls_oss << "]";
+
+    if (oal_session_) {
+        oal_session_->send_phone_status(signal, calls_oss.str());
+    }
+
+    channel_->receive(shared_from_this());
+}
+
+void HeadlessPhoneStatusHandler::onChannelError(const aasdk::error::Error& e) {
+    std::cerr << "[aasdk] PhoneStatus channel error: " << e.what() << std::endl;
 }
 
 } // namespace openautolink

@@ -46,6 +46,13 @@ sealed class ControlMessage {
     data class MicStart(val sampleRate: Int) : ControlMessage()
     object MicStop : ControlMessage()
     data class Error(val code: Int, val message: String) : ControlMessage()
+    data class Stats(val videoFramesSent: Long, val audioFramesSent: Long, val uptimeSeconds: Long) : ControlMessage()
+    // P1
+    data class PhoneBattery(val level: Int, val timeRemainingSeconds: Int, val critical: Boolean) : ControlMessage()
+    data class VoiceSession(val started: Boolean) : ControlMessage()
+    // P4
+    data class PhoneStatus(val signalStrength: Int?, val calls: List<PhoneCall>) : ControlMessage()
+    data class PhoneCall(val state: String, val durationSeconds: Int, val callerNumber: String?, val callerId: String?)
 }
 ```
 
@@ -138,7 +145,7 @@ data class AudioStats(val activePurposes: Set<AudioPurpose>, val underruns: Map<
 
 ### 4. Input (`com.openautolink.app.input`)
 
-Touch, GNSS, and vehicle data forwarding to bridge.
+Touch, GNSS, vehicle data, and IMU sensor forwarding to bridge.
 
 **Public API:**
 ```kotlin
@@ -156,13 +163,20 @@ interface VehicleDataForwarder {
     fun start()
     fun stop()
 }
+
+// P5: IMU sensor forwarding (accelerometer, gyroscope, compass, GPS satellites)
+class ImuForwarder(context: Context, sendMessage: (VehicleData) -> Unit) {
+    fun start()
+    fun stop()
+}
 ```
 
 **Internal:**
 - `TouchScaler` — scales Android screen coordinates to bridge video coordinates
 - `MultiTouchSerializer` — handles POINTER_DOWN/UP for multi-pointer events
 - `GnssProvider` — Android LocationManager → NMEA sentences
-- `VhalMonitor` — 37 VHAL properties via Car API reflection
+- `VhalMonitor` — VHAL properties via Car API reflection (speed, gear, battery, temp, etc.)
+- `ImuForwarder` — `SensorManager` listeners for accelerometer, gyroscope, magnetic field; `GnssStatus.Callback` for satellite count; compass bearing computed from rotation matrix; rate-limited to ~10 Hz
 
 **Tests:**
 - Unit: coordinate scaling math, multi-touch action code generation
@@ -265,60 +279,60 @@ No island depends on another island directly. All communication flows through Se
 ## Milestone Plan
 
 ### M1: Black Screen with Connection (Foundation)
-- [ ] Gradle project setup (app module, min SDK 32, Compose)
-- [ ] Transport island: connect to bridge, parse `hello` + `phone_connected`
-- [ ] Session island: state machine (IDLE → CONNECTING → BRIDGE_CONNECTED → PHONE_CONNECTED)
-- [ ] UI: ProjectionScreen with SurfaceView + "Connecting..." / "Connected" text
-- [ ] Unit tests for transport JSON parsing + session state machine
+- [x] Gradle project setup (app module, min SDK 32, Compose)
+- [x] Transport island: connect to bridge, parse `hello` + `phone_connected`
+- [x] Session island: state machine (IDLE → CONNECTING → BRIDGE_CONNECTED → PHONE_CONNECTED)
+- [x] UI: ProjectionScreen with SurfaceView + "Connecting..." / "Connected" text
+- [x] Unit tests for transport JSON parsing + session state machine
 - **Exit criteria**: App connects to bridge over TCP, shows connection state
 
 ### M2: Video (Core Value)
-- [ ] Video island: MediaCodec decoder, codec selection, NAL parsing
-- [ ] Wire transport `videoFrames` → video decoder → Surface
-- [ ] OAL video frame header parsing (12-byte binary)
-- [ ] Codec config frame handling (SPS/PPS → MediaFormat)
-- [ ] Stats overlay (FPS, frames decoded/dropped, codec name)
-- [ ] Unit tests for NAL parsing, integration test with test H.264 stream
+- [x] Video island: MediaCodec decoder, codec selection, NAL parsing
+- [x] Wire transport `videoFrames` → video decoder → Surface
+- [x] OAL video frame header parsing (16-byte binary)
+- [x] Codec config frame handling (SPS/PPS → MediaFormat)
+- [x] Stats overlay (FPS, frames decoded/dropped, codec name)
+- [x] Unit tests for NAL parsing, integration test with test H.264 stream
 - **Exit criteria**: Live AA video displays on car screen
 
 ### M3: Audio (Minimum Viable Product)
-- [ ] Audio island: 5 purpose slots, ring buffer, AudioTrack lifecycle
-- [ ] Wire transport `audioFrames` → audio player
-- [ ] Audio focus management (request/release/duck)
-- [ ] OAL audio frame header parsing (8-byte binary)
-- [ ] Unit tests for ring buffer, purpose routing
+- [x] Audio island: 5 purpose slots, ring buffer, AudioTrack lifecycle
+- [x] Wire transport `audioFrames` → audio player
+- [x] Audio focus management (request/release/duck)
+- [x] OAL audio frame header parsing (8-byte binary)
+- [x] Unit tests for ring buffer, purpose routing
 - **Exit criteria**: Music plays, navigation prompts duck media
 
 ### M4: Touch + Input (Interactive)
-- [ ] Input island: touch forwarding with coordinate scaling
-- [ ] Multi-touch (POINTER_DOWN/UP for pinch zoom)
-- [ ] Wire touch events through transport to bridge
-- [ ] Unit tests for coordinate scaling
+- [x] Input island: touch forwarding with coordinate scaling
+- [x] Multi-touch (POINTER_DOWN/UP for pinch zoom)
+- [x] Wire touch events through transport to bridge
+- [x] Unit tests for coordinate scaling
 - **Exit criteria**: Tap and swipe work on projected Android Auto UI
 
 ### M5: Microphone + Voice
-- [ ] Mic capture (timer-based, configurable sample rate)
-- [ ] Send mic audio on audio TCP channel (direction=1)
-- [ ] Bridge control messages: mic_start/mic_stop
-- [ ] RECORD_AUDIO permission handling
+- [x] Mic capture (timer-based, configurable sample rate)
+- [x] Send mic audio on audio TCP channel (direction=1)
+- [x] Bridge control messages: mic_start/mic_stop
+- [x] RECORD_AUDIO permission handling
 - **Exit criteria**: "Hey Google" and voice commands work
 
 ### M6: Settings + Config
-- [ ] DataStore preferences (codec, resolution, fps, display mode)
-- [ ] Settings UI (Compose)
-- [ ] Config sync: app sends `config_update` → bridge applies → sends `config_echo`
-- [ ] Bridge discovery (mDNS + manual IP)
+- [x] DataStore preferences (codec, resolution, fps, display mode)
+- [x] Settings UI (Compose)
+- [x] Config sync: app sends `config_update` → bridge applies → sends `config_echo`
+- [x] Bridge discovery (mDNS + manual IP)
 - **Exit criteria**: User can configure bridge from app
 
 ### M7: Vehicle Integration
-- [ ] GNSS forwarding (LocationManager → NMEA → bridge)
-- [ ] Vehicle data (VHAL properties → bridge → phone)
-- [ ] Navigation state display (bridge nav events → maneuver UI)
+- [x] GNSS forwarding (LocationManager → NMEA → bridge)
+- [x] Vehicle data (VHAL properties → bridge → phone)
+- [x] Navigation state display (bridge nav events → maneuver UI)
 - **Exit criteria**: Phone gets GPS from car, nav shows in cluster
 
 ### M8: Polish + Diagnostics
-- [ ] Diagnostics screen (system info, codecs, network, bridge)
-- [ ] Error recovery (reconnect, codec reset after corruption)
-- [ ] Display mode (fullscreen, system bars visible)
-- [ ] Overlay buttons (settings toggle, stats toggle)
+- [x] Diagnostics screen (system info, codecs, network, bridge)
+- [x] Error recovery (reconnect, codec reset after corruption)
+- [x] Display mode (fullscreen, system bars visible)
+- [x] Overlay buttons (settings toggle, stats toggle)
 - **Exit criteria**: Feature parity with carlink_native bridge mode

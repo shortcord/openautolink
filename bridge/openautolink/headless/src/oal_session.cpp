@@ -366,6 +366,27 @@ void OalSession::send_error(int code, const std::string& message) {
     send_control_line(oss.str());
 }
 
+void OalSession::send_phone_battery(int level, int time_remaining_s, bool critical) {
+    std::ostringstream oss;
+    oss << R"({"type":"phone_battery","level":)" << level
+        << R"(,"time_remaining_s":)" << time_remaining_s
+        << R"(,"critical":)" << (critical ? "true" : "false") << "}";
+    send_control_line(oss.str());
+}
+
+void OalSession::send_voice_session(bool started) {
+    std::ostringstream oss;
+    oss << R"({"type":"voice_session","status":")" << (started ? "start" : "end") << R"("})";
+    send_control_line(oss.str());
+}
+
+void OalSession::send_phone_status(int signal_strength, const std::string& calls_json) {
+    std::ostringstream oss;
+    oss << R"({"type":"phone_status","signal_strength":)" << signal_strength
+        << R"(,"calls":)" << calls_json << "}";
+    send_control_line(oss.str());
+}
+
 // ── App → Bridge JSON dispatch ───────────────────────────────────────
 
 void OalSession::on_app_json_line(const std::string& line) {
