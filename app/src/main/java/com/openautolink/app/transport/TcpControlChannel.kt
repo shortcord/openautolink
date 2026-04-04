@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import android.net.Network
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.InputStreamReader
@@ -25,9 +26,10 @@ class TcpControlChannel {
 
     val isConnected: Boolean get() = socket?.isConnected == true && socket?.isClosed == false
 
-    suspend fun connect(host: String, port: Int, timeoutMs: Int = 5000) {
+    suspend fun connect(host: String, port: Int, timeoutMs: Int = 5000, network: Network? = null) {
         withContext(Dispatchers.IO) {
             val s = Socket()
+            network?.bindSocket(s)
             s.connect(InetSocketAddress(host, port), timeoutMs)
             s.tcpNoDelay = true
             socket = s

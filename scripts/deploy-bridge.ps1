@@ -1,5 +1,5 @@
 param(
-    [string]$SbcHost = "192.168.137.166",
+    [string]$SbcHost = "192.168.137.2",
     [string]$SbcUser = "lance",
     [switch]$Clean,
     [switch]$SkipBuild,

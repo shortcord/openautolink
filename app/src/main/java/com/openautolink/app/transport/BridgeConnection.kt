@@ -1,5 +1,6 @@
 package com.openautolink.app.transport
 
+import android.net.Network
 import com.openautolink.app.audio.AudioFrame
 import com.openautolink.app.video.VideoFrame
 import kotlinx.coroutines.flow.Flow
@@ -15,7 +16,7 @@ interface BridgeConnection {
     val videoFrames: Flow<VideoFrame>
     val audioFrames: Flow<AudioFrame>
 
-    suspend fun connect(host: String, controlPort: Int = 5288)
+    suspend fun connect(host: String, controlPort: Int = 5288, network: Network? = null)
     suspend fun disconnect()
     suspend fun sendControlMessage(message: ControlMessage)
     suspend fun connectVideo(host: String, port: Int)

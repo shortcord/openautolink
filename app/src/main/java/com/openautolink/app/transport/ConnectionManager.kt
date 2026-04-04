@@ -1,5 +1,6 @@
 package com.openautolink.app.transport
 
+import android.net.Network
 import android.util.Log
 import com.openautolink.app.audio.AudioFrame
 import com.openautolink.app.diagnostics.DiagnosticLog
@@ -59,12 +60,14 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
 
     private var targetHost: String? = null
     private var targetPort: Int = 5288
+    private var targetNetwork: Network? = null
     private var autoReconnect = true
 
-    override suspend fun connect(host: String, controlPort: Int) {
+    override suspend fun connect(host: String, controlPort: Int, network: Network?) {
         disconnect()
         targetHost = host
         targetPort = controlPort
+        targetNetwork = network
         autoReconnect = true
         connectionJob = scope.launch { connectLoop() }
     }
@@ -99,7 +102,7 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
         videoJob = scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    videoChannel.connect(host, port)
+                    videoChannel.connect(host, port, network = targetNetwork)
                 }
                 Log.i(TAG, "Video channel connected to $host:$port")
                 DiagnosticLog.i("transport", "Video channel connected to $host:$port")
@@ -136,7 +139,7 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
         audioJob = scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    audioChannel.connect(host, port)
+                    audioChannel.connect(host, port, network = targetNetwork)
                 }
                 Log.i(TAG, "Audio channel connected to $host:$port")
                 DiagnosticLog.i("transport", "Audio channel connected to $host:$port")
@@ -181,7 +184,7 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
             try {
                 withContext(Dispatchers.IO) {
                     controlChannel.close()
-                    controlChannel.connect(host, targetPort)
+                    controlChannel.connect(host, targetPort, network = targetNetwork)
                 }
 
                 Log.i(TAG, "Connected to bridge at $host:$targetPort")

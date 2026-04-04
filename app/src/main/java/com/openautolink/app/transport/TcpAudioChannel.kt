@@ -1,5 +1,6 @@
 package com.openautolink.app.transport
 
+import android.net.Network
 import android.util.Log
 import com.openautolink.app.audio.AudioFrame
 import kotlinx.coroutines.Dispatchers
@@ -33,9 +34,10 @@ class TcpAudioChannel {
 
     val isConnected: Boolean get() = socket?.isConnected == true && socket?.isClosed == false
 
-    fun connect(host: String, port: Int, timeoutMs: Int = 5000) {
+    fun connect(host: String, port: Int, timeoutMs: Int = 5000, network: Network? = null) {
         close()
         val s = Socket()
+        network?.bindSocket(s)
         s.tcpNoDelay = true
         s.soTimeout = 0 // Block waiting for frames
         s.connect(InetSocketAddress(host, port), timeoutMs)

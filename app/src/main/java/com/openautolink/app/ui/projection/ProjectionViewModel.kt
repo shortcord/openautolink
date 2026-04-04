@@ -3,6 +3,10 @@ package com.openautolink.app.ui.projection
 import android.app.Application
 import android.content.Context
 import android.media.AudioManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
@@ -47,8 +51,13 @@ data class ProjectionUiState(
 
 class ProjectionViewModel(application: Application) : AndroidViewModel(application) {
 
+    companion object {
+        private const val TAG = "ProjectionViewModel"
+    }
+
     private val preferences = AppPreferences.getInstance(application)
     private val audioManager = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val sessionManager = SessionManager(viewModelScope, application, audioManager)
 
     private val touchForwarder: TouchForwarder = TouchForwarderImpl { touchMessage ->
@@ -190,12 +199,50 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             val port = preferences.bridgePort.first()
             val codec = preferences.videoCodec.first()
             val micSrc = preferences.micSource.first()
-            sessionManager.start(host, port, codec, micSrc)
+            val ifaceName = preferences.networkInterface.first()
+            val network = resolveNetwork(ifaceName)
+            sessionManager.start(host, port, codec, micSrc, network = network)
         }
     }
 
     fun disconnect() {
         sessionManager.stop()
+    }
+
+    /**
+     * Resolve a saved network interface name to an [android.net.Network] for socket binding.
+     * Uses two-tier lookup: first by interface name via ConnectivityManager, then falls back
+     * to default routing if not found. Skips binding for loopback addresses.
+     */
+    private fun resolveNetwork(interfaceName: String): Network? {
+        if (interfaceName.isBlank()) {
+            Log.d(TAG, "No preferred network interface — default routing")
+            return null
+        }
+        try {
+            for (network in connectivityManager.allNetworks) {
+                val linkProps = connectivityManager.getLinkProperties(network) ?: continue
+                if (linkProps.interfaceName == interfaceName) {
+                    val caps = connectivityManager.getNetworkCapabilities(network)
+                    val transport = when {
+                        caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "Ethernet"
+                        caps?.hasTransport(NetworkCapabilities.TRANSPORT_USB) == true -> "USB"
+                        caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "WiFi"
+                        else -> "other"
+                    }
+                    Log.i(TAG, "Bound to interface '$interfaceName' ($transport) handle=${network.networkHandle}")
+                    com.openautolink.app.diagnostics.DiagnosticLog.i("transport",
+                        "Bound to interface '$interfaceName' ($transport)")
+                    return network
+                }
+            }
+            Log.w(TAG, "Interface '$interfaceName' not found in ConnectivityManager — default routing")
+            com.openautolink.app.diagnostics.DiagnosticLog.w("transport",
+                "Interface '$interfaceName' not found — default routing")
+        } catch (e: Exception) {
+            Log.w(TAG, "Network resolution failed: ${e.message}")
+        }
+        return null
     }
 
     fun toggleStats() {

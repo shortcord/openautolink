@@ -1,5 +1,6 @@
 package com.openautolink.app.transport
 
+import android.net.Network
 import android.util.Log
 import com.openautolink.app.video.VideoFrame
 import kotlinx.coroutines.Dispatchers
@@ -29,9 +30,10 @@ class TcpVideoChannel {
 
     val isConnected: Boolean get() = socket?.isConnected == true && socket?.isClosed == false
 
-    fun connect(host: String, port: Int, timeoutMs: Int = 5000) {
+    fun connect(host: String, port: Int, timeoutMs: Int = 5000, network: Network? = null) {
         close()
         val s = Socket()
+        network?.bindSocket(s)
         s.tcpNoDelay = true
         s.soTimeout = 0 // No read timeout — we block waiting for frames
         s.receiveBufferSize = 256 * 1024 // 256KB receive buffer for bursty keyframes

@@ -1,5 +1,6 @@
 package com.openautolink.app.ui.settings
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
+import com.openautolink.app.session.SessionState
 import com.openautolink.app.transport.ControlMessage
 
 private enum class SettingsTab(
@@ -124,6 +126,8 @@ private val displayModes = listOf(
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel = viewModel(),
+    sessionState: SessionState = SessionState.IDLE,
+    onSaveAndConnect: () -> Unit = {},
     onBack: () -> Unit = {},
     onNavigateToDiagnostics: () -> Unit = {},
     onNavigateToViewportEditor: () -> Unit = {},
@@ -187,25 +191,104 @@ fun SettingsScreen(
             }
 
             // Content pane — fills remaining width
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxHeight()
                     .weight(1f)
                     .padding(horizontal = 24.dp, vertical = 16.dp),
             ) {
-                when (selectedTab) {
-                    SettingsTab.CONNECTION -> ConnectionTab(viewModel, uiState)
-                    SettingsTab.PHONES -> PhonesTab(viewModel, uiState)
-                    SettingsTab.BRIDGE -> BridgeTab(viewModel, uiState)
-                    SettingsTab.DISPLAY -> DisplayTab(viewModel, uiState, onNavigateToViewportEditor)
-                    SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
-                    SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
-                    SettingsTab.UPDATES -> UpdatesTab(viewModel, uiState, updateStatus)
-                    SettingsTab.DIAGNOSTICS -> DiagnosticsSettingsTab(
-                        viewModel, uiState, onNavigateToDiagnostics
-                    )
+                // Connection status bar + Save & Connect button — always visible
+                ConnectionStatusBar(
+                    sessionState = sessionState,
+                    onSaveAndConnect = onSaveAndConnect,
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Tab content
+                Box(modifier = Modifier.weight(1f)) {
+                    when (selectedTab) {
+                        SettingsTab.CONNECTION -> ConnectionTab(viewModel, uiState)
+                        SettingsTab.PHONES -> PhonesTab(viewModel, uiState)
+                        SettingsTab.BRIDGE -> BridgeTab(viewModel, uiState)
+                        SettingsTab.DISPLAY -> DisplayTab(viewModel, uiState, onNavigateToViewportEditor)
+                        SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
+                        SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
+                        SettingsTab.UPDATES -> UpdatesTab(viewModel, uiState, updateStatus)
+                        SettingsTab.DIAGNOSTICS -> DiagnosticsSettingsTab(
+                            viewModel, uiState, onNavigateToDiagnostics
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionStatusBar(
+    sessionState: SessionState,
+    onSaveAndConnect: () -> Unit,
+) {
+    val statusColor = when (sessionState) {
+        SessionState.STREAMING -> Color(0xFF4CAF50) // Green
+        SessionState.PHONE_CONNECTED -> Color(0xFF8BC34A) // Light green
+        SessionState.BRIDGE_CONNECTED -> Color(0xFFFF9800) // Orange
+        SessionState.CONNECTING -> Color(0xFFFFC107) // Amber
+        SessionState.IDLE -> Color(0xFF9E9E9E) // Grey
+        SessionState.ERROR -> Color(0xFFF44336) // Red
+    }
+    val statusText = when (sessionState) {
+        SessionState.STREAMING -> "Streaming"
+        SessionState.PHONE_CONNECTED -> "Phone Connected"
+        SessionState.BRIDGE_CONNECTED -> "Bridge Connected"
+        SessionState.CONNECTING -> "Connecting..."
+        SessionState.IDLE -> "Disconnected"
+        SessionState.ERROR -> "Error"
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // Status indicator dot + text
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .background(statusColor, shape = MaterialTheme.shapes.small),
+            )
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (sessionState == SessionState.CONNECTING) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            }
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Save & Connect button
+        Button(
+            onClick = onSaveAndConnect,
+            modifier = Modifier.testTag("saveAndConnectButton"),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Save & Connect")
         }
     }
 }

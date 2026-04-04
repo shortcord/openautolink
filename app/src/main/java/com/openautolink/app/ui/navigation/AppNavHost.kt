@@ -11,6 +11,7 @@ import androidx.navigation.compose.rememberNavController
 import com.openautolink.app.ui.diagnostics.DiagnosticsScreen
 import com.openautolink.app.ui.carplay.CarPlayPinScreen
 import com.openautolink.app.ui.projection.ProjectionScreen
+import com.openautolink.app.ui.projection.ProjectionViewModel
 import com.openautolink.app.ui.settings.SettingsScreen
 import com.openautolink.app.ui.settings.SettingsViewModel
 import com.openautolink.app.ui.settings.ViewportEditorScreen
@@ -25,8 +26,9 @@ object AppDestinations {
 
 @Composable
 fun AppNavHost(navController: NavHostController = rememberNavController()) {
-    // Share SettingsViewModel across Settings and ViewportEditor screens
+    // Share ViewModels across screens
     val settingsViewModel: SettingsViewModel = viewModel()
+    val projectionViewModel: ProjectionViewModel = viewModel()
 
     NavHost(
         navController = navController,
@@ -34,14 +36,18 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
     ) {
         composable(AppDestinations.PROJECTION) {
             ProjectionScreen(
+                viewModel = projectionViewModel,
                 onNavigateToSettings = {
                     navController.navigate(AppDestinations.SETTINGS)
                 }
             )
         }
         composable(AppDestinations.SETTINGS) {
+            val projectionUiState by projectionViewModel.uiState.collectAsStateWithLifecycle()
             SettingsScreen(
                 viewModel = settingsViewModel,
+                sessionState = projectionUiState.sessionState,
+                onSaveAndConnect = { projectionViewModel.connect() },
                 onBack = { navController.popBackStack() },
                 onNavigateToDiagnostics = {
                     navController.navigate(AppDestinations.DIAGNOSTICS)
