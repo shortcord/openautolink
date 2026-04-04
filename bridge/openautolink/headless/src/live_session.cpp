@@ -2105,7 +2105,7 @@ void HeadlessAudioHandler::onMediaChannelSetupRequest(
 {
     aap_protobuf::service::media::shared::message::Config response;
     response.set_status(aap_protobuf::service::media::shared::message::Config_Status_STATUS_READY);
-    response.set_max_unacked(1);
+    response.set_max_unacked(50);
     response.add_configuration_indices(0);
 
     auto promise = aasdk::channel::SendPromise::defer(strand_);
@@ -2296,7 +2296,7 @@ void HeadlessAudioInputHandler::onMediaChannelSetupRequest(
 {
     aap_protobuf::service::media::shared::message::Config response;
     response.set_status(aap_protobuf::service::media::shared::message::Config_Status_STATUS_READY);
-    response.set_max_unacked(1);
+    response.set_max_unacked(50);
     response.add_configuration_indices(0);
 
     auto promise = aasdk::channel::SendPromise::defer(strand_);

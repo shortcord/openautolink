@@ -168,12 +168,23 @@ void OalSession::write_audio_frame(
     if (pcm_size > 0)
         memcpy(pkt.data() + OAL_AUDIO_HEADER_SIZE, pcm_data, pcm_size);
 
-    {
-        std::lock_guard<std::mutex> lock(audio_mutex_);
-        audio_writes_.push_back(std::move(pkt));
-        audio_frames_queued_++;
-        while (audio_writes_.size() > MAX_AUDIO_PENDING) {
-            audio_writes_.pop_front();
+    // Write audio directly to TCP — bypass the queue+flush pattern.
+    // Audio arrives at ~23 fps (48kHz stereo 16-bit, 8192B/frame = 42.7ms each).
+    // The queue+flush pattern added unnecessary latency: the flush thread
+    // sleeps 500µs between polls, and write_fully blocks on TCP.
+    // Direct write from the aasdk IO thread is fine since audio frames are small.
+    bool ok = audio_transport_.submit_write(pkt.data(), pkt.size());
+    if (ok) {
+        audio_frames_written_++;
+        if (audio_frames_written_ <= 10 || audio_frames_written_ % 50 == 0) {
+            std::cerr << "[OAL] audio: written=" << audio_frames_written_
+                      << " size=" << pkt.size() << std::endl;
+        }
+    } else {
+        audio_frames_queued_++; // count drops
+        if (audio_frames_queued_ <= 5 || audio_frames_queued_ % 100 == 0) {
+            std::cerr << "[OAL] audio WRITE FAILED: drops=" << audio_frames_queued_
+                      << " connected=" << audio_transport_.is_connected() << std::endl;
         }
     }
 }
