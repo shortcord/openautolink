@@ -24,7 +24,8 @@ class AudioPurposeSlot(
 ) {
     companion object {
         private const val TAG = "AudioPurposeSlot"
-        private const val SILENCE_CHUNK_MS = 10 // Write 10ms of silence on underrun
+        private const val DRAIN_CHUNK_MS = 20 // Write 20ms chunks to AudioTrack
+        private const val TRACK_BUFFER_MULTIPLIER = 4 // 4x minimum buffer for jitter tolerance
     }
 
     private var audioTrack: AudioTrack? = null
@@ -52,7 +53,7 @@ class AudioPurposeSlot(
             channelMask,
             AudioFormat.ENCODING_PCM_16BIT
         )
-        val trackBufSize = maxOf(minBufSize * 2, 4096)
+        val trackBufSize = maxOf(minBufSize * TRACK_BUFFER_MULTIPLIER, 16384)
 
         val attributes = buildAudioAttributes(purpose)
         val format = AudioFormat.Builder()
@@ -181,21 +182,46 @@ class AudioPurposeSlot(
     private fun drainLoop() {
         val track = audioTrack ?: return
         val ring = ringBuffer ?: return
-        // Drain chunk: 10ms of audio
+        // Drain chunk: 20ms of audio — larger chunks reduce write call overhead
         val bytesPerSample = 2
-        val chunkBytes = sampleRate * channelCount * bytesPerSample * SILENCE_CHUNK_MS / 1000
+        val chunkBytes = sampleRate * channelCount * bytesPerSample * DRAIN_CHUNK_MS / 1000
         val chunk = ByteArray(chunkBytes)
         val silence = ByteArray(chunkBytes)
 
         while (active.get()) {
-            val read = ring.read(chunk)
-            if (read > 0) {
-                track.write(chunk, 0, read)
-                framesWritten.addAndGet(read.toLong() / (channelCount * bytesPerSample))
+            val available = ring.available
+            if (available >= chunkBytes) {
+                // Enough data — read a full chunk and write
+                val read = ring.read(chunk)
+                if (read > 0) {
+                    var offset = 0
+                    while (offset < read && active.get()) {
+                        val written = track.write(chunk, offset, read - offset,
+                            AudioTrack.WRITE_NON_BLOCKING)
+                        if (written > 0) {
+                            offset += written
+                            framesWritten.addAndGet(written.toLong() / (channelCount * bytesPerSample))
+                        } else if (written == 0) {
+                            // AudioTrack buffer full — yield briefly
+                            Thread.sleep(1)
+                        } else {
+                            break // Error
+                        }
+                    }
+                }
+            } else if (available > 0) {
+                // Partial data available — write what we have to minimize latency
+                val partial = ByteArray(available)
+                val read = ring.read(partial)
+                if (read > 0) {
+                    track.write(partial, 0, read, AudioTrack.WRITE_NON_BLOCKING)
+                    framesWritten.addAndGet(read.toLong() / (channelCount * bytesPerSample))
+                }
             } else {
-                // Underrun — write silence to keep stream alive
+                // Ring buffer empty — write silence to keep stream alive, yield
                 underrunCount.incrementAndGet()
-                track.write(silence, 0, silence.size)
+                track.write(silence, 0, silence.size, AudioTrack.WRITE_NON_BLOCKING)
+                Thread.sleep(DRAIN_CHUNK_MS.toLong() / 2)
             }
         }
     }

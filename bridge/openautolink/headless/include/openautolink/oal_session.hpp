@@ -153,6 +153,15 @@ private:
     // Thread-safe pending audio write queue
     std::mutex audio_mutex_;
     std::deque<std::vector<uint8_t>> audio_writes_;
+
+    // Track active audio purposes for replay on reconnect
+    struct AudioPurposeInfo {
+        uint8_t purpose;
+        uint16_t sample_rate;
+        uint8_t channels;
+    };
+    std::mutex audio_purposes_mutex_;
+    std::vector<AudioPurposeInfo> active_audio_purposes_;
     static constexpr size_t MAX_AUDIO_PENDING = 60;
 
     // Stats

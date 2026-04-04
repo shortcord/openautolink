@@ -106,6 +106,14 @@ class AudioPlayerImpl(private val audioManager: AudioManager) : AudioPlayer {
             return
         }
 
+        // Auto-start: if audio frames arrive before audio_start control message
+        // (happens when phone was already streaming before app connected),
+        // start the slot with the frame's sample rate and channel count.
+        if (!slot.isActive) {
+            Log.i(TAG, "Auto-starting ${frame.purpose} from audio frame: ${frame.sampleRate}Hz ${frame.channels}ch")
+            startPurpose(frame.purpose, frame.sampleRate, frame.channels)
+        }
+
         slot.feedPcm(frame.data)
     }
 

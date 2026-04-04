@@ -6,6 +6,7 @@
 #include "openautolink/live_session.hpp"
 #endif
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -51,6 +52,23 @@ void OalSession::on_app_connected() {
             aa_session_->replay_cached_keyframe();
         }
 #endif
+
+        // Replay active audio purposes so app starts AudioTracks
+        {
+            std::lock_guard<std::mutex> lock(audio_purposes_mutex_);
+            for (const auto& ap : active_audio_purposes_) {
+                std::ostringstream oss;
+                oss << R"({"type":"audio_start","purpose":")"
+                    << oal_purpose_to_string(ap.purpose)
+                    << R"(","sample_rate":)" << ap.sample_rate
+                    << R"(,"channels":)" << static_cast<int>(ap.channels) << "}";
+                send_control_line(oss.str());
+            }
+            if (!active_audio_purposes_.empty()) {
+                std::cerr << "[OAL] replayed " << active_audio_purposes_.size()
+                          << " audio_start messages" << std::endl;
+            }
+        }
     } else {
         std::cerr << "[OAL] app connected (waiting for phone)" << std::endl;
     }
@@ -271,6 +289,17 @@ void OalSession::send_phone_disconnected(const std::string& reason) {
 }
 
 void OalSession::send_audio_start(uint8_t purpose, uint16_t sample_rate, uint8_t channels) {
+    // Track active purpose for replay on reconnect
+    {
+        std::lock_guard<std::mutex> lock(audio_purposes_mutex_);
+        // Remove existing entry for this purpose, then add updated one
+        active_audio_purposes_.erase(
+            std::remove_if(active_audio_purposes_.begin(), active_audio_purposes_.end(),
+                [purpose](const AudioPurposeInfo& info) { return info.purpose == purpose; }),
+            active_audio_purposes_.end());
+        active_audio_purposes_.push_back({purpose, sample_rate, channels});
+    }
+
     std::ostringstream oss;
     oss << R"({"type":"audio_start","purpose":")"
         << oal_purpose_to_string(purpose)
