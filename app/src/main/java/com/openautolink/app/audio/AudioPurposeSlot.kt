@@ -154,6 +154,7 @@ class AudioPurposeSlot(
         var residualBuf: ByteArray? = null
         var residualOff = 0
         var residualLen = 0
+        var residualRetries = 0
 
         while (active.get()) {
             if (!trackPlaying) {
@@ -174,12 +175,22 @@ class AudioPurposeSlot(
                     framesWritten.addAndGet(w.toLong() / bytesPerFrame)
                     residualOff += w
                     residualLen -= w
+                    residualRetries = 0
                 }
                 if (residualLen <= 0) {
                     residualBuf = null
                     residualOff = 0
                     residualLen = 0
+                    residualRetries = 0
                 } else {
+                    residualRetries++
+                    if (residualRetries > 100) {
+                        // AudioTrack stuck — drop residual and continue
+                        residualBuf = null
+                        residualOff = 0
+                        residualLen = 0
+                        residualRetries = 0
+                    }
                     Thread.sleep(1)
                     continue
                 }
@@ -240,4 +251,4 @@ class AudioPurposeSlot(
             .setContentType(contentType)
             .build()
     }
-}
+}
