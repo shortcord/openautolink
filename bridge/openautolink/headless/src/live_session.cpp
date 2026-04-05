@@ -2105,7 +2105,7 @@ void HeadlessAudioHandler::onMediaChannelSetupRequest(
 {
     aap_protobuf::service::media::shared::message::Config response;
     response.set_status(aap_protobuf::service::media::shared::message::Config_Status_STATUS_READY);
-    response.set_max_unacked(50);
+    response.set_max_unacked(1);
     response.add_configuration_indices(0);
 
     auto promise = aasdk::channel::SendPromise::defer(strand_);
@@ -2198,32 +2198,18 @@ void HeadlessAudioHandler::onMediaWithTimestampIndication(
         oal_session_->write_audio_frame(buffer.cdata, buffer.size,
                                         purpose, sr, ch);
     }
-    // Media pipe path (legacy stub)
-    else if (media_fd_ >= 0) {
-        uint32_t audio_type = 1;
-        if (type_ == ChannelType::Speech) audio_type = 3;
-        else if (type_ == ChannelType::System) audio_type = 2;
-        uint32_t decode_type = (type_ == ChannelType::Media) ? 4 : 5;
-        float volume = 0.0f;
-        uint32_t payload_len = static_cast<uint32_t>(12 + buffer.size);
-        uint8_t header[17];
-        header[0] = 0x02;
-        memcpy(header + 1,  &payload_len, 4);
-        memcpy(header + 5,  &decode_type, 4);
-        memcpy(header + 9,  &volume, 4);
-        memcpy(header + 13, &audio_type, 4);
 
-        struct iovec iov[2];
-        iov[0].iov_base = header;
-        iov[0].iov_len = 17;
-        iov[1].iov_base = const_cast<uint8_t*>(buffer.cdata);
-        iov[1].iov_len = buffer.size;
-        if (pipe_mutex_) {
-            std::lock_guard<std::mutex> lock(*pipe_mutex_);
-            writev(media_fd_, iov, 2);
-        } else {
-            writev(media_fd_, iov, 2);
-        }
+    // ACK the frame — tells the phone we consumed it and it can send the next.
+    // Without this, the phone sends max_unacked frames in a burst then stalls.
+    // With ACK + max_unacked=1, the phone paces to exactly real-time.
+    {
+        aap_protobuf::service::media::source::message::Ack indication;
+        indication.set_session_id(session_);
+        indication.set_ack(1);
+        auto promise = aasdk::channel::SendPromise::defer(strand_);
+        promise->then([]() {},
+            [this, self = shared_from_this()](auto e) { this->onChannelError(e); });
+        channel_->sendMediaAckIndication(indication, std::move(promise));
     }
 
     channel_->receive(shared_from_this());
@@ -2296,7 +2282,7 @@ void HeadlessAudioInputHandler::onMediaChannelSetupRequest(
 {
     aap_protobuf::service::media::shared::message::Config response;
     response.set_status(aap_protobuf::service::media::shared::message::Config_Status_STATUS_READY);
-    response.set_max_unacked(50);
+    response.set_max_unacked(1);
     response.add_configuration_indices(0);
 
     auto promise = aasdk::channel::SendPromise::defer(strand_);
