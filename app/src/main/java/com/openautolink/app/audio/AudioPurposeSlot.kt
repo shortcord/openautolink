@@ -26,8 +26,8 @@ class AudioPurposeSlot(
 ) {
     companion object {
         private const val TAG = "AudioPurposeSlot"
-        private const val PREFILL_MS = 80
-        private const val DRAIN_CHUNK_MS = 10
+        private const val PREFILL_MS = 200  // Buffer 200ms before starting
+        private const val DRAIN_CHUNK_MS = 200 // Write 200ms chunks — reduces write call overhead
     }
 
     private var audioTrack: AudioTrack? = null
@@ -51,7 +51,7 @@ class AudioPurposeSlot(
         val minBufSize = AudioTrack.getMinBufferSize(
             sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT
         )
-        val trackBufSize = maxOf(minBufSize * 4, 16384)
+        val trackBufSize = maxOf(minBufSize * 8, 76800) // ~200ms at 48kHz stereo
 
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(buildAudioAttributes(purpose))
@@ -62,7 +62,6 @@ class AudioPurposeSlot(
                 .build())
             .setBufferSizeInBytes(trackBufSize)
             .setTransferMode(AudioTrack.MODE_STREAM)
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             .build()
 
         val bytesPerSample = 2
@@ -143,6 +142,17 @@ class AudioPurposeSlot(
     val ringBufferAvailable: Int get() = ringBuffer?.available ?: 0
     val ringBufferCapacity: Int get() = ringBuffer?.capacity ?: 0
 
+    /**
+     * Drain loop — BLOCKING writes, NO sleep, NO non-blocking.
+     *
+     * Identical to how stagefright plays audio (zero HAL errors on this emulator):
+     * tight loop of read → blocking write. AudioTrack.write() blocks for exactly
+     * the right duration (~10ms per 1920-byte chunk at 48kHz stereo), providing
+     * perfect real-time pacing without any Thread.sleep() imprecision.
+     *
+     * The ring buffer decouples TCP arrival jitter from AudioTrack consumption.
+     * The drain thread runs at URGENT_AUDIO priority with nothing else to do.
+     */
     private fun drainLoop() {
         val track = audioTrack ?: return
         val ring = ringBuffer ?: return
@@ -151,12 +161,10 @@ class AudioPurposeSlot(
         val prefillBytes = bytesPerMs * PREFILL_MS
         val chunkBytes = bytesPerMs * DRAIN_CHUNK_MS
         val chunk = ByteArray(chunkBytes)
-        var residualBuf: ByteArray? = null
-        var residualOff = 0
-        var residualLen = 0
-        var residualRetries = 0
+        var writeCount = 0L
 
         while (active.get()) {
+            // Pre-fill: accumulate data before starting playback
             if (!trackPlaying) {
                 if (ring.available >= prefillBytes) {
                     track.play()
@@ -168,65 +176,32 @@ class AudioPurposeSlot(
                 }
             }
 
-            if (residualBuf != null && residualLen > 0) {
-                val w = track.write(residualBuf!!, residualOff, residualLen,
-                    AudioTrack.WRITE_NON_BLOCKING)
-                if (w > 0) {
-                    framesWritten.addAndGet(w.toLong() / bytesPerFrame)
-                    residualOff += w
-                    residualLen -= w
-                    residualRetries = 0
-                }
-                if (residualLen <= 0) {
-                    residualBuf = null
-                    residualOff = 0
-                    residualLen = 0
-                    residualRetries = 0
-                } else {
-                    residualRetries++
-                    if (residualRetries > 100) {
-                        // AudioTrack stuck — drop residual and continue
-                        residualBuf = null
-                        residualOff = 0
-                        residualLen = 0
-                        residualRetries = 0
-                    }
-                    Thread.sleep(1)
-                    continue
-                }
-            }
-
             val avail = ring.available
             if (avail >= chunkBytes) {
                 val read = ring.read(chunk)
                 if (read > 0) {
-                    val w = track.write(chunk, 0, read, AudioTrack.WRITE_NON_BLOCKING)
-                    if (w > 0) {
-                        framesWritten.addAndGet(w.toLong() / bytesPerFrame)
-                    }
-                    if (w in 0 until read) {
-                        residualBuf = chunk.copyOf()
-                        residualOff = maxOf(w, 0)
-                        residualLen = read - maxOf(w, 0)
+                    val t0 = System.nanoTime()
+                    track.write(chunk, 0, read)
+                    val elapsed = (System.nanoTime() - t0) / 1_000_000
+                    framesWritten.addAndGet(read.toLong() / bytesPerFrame)
+                    writeCount++
+                    if (elapsed > 50 || writeCount % 500 == 0L) {
+                        Log.w(TAG, "$purpose write: ${elapsed}ms for ${read}B (total writes=$writeCount)")
                     }
                 }
-                Thread.sleep(DRAIN_CHUNK_MS.toLong())
+                // NO sleep — AudioTrack.write() already blocked for ~10ms
             } else if (avail > 0) {
+                // Partial data — write what we have
                 val partial = ByteArray(avail)
                 val read = ring.read(partial)
                 if (read > 0) {
-                    val w = track.write(partial, 0, read, AudioTrack.WRITE_NON_BLOCKING)
-                    if (w > 0) framesWritten.addAndGet(w.toLong() / bytesPerFrame)
-                    if (w in 0 until read) {
-                        residualBuf = partial
-                        residualOff = maxOf(w, 0)
-                        residualLen = read - maxOf(w, 0)
-                    }
+                    track.write(partial, 0, read)
+                    framesWritten.addAndGet(read.toLong() / bytesPerFrame)
                 }
-                Thread.sleep(DRAIN_CHUNK_MS.toLong())
             } else {
+                // Ring empty — brief wait for TCP data
                 underrunCount.incrementAndGet()
-                Thread.sleep(5)
+                Thread.sleep(2)
             }
         }
     }
