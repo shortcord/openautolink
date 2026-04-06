@@ -13,16 +13,21 @@
 - Full audio: media, navigation prompts, phone calls, voice assistant
 - Touch, steering wheel controls, and microphone input forwarded to the phone
 - Vehicle data (speed, gear, fuel/EV range, GPS, etc.) sent to Android Auto
-- Navigation turn-by-turn displayed on the instrument cluster *(experimental — GM may kill third-party cluster services)*
+- Navigation turn-by-turn displayed on the instrument cluster (lane guidance, cue text, maneuver icons)
+- Album art and track info on the cluster display (Spotify, etc.)
+- Display safe zone / insets — configurable insets tell AA to keep interactive UI away from curved bezels while rendering maps edge-to-edge
+- Custom viewport editor — adjust the projection area with draggable handles, aspect ratio lock, and presets
 - Multi-phone support: pair multiple phones, set a default, switch between them with one tap
-- One-command SBC install, auto-reconnect on car startup
+- Auto-reconnect on car startup — car on → brief "Connecting..." → projection appears
+- One-command SBC install
+- Remote diagnostics — structured logs and telemetry streamed to bridge over SSH (no ADB needed on GM)
 - Fully open-source — app, bridge, protocol, and deployment scripts
 
 > **Fair warning:** This is a free, hobby project that is very much under active development. It might work great, it might not work at all. Stated features may or may not actually work. My goal is to eventually make it stable and production-quality, but it's not there yet — and honestly, it may never be. I'm building this because it's fun and because I want Android Auto back in my car. If that sounds like your kind of adventure, give it a try.
 
 Starting with the 2024 model year, GM dropped Apple CarPlay and Android Auto from their electric vehicles (Blazer EV, Equinox EV, Silverado EV, Lyriq, etc.) in favor of Google built-in infotainment. GM has indicated this will expand to all GM vehicles in the 2025-2026+ timeframe. **OpenAutoLink brings Android Auto back** to these vehicles by bridging a phone's Android Auto session to the car's AAOS head unit over the network — no USB adapter hardware needed.
 
-An SBC (Raspberry Pi 4/5, Khadas VIM4, etc.) bridges your phone's Android Auto session to your car's display over WiFi + Ethernet. The car runs the OpenAutoLink app, the SBC runs the bridge.
+An SBC (Raspberry Pi 5, Khadas VIM4, etc.) bridges your phone's Android Auto session to your car's display over WiFi + Ethernet. The car runs the OpenAutoLink app, the SBC runs the bridge.
 
 ```
 Android Phone ──WiFi TCP:5277──▶                    ┌── Control :5288 (JSON lines)
@@ -59,8 +64,9 @@ The bridge is lightweight — it relays an already-encoded video/audio stream, s
 | **Size** | Smaller is better — it lives hidden in your center console |
 
 **Tested SBCs:**
-- **Raspberry Pi 5** — primary development board. Compact, reliable, good WiFi
+- **Raspberry Pi 5 / CM5** — primary development board. Compact, reliable, good WiFi
 - **Khadas VIM4** — also works, overkill for this use case
+- **ROCK 3A** — works (wired phone mode if no WiFi module)
 
 Most ARM64 SBCs with the above specs should work. The bridge binary is a generic aarch64 Linux executable.
 
@@ -161,15 +167,11 @@ Because this is an AAOS app (not a standard phone app), getting it onto your car
 | [Bridge Build Guide](bridge/sbc/BUILD.md) | SBC build and deployment |
 ## Status
 
-Active development. See the [work plan](docs/work-plan.md) for current milestones.
+Active development. All core features are implemented and working on real hardware (2024 Blazer EV): video, audio, touch, vehicle data, cluster navigation, media metadata, microphone, steering wheel controls, and auto-reconnect. See the [work plan](docs/work-plan.md) for remaining items and car testing unknowns.
 
 ## Compatibility
 
 **Not known to be universally compatible with all AAOS vehicles.** Currently tested only on a **2024 Chevrolet Blazer EV**, which enumerates a USB NIC, assigns it an IP, and allows network traffic to reach apps. Other GM vehicles on the same AAOS head unit platform likely work, but this has not been verified. Non-GM AAOS vehicles may have different USB networking behavior or restrictions that prevent this approach from working.
-
-## Known Issues
-
-- **Audio playback quality on AAOS emulator**: Audio may sound choppy or stuttery when testing on the Android Automotive emulator. The emulator's virtual audio HAL (`audio_hw_generic_caremu`) is significantly slower than real hardware — blocking AudioTrack writes can stall for 2+ seconds, and non-blocking writes lose data when the HAL can't keep up. Audio on real AAOS hardware (e.g., GM Blazer EV with Snapdragon) is expected to perform normally. The bridge-side `max_unacked` flow control fix (increased from 1 to 50) ensures the phone streams audio at the full ~25 fps rate.
 
 ## Acknowledgments
 
