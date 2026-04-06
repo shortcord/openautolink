@@ -36,6 +36,7 @@ import com.openautolink.app.video.MediaCodecDecoder
 import com.openautolink.app.video.VideoDecoder
 import com.openautolink.app.video.VideoStats
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -49,7 +50,7 @@ import kotlinx.coroutines.launch
  * Manages transport, video decoder, audio player, GNSS, vehicle data, and navigation.
  */
 class SessionManager(
-    private val scope: CoroutineScope,
+    externalScope: CoroutineScope,
     private val context: Context? = null,
     private val audioManager: AudioManager? = null
 ) {
@@ -64,6 +65,10 @@ class SessionManager(
          * Get or create the shared SessionManager instance.
          * Both ProjectionViewModel and DiagnosticsViewModel must use the same instance
          * so diagnostics can observe live vehicle data, video stats, etc.
+         *
+         * Note: The SessionManager creates its own CoroutineScope (SupervisorJob + Main)
+         * so it survives ViewModel lifecycle changes. The externalScope parameter is ignored
+         * for the singleton — it uses its own scope to avoid cancellation when ViewModels clear.
          */
         fun getInstance(scope: CoroutineScope, context: Context, audioManager: AudioManager): SessionManager {
             return instance ?: synchronized(this) {
@@ -71,6 +76,10 @@ class SessionManager(
             }
         }
     }
+
+    // Use our own scope that survives ViewModel lifecycle — SupervisorJob so child
+    // failures don't cancel the whole session, Dispatchers.Main for UI state updates.
+    private val scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
 
     private val connectionManager = ConnectionManager(scope)
 
