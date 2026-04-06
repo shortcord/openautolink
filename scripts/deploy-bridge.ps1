@@ -1,6 +1,6 @@
 param(
-    [string]$SbcHost = "192.168.137.2",
-    [string]$SbcUser = "openautolink",
+    [string]$SbcHost = "oal-sbc",
+    [string]$SbcUser,
     [switch]$Clean,
     [switch]$SkipBuild,
     [switch]$Full
@@ -10,7 +10,8 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $BinaryPath = Join-Path $RepoRoot "build-bridge-arm64\openautolink-headless-stripped"
 $SbcDir = Join-Path $RepoRoot "bridge\sbc"
-$Target = "${SbcUser}@${SbcHost}"
+# Use SSH config alias by default (oal-sbc); fall back to user@host if SbcUser specified
+$Target = if ($SbcUser) { "${SbcUser}@${SbcHost}" } else { $SbcHost }
 
 function Invoke-Ssh {
     param([string]$Command)
