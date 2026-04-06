@@ -78,12 +78,12 @@ fun ProjectionScreen(
             .fillMaxSize()
             .background(Color.Black)
             .then(
-                // Only apply system bar insets when bars are visible
+                // Pad the projection surface to avoid AA UI elements being hidden
+                // behind visible system bars. When bars are hidden, the surface
+                // fills edge-to-edge (no padding needed).
                 when (uiState.displayMode) {
                     "system_ui_visible" -> Modifier.windowInsetsPadding(WindowInsets.systemBars)
-                    "status_bar_hidden" -> Modifier.windowInsetsPadding(WindowInsets.navigationBars)
-                    "nav_bar_hidden" -> Modifier.windowInsetsPadding(WindowInsets.statusBars)
-                    else -> Modifier // fullscreen_immersive, custom_viewport — no insets
+                    else -> Modifier // all other modes hide bars — fill edge-to-edge
                 }
             )
             .testTag("projectionScreen")
