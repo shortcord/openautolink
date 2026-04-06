@@ -23,20 +23,29 @@ jobs:
           # Add ARM64 architecture
           sudo dpkg --add-architecture arm64
 
-          # GitHub runners' default sources serve amd64 only.
-          # Restrict them to [arch=amd64] and add ports.ubuntu.com for arm64.
-          sudo sed -i 's/^deb \(http\|https\)/deb [arch=amd64] \1/' /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo sed -i 's/^deb \(http\|https\)/deb [arch=amd64] \1/' /etc/apt/sources.list 2>/dev/null || true
-          # Fix double [arch=...] if already present
-          sudo sed -i 's/\[arch=amd64\] \[arch=amd64\]/[arch=amd64]/' /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo sed -i 's/\[arch=amd64\] \[arch=amd64\]/[arch=amd64]/' /etc/apt/sources.list 2>/dev/null || true
+          # GitHub runners (Ubuntu 24.04) use DEB822 format in /etc/apt/sources.list.d/ubuntu.sources
+          # Default sources only serve amd64. We need to:
+          # 1. Restrict existing sources to amd64 only
+          # 2. Add ports.ubuntu.com for arm64 packages
+          
+          # Handle DEB822 format (.sources files) — add arch restriction
+          for f in /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$f" ] && ! grep -q "^Architectures:" "$f"; then
+              sudo sed -i '/^Types:/a Architectures: amd64' "$f"
+            fi
+          done
+          
+          # Handle traditional format (.list files) — add [arch=amd64]
+          for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+            [ -f "$f" ] && sudo sed -i 's/^deb \([^[]\)/deb [arch=amd64] \1/' "$f" 2>/dev/null || true
+          done
 
-          # Add ports.ubuntu.com for arm64 packages
-          cat << 'SOURCES' | sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null
+          # Add ports.ubuntu.com for arm64
+          cat << 'EOF' | sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
-          SOURCES
+          EOF
 
           sudo apt-get update
           sudo apt-get install -y \
