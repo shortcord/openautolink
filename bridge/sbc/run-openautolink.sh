@@ -19,6 +19,46 @@ ARGS=(
     --head-unit-name="${OAL_HEAD_UNIT_NAME:-OpenAutoLink}"
 )
 
+if [ -n "${OAL_AA_WIDTH_MARGIN:-}" ]; then
+    ARGS+=(--aa-width-margin="${OAL_AA_WIDTH_MARGIN}")
+fi
+if [ -n "${OAL_AA_HEIGHT_MARGIN:-}" ]; then
+    ARGS+=(--aa-height-margin="${OAL_AA_HEIGHT_MARGIN}")
+fi
+if [ -n "${OAL_AA_PIXEL_ASPECT_E4:-}" ]; then
+    ARGS+=(--aa-pixel-aspect-e4="${OAL_AA_PIXEL_ASPECT_E4}")
+fi
+if [ -n "${OAL_AA_REAL_DENSITY:-}" ]; then
+    ARGS+=(--aa-real-density="${OAL_AA_REAL_DENSITY}")
+fi
+if [ -n "${OAL_AA_VIEWING_DISTANCE:-}" ]; then
+    ARGS+=(--aa-viewing-distance="${OAL_AA_VIEWING_DISTANCE}")
+fi
+if [ -n "${OAL_AA_DECODER_ADDITIONAL_DEPTH:-}" ]; then
+    ARGS+=(--aa-decoder-additional-depth="${OAL_AA_DECODER_ADDITIONAL_DEPTH}")
+fi
+if [ -n "${OAL_AA_INIT_MARGINS:-}" ]; then
+    ARGS+=(--aa-init-margins="${OAL_AA_INIT_MARGINS}")
+fi
+if [ -n "${OAL_AA_INIT_CONTENT_INSETS:-}" ]; then
+    ARGS+=(--aa-init-content-insets="${OAL_AA_INIT_CONTENT_INSETS}")
+fi
+if [ -n "${OAL_AA_INIT_STABLE_INSETS:-}" ]; then
+    ARGS+=(--aa-init-stable-insets="${OAL_AA_INIT_STABLE_INSETS}")
+fi
+if [ -n "${OAL_AA_RUNTIME_DELAY_MS:-}" ]; then
+    ARGS+=(--aa-runtime-delay-ms="${OAL_AA_RUNTIME_DELAY_MS}")
+fi
+if [ -n "${OAL_AA_RUNTIME_MARGINS:-}" ]; then
+    ARGS+=(--aa-runtime-margins="${OAL_AA_RUNTIME_MARGINS}")
+fi
+if [ -n "${OAL_AA_RUNTIME_CONTENT_INSETS:-}" ]; then
+    ARGS+=(--aa-runtime-content-insets="${OAL_AA_RUNTIME_CONTENT_INSETS}")
+fi
+if [ -n "${OAL_AA_RUNTIME_STABLE_INSETS:-}" ]; then
+    ARGS+=(--aa-runtime-stable-insets="${OAL_AA_RUNTIME_STABLE_INSETS}")
+fi
+
 # Session mode derived from phone protocol
 case "${OAL_PHONE_PROTOCOL:-android-auto}" in
     android-auto) ARGS+=(--session-mode=aasdk-live) ;;

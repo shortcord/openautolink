@@ -8,6 +8,50 @@ namespace openautolink {
 // Configuration for the headless Android Auto head unit.
 // Shared between OalSession, LiveAasdkSession, and HeadlessAutoEntity.
 struct HeadlessConfig {
+    struct UiInsets {
+        uint32_t top = 0;
+        uint32_t bottom = 0;
+        uint32_t left = 0;
+        uint32_t right = 0;
+
+        bool any() const {
+            return top != 0 || bottom != 0 || left != 0 || right != 0;
+        }
+    };
+
+    struct UiConfigExperiment {
+        uint32_t width_margin = 0;
+        uint32_t height_margin = 0;
+        uint32_t pixel_aspect_ratio_e4 = 0;
+        uint32_t real_density = 0;
+        uint32_t viewing_distance = 0;
+        uint32_t decoder_additional_depth = 0;
+        UiInsets initial_margins;
+        UiInsets initial_content_insets;
+        UiInsets initial_stable_insets;
+        int runtime_delay_ms = 0;
+        UiInsets runtime_margins;
+        UiInsets runtime_content_insets;
+        UiInsets runtime_stable_insets;
+
+        bool has_video_overrides() const {
+            return width_margin != 0 || height_margin != 0 || pixel_aspect_ratio_e4 != 0 ||
+                   real_density != 0 || viewing_distance != 0 || decoder_additional_depth != 0;
+        }
+
+        bool has_initial_ui_config() const {
+            return initial_margins.any() || initial_content_insets.any() || initial_stable_insets.any();
+        }
+
+        bool has_runtime_ui_config() const {
+            return runtime_margins.any() || runtime_content_insets.any() || runtime_stable_insets.any();
+        }
+
+        bool enabled() const {
+            return has_video_overrides() || has_initial_ui_config() || has_runtime_ui_config();
+        }
+    };
+
     int video_width = 2400;
     int video_height = 960;
     int video_fps = 60;
@@ -30,6 +74,8 @@ struct HeadlessConfig {
     bool hide_clock = true;          // AAOS has its own clock — hide AA's
     bool hide_phone_signal = false;
     bool hide_battery_level = false;
+
+    UiConfigExperiment aa_ui_experiment;
 };
 
 } // namespace openautolink

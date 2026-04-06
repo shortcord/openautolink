@@ -703,6 +703,46 @@ void OalSession::handle_config_update(const std::string& json) {
         infra_changed = true;
     }
 
+    // AA safe area insets — format: "top,bottom,left,right"
+    auto parse_insets = [](const std::string& str, HeadlessConfig::UiInsets& out) -> bool {
+        unsigned long parsed[4] = {};
+        size_t start = 0;
+        for (int i = 0; i < 4; ++i) {
+            const size_t end = str.find(',', start);
+            const bool last = (i == 3);
+            if ((end == std::string::npos) != last) return false;
+            try {
+                parsed[i] = std::stoul(str.substr(start, last ? std::string::npos : end - start));
+            } catch (...) { return false; }
+            if (!last) start = end + 1;
+        }
+        out.top = static_cast<uint32_t>(parsed[0]);
+        out.bottom = static_cast<uint32_t>(parsed[1]);
+        out.left = static_cast<uint32_t>(parsed[2]);
+        out.right = static_cast<uint32_t>(parsed[3]);
+        return true;
+    };
+
+    std::string stable_insets = oal_json_extract_string(json, "aa_stable_insets");
+    if (!stable_insets.empty()) {
+        HeadlessConfig::UiInsets insets;
+        if (parse_insets(stable_insets, insets)) {
+            config_.aa_ui_experiment.initial_stable_insets = insets;
+            config_changed = true;
+            std::cerr << "[OAL] safe area insets updated: " << stable_insets << std::endl;
+        }
+    }
+
+    std::string content_insets = oal_json_extract_string(json, "aa_content_insets");
+    if (!content_insets.empty()) {
+        HeadlessConfig::UiInsets insets;
+        if (parse_insets(content_insets, insets)) {
+            config_.aa_ui_experiment.initial_content_insets = insets;
+            config_changed = true;
+            std::cerr << "[OAL] content insets updated: " << content_insets << std::endl;
+        }
+    }
+
     std::string bt_mac_val = oal_json_extract_string(json, "bt_mac");
     if (!bt_mac_val.empty() && bt_mac_val != config_.bt_mac) {
         config_.bt_mac = bt_mac_val;
@@ -759,6 +799,10 @@ void OalSession::handle_config_update(const std::string& json) {
             env_update += "sed -i 's/^OAL_HEAD_UNIT_NAME=.*/OAL_HEAD_UNIT_NAME=" + sanitize(head_unit) + "/' /etc/openautolink.env 2>/dev/null\n";
         if (!bt_mac_val.empty())
             env_update += "sed -i 's/^OAL_BT_MAC=.*/OAL_BT_MAC=" + sanitize(bt_mac_val) + "/' /etc/openautolink.env 2>/dev/null\n";
+        if (!stable_insets.empty())
+            env_update += "sed -i 's/^OAL_AA_INIT_STABLE_INSETS=.*/OAL_AA_INIT_STABLE_INSETS=" + sanitize(stable_insets) + "/' /etc/openautolink.env 2>/dev/null\n";
+        if (!content_insets.empty())
+            env_update += "sed -i 's/^OAL_AA_INIT_CONTENT_INSETS=.*/OAL_AA_INIT_CONTENT_INSETS=" + sanitize(content_insets) + "/' /etc/openautolink.env 2>/dev/null\n";
         if (!env_update.empty())
             system(env_update.c_str());
 

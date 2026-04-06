@@ -67,6 +67,18 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val OVERLAY_PHONE_SWITCH_BUTTON = booleanPreferencesKey("overlay_phone_switch_button")
         val DEFAULT_PHONE_MAC = stringPreferencesKey("default_phone_mac")
 
+        // AA safe area (stable) insets — maps render, UI stays inside
+        val SAFE_AREA_TOP = intPreferencesKey("safe_area_top")
+        val SAFE_AREA_BOTTOM = intPreferencesKey("safe_area_bottom")
+        val SAFE_AREA_LEFT = intPreferencesKey("safe_area_left")
+        val SAFE_AREA_RIGHT = intPreferencesKey("safe_area_right")
+
+        // AA content insets — hard cutoff, nothing renders outside
+        val CONTENT_INSET_TOP = intPreferencesKey("content_inset_top")
+        val CONTENT_INSET_BOTTOM = intPreferencesKey("content_inset_bottom")
+        val CONTENT_INSET_LEFT = intPreferencesKey("content_inset_left")
+        val CONTENT_INSET_RIGHT = intPreferencesKey("content_inset_right")
+
         // Custom viewport
         val CUSTOM_VIEWPORT_WIDTH = intPreferencesKey("custom_viewport_width")
         val CUSTOM_VIEWPORT_HEIGHT = intPreferencesKey("custom_viewport_height")
@@ -104,6 +116,14 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_OVERLAY_STATS_BUTTON = true
         const val DEFAULT_OVERLAY_PHONE_SWITCH_BUTTON = true
         const val DEFAULT_DEFAULT_PHONE_MAC = ""
+        const val DEFAULT_SAFE_AREA_TOP = 0
+        const val DEFAULT_SAFE_AREA_BOTTOM = 0
+        const val DEFAULT_SAFE_AREA_LEFT = 0
+        const val DEFAULT_SAFE_AREA_RIGHT = 110 // 2024 Blazer EV curved right bezel
+        const val DEFAULT_CONTENT_INSET_TOP = 0
+        const val DEFAULT_CONTENT_INSET_BOTTOM = 0
+        const val DEFAULT_CONTENT_INSET_LEFT = 0
+        const val DEFAULT_CONTENT_INSET_RIGHT = 0
         const val DEFAULT_CUSTOM_VIEWPORT_WIDTH = 0 // 0 = use full usable width
         const val DEFAULT_CUSTOM_VIEWPORT_HEIGHT = 0 // 0 = use full usable height
         const val DEFAULT_VIEWPORT_ASPECT_RATIO_LOCKED = true
@@ -235,6 +255,38 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     val defaultPhoneMac: Flow<String> = dataStore.data.map { prefs ->
         prefs[DEFAULT_PHONE_MAC] ?: DEFAULT_DEFAULT_PHONE_MAC
+    }
+
+    val safeAreaTop: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[SAFE_AREA_TOP] ?: DEFAULT_SAFE_AREA_TOP
+    }
+
+    val safeAreaBottom: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[SAFE_AREA_BOTTOM] ?: DEFAULT_SAFE_AREA_BOTTOM
+    }
+
+    val safeAreaLeft: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[SAFE_AREA_LEFT] ?: DEFAULT_SAFE_AREA_LEFT
+    }
+
+    val safeAreaRight: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[SAFE_AREA_RIGHT] ?: DEFAULT_SAFE_AREA_RIGHT
+    }
+
+    val contentInsetTop: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[CONTENT_INSET_TOP] ?: DEFAULT_CONTENT_INSET_TOP
+    }
+
+    val contentInsetBottom: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[CONTENT_INSET_BOTTOM] ?: DEFAULT_CONTENT_INSET_BOTTOM
+    }
+
+    val contentInsetLeft: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[CONTENT_INSET_LEFT] ?: DEFAULT_CONTENT_INSET_LEFT
+    }
+
+    val contentInsetRight: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[CONTENT_INSET_RIGHT] ?: DEFAULT_CONTENT_INSET_RIGHT
     }
 
     val customViewportWidth: Flow<Int> = dataStore.data.map { prefs ->
@@ -375,6 +427,38 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setDefaultPhoneMac(mac: String) {
         dataStore.edit { it[DEFAULT_PHONE_MAC] = mac }
+    }
+
+    suspend fun setSafeAreaTop(value: Int) {
+        dataStore.edit { it[SAFE_AREA_TOP] = value }
+    }
+
+    suspend fun setSafeAreaBottom(value: Int) {
+        dataStore.edit { it[SAFE_AREA_BOTTOM] = value }
+    }
+
+    suspend fun setSafeAreaLeft(value: Int) {
+        dataStore.edit { it[SAFE_AREA_LEFT] = value }
+    }
+
+    suspend fun setSafeAreaRight(value: Int) {
+        dataStore.edit { it[SAFE_AREA_RIGHT] = value }
+    }
+
+    suspend fun setContentInsetTop(value: Int) {
+        dataStore.edit { it[CONTENT_INSET_TOP] = value }
+    }
+
+    suspend fun setContentInsetBottom(value: Int) {
+        dataStore.edit { it[CONTENT_INSET_BOTTOM] = value }
+    }
+
+    suspend fun setContentInsetLeft(value: Int) {
+        dataStore.edit { it[CONTENT_INSET_LEFT] = value }
+    }
+
+    suspend fun setContentInsetRight(value: Int) {
+        dataStore.edit { it[CONTENT_INSET_RIGHT] = value }
     }
 
     suspend fun setCustomViewportWidth(width: Int) {

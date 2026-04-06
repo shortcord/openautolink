@@ -131,6 +131,8 @@ fun SettingsScreen(
     onBack: () -> Unit = {},
     onNavigateToDiagnostics: () -> Unit = {},
     onNavigateToViewportEditor: () -> Unit = {},
+    onNavigateToSafeAreaEditor: () -> Unit = {},
+    onNavigateToContentInsetEditor: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val updateStatus by viewModel.updateStatus.collectAsStateWithLifecycle()
@@ -211,7 +213,12 @@ fun SettingsScreen(
                         SettingsTab.CONNECTION -> ConnectionTab(viewModel, uiState)
                         SettingsTab.PHONES -> PhonesTab(viewModel, uiState)
                         SettingsTab.BRIDGE -> BridgeTab(viewModel, uiState)
-                        SettingsTab.DISPLAY -> DisplayTab(viewModel, uiState, onNavigateToViewportEditor)
+                        SettingsTab.DISPLAY -> DisplayTab(
+                            viewModel, uiState,
+                            onNavigateToViewportEditor,
+                            onNavigateToSafeAreaEditor,
+                            onNavigateToContentInsetEditor,
+                        )
                         SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
                         SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
                         SettingsTab.UPDATES -> UpdatesTab(viewModel, uiState, updateStatus)
@@ -781,6 +788,8 @@ private fun DisplayTab(
     viewModel: SettingsViewModel,
     uiState: SettingsUiState,
     onNavigateToViewportEditor: () -> Unit,
+    onNavigateToSafeAreaEditor: () -> Unit,
+    onNavigateToContentInsetEditor: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -853,6 +862,112 @@ private fun DisplayTab(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // --- AA Safe Area ---
+        SectionHeader("AA Safe Area")
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "Tells Android Auto where to keep interactive UI (buttons, cards, text). " +
+                    "Maps and backgrounds still render edge-to-edge.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(bottom = 12.dp)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(0.7f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilledTonalButton(
+                onClick = onNavigateToSafeAreaEditor,
+                modifier = Modifier.testTag("editSafeAreaButton"),
+            ) {
+                Text("Edit Safe Area")
+            }
+
+            val hasStable = uiState.safeAreaTop > 0 || uiState.safeAreaBottom > 0 ||
+                    uiState.safeAreaLeft > 0 || uiState.safeAreaRight > 0
+            if (hasStable) {
+                Text(
+                    text = formatInsetLabel(
+                        uiState.safeAreaTop, uiState.safeAreaBottom,
+                        uiState.safeAreaLeft, uiState.safeAreaRight
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else {
+                Text(
+                    text = "Not set",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // --- AA Content Insets ---
+        SectionHeader("AA Content Insets")
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "Hard cutoff — nothing renders outside these boundaries (maps stop too). " +
+                    "Use only if you need a black gap, not just a safe area.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(bottom = 12.dp)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(0.7f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilledTonalButton(
+                onClick = onNavigateToContentInsetEditor,
+                modifier = Modifier.testTag("editContentInsetButton"),
+            ) {
+                Text("Edit Content Insets")
+            }
+
+            val hasContent = uiState.contentInsetTop > 0 || uiState.contentInsetBottom > 0 ||
+                    uiState.contentInsetLeft > 0 || uiState.contentInsetRight > 0
+            if (hasContent) {
+                Text(
+                    text = formatInsetLabel(
+                        uiState.contentInsetTop, uiState.contentInsetBottom,
+                        uiState.contentInsetLeft, uiState.contentInsetRight
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else {
+                Text(
+                    text = "Not set",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
@@ -2068,6 +2183,18 @@ private fun SectionHeader(title: String) {
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(vertical = 8.dp)
     )
+}
+
+/**
+ * Format inset values as readable text, showing only non-zero sides.
+ */
+private fun formatInsetLabel(top: Int, bottom: Int, left: Int, right: Int): String {
+    val parts = mutableListOf<String>()
+    if (top > 0) parts += "Top: ${top}px"
+    if (bottom > 0) parts += "Bottom: ${bottom}px"
+    if (left > 0) parts += "Left: ${left}px"
+    if (right > 0) parts += "Right: ${right}px"
+    return parts.joinToString(", ")
 }
 
 private val logLevelOptions = listOf("DEBUG", "INFO", "WARN", "ERROR")

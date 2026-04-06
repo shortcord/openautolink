@@ -1,0 +1,1131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenAutoLink — Safe Area Editor Prototype</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #121212;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  .container {
+    display: flex;
+    height: 100vh;
+  }
+
+  /* Left panel: controls */
+  .controls {
+    width: 360px;
+    min-width: 360px;
+    padding: 24px;
+    background: #1e1e1e;
+    border-right: 1px solid #333;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .controls h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: #64FFDA;
+    margin-bottom: 4px;
+  }
+
+  .controls .subtitle {
+    font-size: 13px;
+    color: #888;
+    line-height: 1.4;
+    margin-bottom: 8px;
+  }
+
+  .section-header {
+    font-size: 14px;
+    font-weight: 600;
+    color: #BB86FC;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #333;
+  }
+
+  .inset-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .inset-control {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .inset-control label {
+    font-size: 12px;
+    color: #aaa;
+    font-weight: 500;
+  }
+
+  .inset-control .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .inset-control input[type="range"] {
+    flex: 1;
+    accent-color: #64FFDA;
+    height: 4px;
+  }
+
+  .inset-control .value {
+    font-size: 14px;
+    font-weight: 600;
+    color: #64FFDA;
+    min-width: 36px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .inset-control input[type="number"] {
+    width: 70px;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #e0e0e0;
+    padding: 6px 8px;
+    font-size: 14px;
+    text-align: center;
+  }
+
+  .inset-control input[type="number"]:focus {
+    outline: none;
+    border-color: #64FFDA;
+  }
+
+  .preset-btn {
+    padding: 8px 14px;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #e0e0e0;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+
+  .preset-btn:hover {
+    background: #333;
+    border-color: #64FFDA;
+  }
+
+  .preset-btn.active {
+    background: #1a3a35;
+    border-color: #64FFDA;
+    color: #64FFDA;
+  }
+
+  .preset-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+  }
+
+  .toggle-row label {
+    font-size: 13px;
+    color: #ccc;
+  }
+
+  .toggle-row input[type="checkbox"] {
+    accent-color: #64FFDA;
+    width: 18px;
+    height: 18px;
+  }
+
+  .env-output {
+    background: #0d0d0d;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 12px;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px;
+    color: #64FFDA;
+    word-break: break-all;
+    line-height: 1.6;
+  }
+
+  .copy-btn {
+    padding: 6px 12px;
+    background: #64FFDA;
+    color: #121212;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .copy-btn:hover { background: #4bcfb0; }
+
+  /* Right panel: display preview */
+  .preview {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    position: relative;
+    background: #0a0a0a;
+  }
+
+  .screen-wrapper {
+    position: relative;
+    width: 100%;
+    max-width: 1100px;
+    aspect-ratio: 2914 / 1134;
+  }
+
+  /* The "screen" - Blazer EV shape with curved right edge */
+  .screen {
+    position: absolute;
+    inset: 0;
+    background: #1a1a2e;
+    overflow: hidden;
+    /* Approximate the Blazer EV curved right edge using clip-path */
+    clip-path: polygon(
+      0% 0%,
+      93% 0%,
+      96% 2%,
+      98% 6%,
+      99% 12%,
+      99.5% 20%,
+      100% 35%,
+      100% 65%,
+      99.5% 80%,
+      99% 88%,
+      98% 94%,
+      96% 98%,
+      93% 100%,
+      0% 100%
+    );
+    border-radius: 12px 0 0 12px;
+  }
+
+  /* Simulated AA map background */
+  .aa-map {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(circle at 30% 50%, #1a2940 0%, transparent 60%),
+      radial-gradient(circle at 70% 30%, #1a3020 0%, transparent 50%),
+      linear-gradient(135deg, #0d1520 0%, #151a25 50%, #101820 100%);
+  }
+
+  /* Grid lines to simulate map roads */
+  .aa-map::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(0deg, transparent 49%, #2a3545 49%, #2a3545 51%, transparent 51%),
+      linear-gradient(90deg, transparent 49%, #2a3545 49%, #2a3545 51%, transparent 51%),
+      linear-gradient(45deg, transparent 48%, #253040 48%, #253040 52%, transparent 52%);
+    background-size: 80px 80px, 100px 100px, 120px 120px;
+    opacity: 0.4;
+  }
+
+  /* Simulated AA UI elements */
+  .aa-nav-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 12%;
+    background: rgba(20, 20, 30, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 5%;
+    z-index: 5;
+  }
+
+  .aa-nav-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #3a3a4a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+  }
+
+  .aa-status-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 8%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 4%;
+    z-index: 5;
+  }
+
+  .aa-status-item {
+    font-size: 11px;
+    color: #888;
+    margin-left: 12px;
+  }
+
+  /* "Now Playing" card on right side */
+  .aa-card {
+    position: absolute;
+    top: 15%;
+    right: 4%;
+    width: 22%;
+    background: rgba(30, 30, 45, 0.92);
+    border-radius: 12px;
+    padding: 12px;
+    z-index: 5;
+  }
+
+  .aa-card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e0e0e0;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .aa-card-subtitle {
+    font-size: 11px;
+    color: #888;
+  }
+
+  /* Suggestion chips */
+  .aa-chip {
+    position: absolute;
+    bottom: 16%;
+    background: rgba(30, 30, 45, 0.92);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 12px;
+    color: #ccc;
+    z-index: 5;
+    white-space: nowrap;
+  }
+
+  .aa-chip.chip1 { right: 25%; }
+  .aa-chip.chip2 { right: 4%; }
+
+  /* Safe area overlay lines */
+  .safe-area-line {
+    position: absolute;
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  .safe-area-line.top {
+    left: 0; right: 0;
+    height: 2px;
+    background: repeating-linear-gradient(90deg, #64FFDA 0, #64FFDA 8px, transparent 8px, transparent 16px);
+    box-shadow: 0 0 8px rgba(100, 255, 218, 0.4);
+  }
+
+  .safe-area-line.bottom {
+    left: 0; right: 0;
+    height: 2px;
+    background: repeating-linear-gradient(90deg, #64FFDA 0, #64FFDA 8px, transparent 8px, transparent 16px);
+    box-shadow: 0 0 8px rgba(100, 255, 218, 0.4);
+  }
+
+  .safe-area-line.left {
+    top: 0; bottom: 0;
+    width: 2px;
+    background: repeating-linear-gradient(0deg, #64FFDA 0, #64FFDA 8px, transparent 8px, transparent 16px);
+    box-shadow: 0 0 8px rgba(100, 255, 218, 0.4);
+  }
+
+  .safe-area-line.right {
+    top: 0; bottom: 0;
+    width: 2px;
+    background: repeating-linear-gradient(0deg, #64FFDA 0, #64FFDA 8px, transparent 8px, transparent 16px);
+    box-shadow: 0 0 8px rgba(100, 255, 218, 0.4);
+  }
+
+  /* Danger zone shading (outside safe area) */
+  .danger-zone {
+    position: absolute;
+    z-index: 8;
+    background: rgba(255, 50, 50, 0.08);
+    pointer-events: none;
+    transition: all 0.15s ease;
+  }
+
+  /* Dimension labels on the lines */
+  .dim-label {
+    position: absolute;
+    z-index: 11;
+    background: rgba(100, 255, 218, 0.15);
+    color: #64FFDA;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Cascadia Code', monospace;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* Bezel shape indicator */
+  .bezel-indicator {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 8%;
+    z-index: 9;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent 0%, rgba(255, 100, 50, 0.06) 50%, rgba(255, 100, 50, 0.15) 100%);
+  }
+
+  .bezel-label {
+    position: absolute;
+    right: 2%;
+    top: 50%;
+    transform: translateY(-50%) rotate(-90deg);
+    font-size: 10px;
+    color: rgba(255, 100, 50, 0.6);
+    white-space: nowrap;
+    z-index: 12;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* Screen outline for shape visualization */
+  .screen-outline {
+    position: absolute;
+    inset: -2px;
+    border: 2px solid #333;
+    clip-path: polygon(
+      0% 0%,
+      93% 0%,
+      96% 2%,
+      98% 6%,
+      99% 12%,
+      99.5% 20%,
+      100% 35%,
+      100% 65%,
+      99.5% 80%,
+      99% 88%,
+      98% 94%,
+      96% 98%,
+      93% 100%,
+      0% 100%
+    );
+    border-radius: 12px 0 0 12px;
+    pointer-events: none;
+    z-index: 15;
+  }
+
+  /* Info tooltip */
+  .info-tip {
+    font-size: 12px;
+    color: #777;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 8px 12px;
+    line-height: 1.5;
+  }
+
+  .info-tip strong { color: #64FFDA; }
+
+  /* Animated pulse on the safe area lines */
+  @keyframes pulse-line {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+
+  .safe-area-line {
+    animation: pulse-line 2s ease-in-out infinite;
+  }
+
+  /* Drag handle overlays on the screen */
+  .drag-handle {
+    position: absolute;
+    z-index: 20;
+    cursor: pointer;
+  }
+
+  .drag-handle.horizontal {
+    left: 10%;
+    right: 10%;
+    height: 20px;
+    cursor: ns-resize;
+  }
+
+  .drag-handle.vertical {
+    top: 10%;
+    bottom: 10%;
+    width: 20px;
+    cursor: ew-resize;
+  }
+
+  .drag-handle:hover .safe-area-line {
+    animation: none;
+    opacity: 1;
+  }
+
+  .drag-handle .handle-dot {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #64FFDA;
+    box-shadow: 0 0 12px rgba(100, 255, 218, 0.6);
+    transition: transform 0.1s;
+  }
+
+  .drag-handle:hover .handle-dot {
+    transform: scale(1.4);
+  }
+
+  .drag-handle.horizontal .handle-dot {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+
+  .drag-handle.vertical .handle-dot {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+
+  /* Mode selector tabs */
+  .mode-tabs {
+    display: flex;
+    gap: 2px;
+    background: #2a2a2a;
+    border-radius: 8px;
+    padding: 2px;
+  }
+
+  .mode-tab {
+    flex: 1;
+    padding: 8px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 500;
+    color: #888;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .mode-tab.active {
+    background: #333;
+    color: #64FFDA;
+  }
+
+  .mode-tab:hover:not(.active) {
+    color: #ccc;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- Controls Panel -->
+  <div class="controls">
+    <div>
+      <h1>AA Safe Area</h1>
+      <div class="subtitle">
+        Define where Android Auto places interactive UI (buttons, cards, text).
+        Maps and backgrounds render edge-to-edge. Only UI elements respect the safe area.
+      </div>
+    </div>
+
+    <!-- Inset type toggle -->
+    <div>
+      <div class="section-header">Inset Type</div>
+      <div style="margin-top: 8px;">
+        <div class="mode-tabs">
+          <button class="mode-tab active" onclick="setMode('stable')">Safe Area</button>
+          <button class="mode-tab" onclick="setMode('content')">Hard Cutoff</button>
+        </div>
+        <div class="info-tip" style="margin-top: 8px;" id="modeTip">
+          <strong>Safe Area:</strong> Maps render everywhere. Buttons and text stay inside the lines.
+        </div>
+      </div>
+    </div>
+
+    <!-- Presets -->
+    <div>
+      <div class="section-header">Vehicle Presets</div>
+      <div class="preset-row" style="margin-top: 8px;">
+        <button class="preset-btn" onclick="applyPreset('none')">None</button>
+        <button class="preset-btn active" onclick="applyPreset('blazer-ev')" id="presetBlazer">Blazer EV</button>
+        <button class="preset-btn" onclick="applyPreset('equinox-ev')">Equinox EV</button>
+        <button class="preset-btn" onclick="applyPreset('custom')">Custom</button>
+      </div>
+    </div>
+
+    <!-- Inset sliders -->
+    <div>
+      <div class="section-header">Inset Values (video pixels)</div>
+      <div class="inset-group" style="margin-top: 8px;">
+        <div class="inset-control">
+          <label>Top</label>
+          <div class="slider-row">
+            <input type="range" min="0" max="200" value="0" id="insetTop" oninput="updateFromSlider()">
+            <input type="number" min="0" max="500" value="0" id="insetTopNum" onchange="updateFromNumber()">
+          </div>
+        </div>
+        <div class="inset-control">
+          <label>Bottom</label>
+          <div class="slider-row">
+            <input type="range" min="0" max="200" value="0" id="insetBottom" oninput="updateFromSlider()">
+            <input type="number" min="0" max="500" value="0" id="insetBottomNum" onchange="updateFromNumber()">
+          </div>
+        </div>
+        <div class="inset-control">
+          <label>Left</label>
+          <div class="slider-row">
+            <input type="range" min="0" max="400" value="0" id="insetLeft" oninput="updateFromSlider()">
+            <input type="number" min="0" max="500" value="0" id="insetLeftNum" onchange="updateFromNumber()">
+          </div>
+        </div>
+        <div class="inset-control">
+          <label>Right</label>
+          <div class="slider-row">
+            <input type="range" min="0" max="400" value="110" id="insetRight" oninput="updateFromSlider()">
+            <input type="number" min="0" max="500" value="110" id="insetRightNum" onchange="updateFromNumber()">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Show/hide toggles -->
+    <div>
+      <div class="section-header">Preview Options</div>
+      <div class="toggle-row">
+        <input type="checkbox" id="showLines" checked onchange="updatePreview()">
+        <label for="showLines">Show safe area lines</label>
+      </div>
+      <div class="toggle-row">
+        <input type="checkbox" id="showDanger" checked onchange="updatePreview()">
+        <label for="showDanger">Shade danger zones</label>
+      </div>
+      <div class="toggle-row">
+        <input type="checkbox" id="showBezel" checked onchange="updatePreview()">
+        <label for="showBezel">Show bezel shape hint</label>
+      </div>
+      <div class="toggle-row">
+        <input type="checkbox" id="showAaUi" checked onchange="updatePreview()">
+        <label for="showAaUi">Show simulated AA UI</label>
+      </div>
+      <div class="toggle-row">
+        <input type="checkbox" id="animateUi" onchange="toggleAnimation()">
+        <label for="animateUi">Animate UI repositioning</label>
+      </div>
+    </div>
+
+    <!-- Env output -->
+    <div>
+      <div class="section-header">Bridge Config</div>
+      <div class="env-output" id="envOutput">
+        OAL_AA_INIT_STABLE_INSETS=0,0,0,110
+      </div>
+      <div style="display: flex; gap: 8px; margin-top: 8px;">
+        <button class="copy-btn" onclick="copyEnv()">Copy to Clipboard</button>
+      </div>
+    </div>
+
+    <div class="info-tip" style="margin-top: auto;">
+      <strong>How this works:</strong> The bridge sends these values to Android Auto during
+      connection setup. The phone uses them to position its UI within the video frame.
+      Maps and album art still fill the entire frame — only interactive elements move inward.<br><br>
+      <strong>Drag the lines</strong> on the screen preview, or use the sliders.
+      Changes require a bridge restart to take effect.
+    </div>
+  </div>
+
+  <!-- Screen Preview -->
+  <div class="preview">
+    <div class="screen-wrapper" id="screenWrapper">
+      <div class="screen" id="screen">
+        <!-- Simulated AA content -->
+        <div class="aa-map" id="aaMap"></div>
+
+        <!-- AA UI elements (these will move based on insets) -->
+        <div class="aa-status-bar" id="aaStatusBar">
+          <span class="aa-status-item">🔋 87%</span>
+          <span class="aa-status-item">📶 LTE</span>
+          <span class="aa-status-item">2:45 PM</span>
+        </div>
+
+        <div class="aa-card" id="aaCard">
+          <div class="aa-card-title">🎵 Take Me Home, Country Roads</div>
+          <div class="aa-card-subtitle">John Denver</div>
+        </div>
+
+        <div class="aa-chip chip1" id="aaChip1">🏠 Home — 12 min</div>
+        <div class="aa-chip chip2" id="aaChip2">🏢 Work — 28 min</div>
+
+        <div class="aa-nav-bar" id="aaNavBar">
+          <div class="aa-nav-icon">🗺️</div>
+          <div class="aa-nav-icon">📱</div>
+          <div class="aa-nav-icon">🎵</div>
+          <div class="aa-nav-icon">🔔</div>
+          <div class="aa-nav-icon">⚙️</div>
+        </div>
+
+        <!-- Safe area lines -->
+        <div class="safe-area-line top" id="lineTop" style="top: 0;"></div>
+        <div class="safe-area-line bottom" id="lineBottom" style="bottom: 0;"></div>
+        <div class="safe-area-line left" id="lineLeft" style="left: 0;"></div>
+        <div class="safe-area-line right" id="lineRight" style="right: 0;"></div>
+
+        <!-- Dimension labels -->
+        <div class="dim-label" id="labelTop" style="display: none;">T: 0px</div>
+        <div class="dim-label" id="labelBottom" style="display: none;">B: 0px</div>
+        <div class="dim-label" id="labelLeft" style="display: none;">L: 0px</div>
+        <div class="dim-label" id="labelRight" style="display: none;">R: 110px</div>
+
+        <!-- Danger zones (shaded areas outside safe area) -->
+        <div class="danger-zone" id="dangerTop" style="top:0; left:0; right:0; height:0;"></div>
+        <div class="danger-zone" id="dangerBottom" style="bottom:0; left:0; right:0; height:0;"></div>
+        <div class="danger-zone" id="dangerLeft" style="top:0; bottom:0; left:0; width:0;"></div>
+        <div class="danger-zone" id="dangerRight" style="top:0; bottom:0; right:0; width:0;"></div>
+
+        <!-- Bezel shape indicator -->
+        <div class="bezel-indicator" id="bezelIndicator"></div>
+        <div class="bezel-label" id="bezelLabel">CURVED BEZEL</div>
+
+        <!-- Draggable handles -->
+        <div class="drag-handle horizontal" id="dragTop" style="top: -10px;">
+          <div class="handle-dot"></div>
+        </div>
+        <div class="drag-handle horizontal" id="dragBottom" style="bottom: -10px;">
+          <div class="handle-dot"></div>
+        </div>
+        <div class="drag-handle vertical" id="dragLeft" style="left: -10px;">
+          <div class="handle-dot"></div>
+        </div>
+        <div class="drag-handle vertical" id="dragRight" style="right: -10px;">
+          <div class="handle-dot"></div>
+        </div>
+      </div>
+
+      <div class="screen-outline"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Video coordinate space (what the phone renders at)
+  const VIDEO_W = 1920;
+  const VIDEO_H = 1080;
+
+  let mode = 'stable'; // 'stable' or 'content'
+  let animationFrame = null;
+
+  const presets = {
+    'none': { top: 0, bottom: 0, left: 0, right: 0 },
+    'blazer-ev': { top: 0, bottom: 0, left: 0, right: 110 },
+    'equinox-ev': { top: 0, bottom: 0, left: 0, right: 80 },  // guess — needs testing
+    'custom': null,  // keeps current values
+  };
+
+  function getInsets() {
+    return {
+      top: parseInt(document.getElementById('insetTop').value) || 0,
+      bottom: parseInt(document.getElementById('insetBottom').value) || 0,
+      left: parseInt(document.getElementById('insetLeft').value) || 0,
+      right: parseInt(document.getElementById('insetRight').value) || 0,
+    };
+  }
+
+  function setInsets(t, b, l, r) {
+    document.getElementById('insetTop').value = t;
+    document.getElementById('insetTopNum').value = t;
+    document.getElementById('insetBottom').value = b;
+    document.getElementById('insetBottomNum').value = b;
+    document.getElementById('insetLeft').value = l;
+    document.getElementById('insetLeftNum').value = l;
+    document.getElementById('insetRight').value = r;
+    document.getElementById('insetRightNum').value = r;
+    updatePreview();
+  }
+
+  function updateFromSlider() {
+    const ids = ['Top', 'Bottom', 'Left', 'Right'];
+    ids.forEach(id => {
+      document.getElementById('inset' + id + 'Num').value =
+        document.getElementById('inset' + id).value;
+    });
+    updatePreview();
+    highlightPreset();
+  }
+
+  function updateFromNumber() {
+    const ids = ['Top', 'Bottom', 'Left', 'Right'];
+    ids.forEach(id => {
+      const val = parseInt(document.getElementById('inset' + id + 'Num').value) || 0;
+      document.getElementById('inset' + id).value = Math.min(val, parseInt(document.getElementById('inset' + id).max));
+    });
+    updatePreview();
+    highlightPreset();
+  }
+
+  function highlightPreset() {
+    const insets = getInsets();
+    document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+    for (const [name, values] of Object.entries(presets)) {
+      if (!values) continue;
+      if (values.top === insets.top && values.bottom === insets.bottom &&
+          values.left === insets.left && values.right === insets.right) {
+        const btn = document.querySelector(`.preset-btn[onclick="applyPreset('${name}')"]`);
+        if (btn) btn.classList.add('active');
+        return;
+      }
+    }
+    // If no preset matches, highlight "Custom"
+    document.querySelector(`.preset-btn[onclick="applyPreset('custom')"]`).classList.add('active');
+  }
+
+  function applyPreset(name) {
+    const values = presets[name];
+    if (values) {
+      setInsets(values.top, values.bottom, values.left, values.right);
+    }
+    document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+    const btn = document.querySelector(`.preset-btn[onclick="applyPreset('${name}')"]`);
+    if (btn) btn.classList.add('active');
+  }
+
+  function setMode(m) {
+    mode = m;
+    document.querySelectorAll('.mode-tab').forEach(tab => tab.classList.remove('active'));
+    document.querySelectorAll('.mode-tab')[m === 'stable' ? 0 : 1].classList.add('active');
+    document.getElementById('modeTip').innerHTML = m === 'stable'
+      ? '<strong>Safe Area:</strong> Maps render everywhere. Buttons and text stay inside the lines.'
+      : '<strong>Hard Cutoff:</strong> Nothing renders outside the lines. Black bars appear.';
+    updatePreview();
+  }
+
+  function updatePreview() {
+    const insets = getInsets();
+    const screen = document.getElementById('screen');
+    const rect = screen.getBoundingClientRect();
+
+    // Convert video pixels to screen percentages
+    const topPct = (insets.top / VIDEO_H) * 100;
+    const bottomPct = (insets.bottom / VIDEO_H) * 100;
+    const leftPct = (insets.left / VIDEO_W) * 100;
+    const rightPct = (insets.right / VIDEO_W) * 100;
+
+    const showLines = document.getElementById('showLines').checked;
+    const showDanger = document.getElementById('showDanger').checked;
+    const showBezel = document.getElementById('showBezel').checked;
+    const showAaUi = document.getElementById('showAaUi').checked;
+
+    // Lines
+    const lineVis = showLines ? 'block' : 'none';
+    document.getElementById('lineTop').style.display = insets.top > 0 ? lineVis : 'none';
+    document.getElementById('lineTop').style.top = topPct + '%';
+    document.getElementById('lineBottom').style.display = insets.bottom > 0 ? lineVis : 'none';
+    document.getElementById('lineBottom').style.bottom = bottomPct + '%';
+    document.getElementById('lineLeft').style.display = insets.left > 0 ? lineVis : 'none';
+    document.getElementById('lineLeft').style.left = leftPct + '%';
+    document.getElementById('lineRight').style.display = insets.right > 0 ? lineVis : 'none';
+    document.getElementById('lineRight').style.right = rightPct + '%';
+
+    // Dimension labels
+    const labelTop = document.getElementById('labelTop');
+    const labelBottom = document.getElementById('labelBottom');
+    const labelLeft = document.getElementById('labelLeft');
+    const labelRight = document.getElementById('labelRight');
+
+    labelTop.style.display = (insets.top > 0 && showLines) ? 'block' : 'none';
+    labelTop.style.top = topPct + '%';
+    labelTop.style.left = '50%';
+    labelTop.style.transform = 'translate(-50%, -100%)';
+    labelTop.textContent = `↑ ${insets.top}px`;
+
+    labelBottom.style.display = (insets.bottom > 0 && showLines) ? 'block' : 'none';
+    labelBottom.style.bottom = bottomPct + '%';
+    labelBottom.style.left = '50%';
+    labelBottom.style.transform = 'translate(-50%, 100%)';
+    labelBottom.textContent = `↓ ${insets.bottom}px`;
+
+    labelLeft.style.display = (insets.left > 0 && showLines) ? 'block' : 'none';
+    labelLeft.style.left = leftPct + '%';
+    labelLeft.style.top = '50%';
+    labelLeft.style.transform = 'translate(-100%, -50%)';
+    labelLeft.textContent = `← ${insets.left}px`;
+
+    labelRight.style.display = (insets.right > 0 && showLines) ? 'block' : 'none';
+    labelRight.style.right = rightPct + '%';
+    labelRight.style.top = '50%';
+    labelRight.style.transform = 'translate(100%, -50%)';
+    labelRight.textContent = `${insets.right}px →`;
+
+    // Danger zones
+    const dangerColor = mode === 'content'
+      ? 'rgba(255, 50, 50, 0.2)'
+      : 'rgba(255, 160, 50, 0.08)';
+
+    ['dangerTop', 'dangerBottom', 'dangerLeft', 'dangerRight'].forEach(id => {
+      document.getElementById(id).style.display = showDanger ? 'block' : 'none';
+      document.getElementById(id).style.background = dangerColor;
+    });
+
+    document.getElementById('dangerTop').style.height = topPct + '%';
+    document.getElementById('dangerBottom').style.height = bottomPct + '%';
+    document.getElementById('dangerLeft').style.width = leftPct + '%';
+    document.getElementById('dangerRight').style.width = rightPct + '%';
+
+    // Bezel
+    document.getElementById('bezelIndicator').style.display = showBezel ? 'block' : 'none';
+    document.getElementById('bezelLabel').style.display = showBezel ? 'block' : 'none';
+
+    // AA UI elements
+    const aaVis = showAaUi ? 'block' : 'none';
+    document.getElementById('aaStatusBar').style.display = showAaUi ? 'flex' : 'none';
+    document.getElementById('aaNavBar').style.display = showAaUi ? 'flex' : 'none';
+    document.getElementById('aaCard').style.display = aaVis;
+    document.getElementById('aaChip1').style.display = aaVis;
+    document.getElementById('aaChip2').style.display = aaVis;
+
+    // Position AA UI elements based on insets (simulating what the phone would do)
+    if (showAaUi) {
+      const card = document.getElementById('aaCard');
+      card.style.right = `calc(${rightPct}% + 12px)`;
+      card.style.top = `calc(${topPct}% + 15%)`;
+
+      const statusBar = document.getElementById('aaStatusBar');
+      statusBar.style.top = topPct + '%';
+      statusBar.style.right = rightPct + '%';
+      statusBar.style.left = leftPct + '%';
+
+      const navBar = document.getElementById('aaNavBar');
+      navBar.style.bottom = bottomPct + '%';
+      navBar.style.left = leftPct + '%';
+      navBar.style.right = rightPct + '%';
+
+      const chip1 = document.getElementById('aaChip1');
+      chip1.style.right = `calc(${rightPct}% + 25%)`;
+      chip1.style.bottom = `calc(${bottomPct}% + 16%)`;
+
+      const chip2 = document.getElementById('aaChip2');
+      chip2.style.right = `calc(${rightPct}% + 12px)`;
+      chip2.style.bottom = `calc(${bottomPct}% + 16%)`;
+
+      // In content mode, hide map in inset areas too
+      if (mode === 'content') {
+        document.getElementById('aaMap').style.clipPath =
+          `inset(${topPct}% ${rightPct}% ${bottomPct}% ${leftPct}%)`;
+      } else {
+        document.getElementById('aaMap').style.clipPath = 'none';
+      }
+    }
+
+    // Drag handles
+    document.getElementById('dragTop').style.top = `calc(${topPct}% - 10px)`;
+    document.getElementById('dragBottom').style.bottom = `calc(${bottomPct}% - 10px)`;
+    document.getElementById('dragLeft').style.left = `calc(${leftPct}% - 10px)`;
+    document.getElementById('dragRight').style.right = `calc(${rightPct}% - 10px)`;
+
+    // Env output
+    const envKey = mode === 'stable' ? 'OAL_AA_INIT_STABLE_INSETS' : 'OAL_AA_INIT_CONTENT_INSETS';
+    document.getElementById('envOutput').textContent =
+      `${envKey}=${insets.top},${insets.bottom},${insets.left},${insets.right}`;
+  }
+
+  function copyEnv() {
+    const text = document.getElementById('envOutput').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.querySelector('.copy-btn');
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy to Clipboard'; }, 1500);
+    });
+  }
+
+  // --- Draggable handles ---
+  function setupDrag(handleId, direction, sliderId) {
+    const handle = document.getElementById(handleId);
+    const screen = document.getElementById('screen');
+
+    let dragging = false;
+
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      dragging = true;
+      document.body.style.cursor = direction === 'horizontal' ? 'ns-resize' : 'ew-resize';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const rect = screen.getBoundingClientRect();
+
+      if (direction === 'horizontal') {
+        const isTop = handleId.includes('Top');
+        let pct;
+        if (isTop) {
+          pct = ((e.clientY - rect.top) / rect.height) * 100;
+        } else {
+          pct = ((rect.bottom - e.clientY) / rect.height) * 100;
+        }
+        pct = Math.max(0, Math.min(pct, 40));
+        const px = Math.round((pct / 100) * VIDEO_H);
+        document.getElementById(sliderId).value = Math.min(px, parseInt(document.getElementById(sliderId).max));
+        document.getElementById(sliderId + 'Num').value = px;
+      } else {
+        const isLeft = handleId.includes('Left');
+        let pct;
+        if (isLeft) {
+          pct = ((e.clientX - rect.left) / rect.width) * 100;
+        } else {
+          pct = ((rect.right - e.clientX) / rect.width) * 100;
+        }
+        pct = Math.max(0, Math.min(pct, 40));
+        const px = Math.round((pct / 100) * VIDEO_W);
+        document.getElementById(sliderId).value = Math.min(px, parseInt(document.getElementById(sliderId).max));
+        document.getElementById(sliderId + 'Num').value = px;
+      }
+      updatePreview();
+      highlightPreset();
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (dragging) {
+        dragging = false;
+        document.body.style.cursor = '';
+      }
+    });
+  }
+
+  setupDrag('dragTop', 'horizontal', 'insetTop');
+  setupDrag('dragBottom', 'horizontal', 'insetBottom');
+  setupDrag('dragLeft', 'vertical', 'insetLeft');
+  setupDrag('dragRight', 'vertical', 'insetRight');
+
+  // --- Animation: show UI elements sliding into safe area ---
+  let animating = false;
+  function toggleAnimation() {
+    animating = document.getElementById('animateUi').checked;
+    if (animating) {
+      animateStep(0);
+    }
+  }
+
+  function animateStep(step) {
+    if (!animating) return;
+
+    // Cycle through: no insets → current insets → no insets
+    const target = getInsets();
+    const duration = 60; // frames per direction
+
+    if (step < duration) {
+      // Animate from 0 to target
+      const t = step / duration;
+      const ease = t * t * (3 - 2 * t); // smoothstep
+      setInsetsSmooth(
+        Math.round(target.top * ease),
+        Math.round(target.bottom * ease),
+        Math.round(target.left * ease),
+        Math.round(target.right * ease)
+      );
+      animationFrame = requestAnimationFrame(() => animateStep(step + 1));
+    } else if (step < duration * 2) {
+      // Hold
+      animationFrame = requestAnimationFrame(() => animateStep(step + 1));
+    } else if (step < duration * 3) {
+      // Animate back to 0
+      const t = (step - duration * 2) / duration;
+      const ease = t * t * (3 - 2 * t);
+      setInsetsSmooth(
+        Math.round(target.top * (1 - ease)),
+        Math.round(target.bottom * (1 - ease)),
+        Math.round(target.left * (1 - ease)),
+        Math.round(target.right * (1 - ease))
+      );
+      animationFrame = requestAnimationFrame(() => animateStep(step + 1));
+    } else if (step < duration * 4) {
+      // Hold at 0
+      animationFrame = requestAnimationFrame(() => animateStep(step + 1));
+    } else {
+      animationFrame = requestAnimationFrame(() => animateStep(0));
+    }
+  }
+
+  function setInsetsSmooth(t, b, l, r) {
+    // Update preview without changing slider values
+    const insets = { top: t, bottom: b, left: l, right: r };
+    const screen = document.getElementById('screen');
+    const topPct = (t / VIDEO_H) * 100;
+    const bottomPct = (b / VIDEO_H) * 100;
+    const leftPct = (l / VIDEO_W) * 100;
+    const rightPct = (r / VIDEO_W) * 100;
+
+    // Quick update of positions
+    document.getElementById('lineTop').style.top = topPct + '%';
+    document.getElementById('lineBottom').style.bottom = bottomPct + '%';
+    document.getElementById('lineLeft').style.left = leftPct + '%';
+    document.getElementById('lineRight').style.right = rightPct + '%';
+
+    document.getElementById('dangerTop').style.height = topPct + '%';
+    document.getElementById('dangerBottom').style.height = bottomPct + '%';
+    document.getElementById('dangerLeft').style.width = leftPct + '%';
+    document.getElementById('dangerRight').style.width = rightPct + '%';
+
+    const card = document.getElementById('aaCard');
+    if (card.style.display !== 'none') {
+      card.style.right = `calc(${rightPct}% + 12px)`;
+      const statusBar = document.getElementById('aaStatusBar');
+      statusBar.style.right = rightPct + '%';
+      statusBar.style.left = leftPct + '%';
+      const navBar = document.getElementById('aaNavBar');
+      navBar.style.right = rightPct + '%';
+      navBar.style.left = leftPct + '%';
+      navBar.style.bottom = bottomPct + '%';
+      document.getElementById('aaChip2').style.right = `calc(${rightPct}% + 12px)`;
+      document.getElementById('aaChip1').style.right = `calc(${rightPct}% + 25%)`;
+    }
+
+    document.getElementById('dragTop').style.top = `calc(${topPct}% - 10px)`;
+    document.getElementById('dragBottom').style.bottom = `calc(${bottomPct}% - 10px)`;
+    document.getElementById('dragLeft').style.left = `calc(${leftPct}% - 10px)`;
+    document.getElementById('dragRight').style.right = `calc(${rightPct}% - 10px)`;
+  }
+
+  // Initial render
+  updatePreview();
+</script>
+
+</body>
+</html>

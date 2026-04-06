@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -524,5 +525,65 @@ private fun ConnectionHud(
                 }
             }
         }
+    }
+}
+
+/**
+ * Transparent overlay showing dashed lines at safe area and content inset boundaries.
+ * Teal = stable (safe area), Red = content (hard cutoff).
+ */
+@Composable
+private fun SafeAreaOverlay(
+    top: Int,
+    bottom: Int,
+    left: Int,
+    right: Int,
+    contentTop: Int,
+    contentBottom: Int,
+    contentLeft: Int,
+    contentRight: Int,
+    videoWidth: Int,
+    videoHeight: Int,
+    modifier: Modifier = Modifier,
+) {
+    val hasStable = top > 0 || bottom > 0 || left > 0 || right > 0
+    val hasContent = contentTop > 0 || contentBottom > 0 || contentLeft > 0 || contentRight > 0
+    if (!hasStable && !hasContent) return
+
+    val stableColor = Color(0xFF64FFDA)
+    val contentColor = Color(0xFFFF6E40)
+    val dashEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+        floatArrayOf(12f, 8f), 0f
+    )
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        fun drawInsetLines(t: Int, b: Int, l: Int, r: Int, color: Color) {
+            if (t > 0) {
+                val y = (t.toFloat() / videoHeight) * h
+                drawLine(color, androidx.compose.ui.geometry.Offset(0f, y),
+                    androidx.compose.ui.geometry.Offset(w, y), 3f, pathEffect = dashEffect)
+            }
+            if (b > 0) {
+                val y = h - (b.toFloat() / videoHeight) * h
+                drawLine(color, androidx.compose.ui.geometry.Offset(0f, y),
+                    androidx.compose.ui.geometry.Offset(w, y), 3f, pathEffect = dashEffect)
+            }
+            if (l > 0) {
+                val x = (l.toFloat() / videoWidth) * w
+                drawLine(color, androidx.compose.ui.geometry.Offset(x, 0f),
+                    androidx.compose.ui.geometry.Offset(x, h), 3f, pathEffect = dashEffect)
+            }
+            if (r > 0) {
+                val x = w - (r.toFloat() / videoWidth) * w
+                drawLine(color, androidx.compose.ui.geometry.Offset(x, 0f),
+                    androidx.compose.ui.geometry.Offset(x, h), 3f, pathEffect = dashEffect)
+            }
+        }
+
+        drawInsetLines(top, bottom, left, right, stableColor)
+        drawInsetLines(contentTop, contentBottom, contentLeft, contentRight, contentColor)
     }
 }

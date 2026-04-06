@@ -83,6 +83,8 @@ Most ARM64 SBCs with the above specs should work. The bridge binary is a generic
 
 > **Blazer EV note:** Use the USB-C port inside the **center console armrest compartment** (the one behind the lid), not the two USB ports on the front of the center console. The armrest port is the one that enumerates USB network devices to the head unit. Other GM EVs may have a similar arrangement — check which USB port your AAOS head unit can see network devices on.
 
+> **Display safe area:** The 2024 Blazer EV has a curved/tapered right bezel that clips content near the right edge of the display. The bridge is pre-configured with display insets (`OAL_AA_INIT_STABLE_INSETS=0,0,0,110` in `/etc/openautolink.env`) that tell Android Auto to keep interactive UI (buttons, cards, text) away from the curved edge while still rendering maps and backgrounds edge-to-edge. If you're using a different vehicle, adjust or clear this value — see [bridge/sbc/openautolink.env](bridge/sbc/openautolink.env) for details.
+
 ### Where to Put It
 
 The SBC, adapter, and cable are small enough to live entirely inside the center console compartment. Tuck the SBC in, run power from a nearby outlet, and close the lid. Nothing is visible when the console is shut. The phone stays in your pocket — it connects wirelessly. If you SBC needs to breath more, just use a thin, longer ethernet cable and easily move it out to the front USB ports for power.

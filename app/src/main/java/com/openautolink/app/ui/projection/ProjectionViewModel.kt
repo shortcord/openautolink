@@ -47,6 +47,14 @@ data class ProjectionUiState(
     val customViewportWidth: Int = 0,
     val customViewportHeight: Int = 0,
     val overlayPhoneSwitchButton: Boolean = AppPreferences.DEFAULT_OVERLAY_PHONE_SWITCH_BUTTON,
+    val safeAreaTop: Int = AppPreferences.DEFAULT_SAFE_AREA_TOP,
+    val safeAreaBottom: Int = AppPreferences.DEFAULT_SAFE_AREA_BOTTOM,
+    val safeAreaLeft: Int = AppPreferences.DEFAULT_SAFE_AREA_LEFT,
+    val safeAreaRight: Int = AppPreferences.DEFAULT_SAFE_AREA_RIGHT,
+    val contentInsetTop: Int = AppPreferences.DEFAULT_CONTENT_INSET_TOP,
+    val contentInsetBottom: Int = AppPreferences.DEFAULT_CONTENT_INSET_BOTTOM,
+    val contentInsetLeft: Int = AppPreferences.DEFAULT_CONTENT_INSET_LEFT,
+    val contentInsetRight: Int = AppPreferences.DEFAULT_CONTENT_INSET_RIGHT,
 )
 
 class ProjectionViewModel(application: Application) : AndroidViewModel(application) {
@@ -112,6 +120,14 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         preferences.customViewportWidth,
         preferences.customViewportHeight,
         preferences.overlayPhoneSwitchButton,
+        preferences.safeAreaTop,
+        preferences.safeAreaBottom,
+        preferences.safeAreaLeft,
+        preferences.safeAreaRight,
+        preferences.contentInsetTop,
+        preferences.contentInsetBottom,
+        preferences.contentInsetLeft,
+        preferences.contentInsetRight,
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         ProjectionUiState(
@@ -131,6 +147,14 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             customViewportWidth = values[13] as Int,
             customViewportHeight = values[14] as Int,
             overlayPhoneSwitchButton = values[15] as Boolean,
+            safeAreaTop = values[16] as Int,
+            safeAreaBottom = values[17] as Int,
+            safeAreaLeft = values[18] as Int,
+            safeAreaRight = values[19] as Int,
+            contentInsetTop = values[20] as Int,
+            contentInsetBottom = values[21] as Int,
+            contentInsetLeft = values[22] as Int,
+            contentInsetRight = values[23] as Int,
         )
     }.stateIn(
         viewModelScope,

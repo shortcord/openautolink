@@ -1,7 +1,6 @@
 #include <iostream>
 #include <mutex>
 #include <string>
-
 #include <string_view>
 
 #include "openautolink/engine.hpp"
@@ -35,6 +34,42 @@ std::string_view kBtMacFlag = "--bt-mac=";
 std::string_view kHideClockFlag = "--hide-clock";
 std::string_view kHidePhoneSignalFlag = "--hide-phone-signal";
 std::string_view kHideBatteryFlag = "--hide-battery";
+std::string_view kAaWidthMarginFlag = "--aa-width-margin=";
+std::string_view kAaHeightMarginFlag = "--aa-height-margin=";
+std::string_view kAaPixelAspectFlag = "--aa-pixel-aspect-e4=";
+std::string_view kAaRealDensityFlag = "--aa-real-density=";
+std::string_view kAaViewingDistanceFlag = "--aa-viewing-distance=";
+std::string_view kAaDecoderDepthFlag = "--aa-decoder-additional-depth=";
+std::string_view kAaInitMarginsFlag = "--aa-init-margins=";
+std::string_view kAaInitContentInsetsFlag = "--aa-init-content-insets=";
+std::string_view kAaInitStableInsetsFlag = "--aa-init-stable-insets=";
+std::string_view kAaRuntimeDelayFlag = "--aa-runtime-delay-ms=";
+std::string_view kAaRuntimeMarginsFlag = "--aa-runtime-margins=";
+std::string_view kAaRuntimeContentInsetsFlag = "--aa-runtime-content-insets=";
+std::string_view kAaRuntimeStableInsetsFlag = "--aa-runtime-stable-insets=";
+
+bool parse_ui_insets(std::string_view value, openautolink::HeadlessConfig::UiInsets& out) {
+    unsigned long parsed[4] = {};
+    size_t start = 0;
+    for (int i = 0; i < 4; ++i) {
+        const size_t end = value.find(',', start);
+        const bool last = (i == 3);
+        if ((end == std::string_view::npos) != last) return false;
+        const auto token = value.substr(start, last ? std::string_view::npos : end - start);
+        try {
+            parsed[i] = std::stoul(std::string(token));
+        } catch (...) {
+            return false;
+        }
+        if (!last) start = end + 1;
+    }
+
+    out.top = static_cast<uint32_t>(parsed[0]);
+    out.bottom = static_cast<uint32_t>(parsed[1]);
+    out.left = static_cast<uint32_t>(parsed[2]);
+    out.right = static_cast<uint32_t>(parsed[3]);
+    return true;
+}
 
 } // namespace
 
@@ -55,6 +90,7 @@ int main(int argc, char* argv[])
     bool hide_clock = true;
     bool hide_phone_signal = false;
     bool hide_battery = false;
+    openautolink::HeadlessConfig::UiConfigExperiment aa_ui_experiment;
     for(int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         if(argument.rfind(kSessionModeFlag, 0) == 0) {
@@ -145,6 +181,82 @@ int main(int argc, char* argv[])
             hide_battery = true;
             continue;
         }
+        if(argument.rfind(kAaWidthMarginFlag, 0) == 0) {
+            aa_ui_experiment.width_margin = static_cast<uint32_t>(
+                std::stoul(std::string(argument.substr(kAaWidthMarginFlag.size()))));
+            continue;
+        }
+        if(argument.rfind(kAaHeightMarginFlag, 0) == 0) {
+            aa_ui_experiment.height_margin = static_cast<uint32_t>(
+                std::stoul(std::string(argument.substr(kAaHeightMarginFlag.size()))));
+            continue;
+        }
+        if(argument.rfind(kAaPixelAspectFlag, 0) == 0) {
+            aa_ui_experiment.pixel_aspect_ratio_e4 = static_cast<uint32_t>(
+                std::stoul(std::string(argument.substr(kAaPixelAspectFlag.size()))));
+            continue;
+        }
+        if(argument.rfind(kAaRealDensityFlag, 0) == 0) {
+            aa_ui_experiment.real_density = static_cast<uint32_t>(
+                std::stoul(std::string(argument.substr(kAaRealDensityFlag.size()))));
+            continue;
+        }
+        if(argument.rfind(kAaViewingDistanceFlag, 0) == 0) {
+            aa_ui_experiment.viewing_distance = static_cast<uint32_t>(
+                std::stoul(std::string(argument.substr(kAaViewingDistanceFlag.size()))));
+            continue;
+        }
+        if(argument.rfind(kAaDecoderDepthFlag, 0) == 0) {
+            aa_ui_experiment.decoder_additional_depth = static_cast<uint32_t>(
+                std::stoul(std::string(argument.substr(kAaDecoderDepthFlag.size()))));
+            continue;
+        }
+        if(argument.rfind(kAaInitMarginsFlag, 0) == 0) {
+            if (!parse_ui_insets(argument.substr(kAaInitMarginsFlag.size()), aa_ui_experiment.initial_margins)) {
+                std::cerr << "invalid --aa-init-margins value, expected top,bottom,left,right\n";
+                return 2;
+            }
+            continue;
+        }
+        if(argument.rfind(kAaInitContentInsetsFlag, 0) == 0) {
+            if (!parse_ui_insets(argument.substr(kAaInitContentInsetsFlag.size()), aa_ui_experiment.initial_content_insets)) {
+                std::cerr << "invalid --aa-init-content-insets value, expected top,bottom,left,right\n";
+                return 2;
+            }
+            continue;
+        }
+        if(argument.rfind(kAaInitStableInsetsFlag, 0) == 0) {
+            if (!parse_ui_insets(argument.substr(kAaInitStableInsetsFlag.size()), aa_ui_experiment.initial_stable_insets)) {
+                std::cerr << "invalid --aa-init-stable-insets value, expected top,bottom,left,right\n";
+                return 2;
+            }
+            continue;
+        }
+        if(argument.rfind(kAaRuntimeDelayFlag, 0) == 0) {
+            aa_ui_experiment.runtime_delay_ms = std::stoi(std::string(argument.substr(kAaRuntimeDelayFlag.size())));
+            continue;
+        }
+        if(argument.rfind(kAaRuntimeMarginsFlag, 0) == 0) {
+            if (!parse_ui_insets(argument.substr(kAaRuntimeMarginsFlag.size()), aa_ui_experiment.runtime_margins)) {
+                std::cerr << "invalid --aa-runtime-margins value, expected top,bottom,left,right\n";
+                return 2;
+            }
+            continue;
+        }
+        if(argument.rfind(kAaRuntimeContentInsetsFlag, 0) == 0) {
+            if (!parse_ui_insets(argument.substr(kAaRuntimeContentInsetsFlag.size()), aa_ui_experiment.runtime_content_insets)) {
+                std::cerr << "invalid --aa-runtime-content-insets value, expected top,bottom,left,right\n";
+                return 2;
+            }
+            continue;
+        }
+        if(argument.rfind(kAaRuntimeStableInsetsFlag, 0) == 0) {
+            if (!parse_ui_insets(argument.substr(kAaRuntimeStableInsetsFlag.size()), aa_ui_experiment.runtime_stable_insets)) {
+                std::cerr << "invalid --aa-runtime-stable-insets value, expected top,bottom,left,right\n";
+                return 2;
+            }
+            continue;
+        }
     }
 
     // Thread-safe output sink — aasdk callbacks run on a worker thread.
@@ -172,6 +284,7 @@ int main(int argc, char* argv[])
         c.hide_clock = hide_clock;
         c.hide_phone_signal = hide_phone_signal;
         c.hide_battery_level = hide_battery;
+        c.aa_ui_experiment = aa_ui_experiment;
         return c;
     };
 

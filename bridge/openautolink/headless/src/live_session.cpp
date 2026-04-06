@@ -85,6 +85,38 @@ namespace openautolink {
 
 namespace {
 
+std::string format_ui_insets(const HeadlessConfig::UiInsets& insets) {
+    std::ostringstream oss;
+    oss << "top=" << insets.top
+        << " bottom=" << insets.bottom
+        << " left=" << insets.left
+        << " right=" << insets.right;
+    return oss.str();
+}
+
+void apply_ui_insets(aap_protobuf::service::media::shared::message::Insets* target,
+                     const HeadlessConfig::UiInsets& source) {
+    target->set_top(source.top);
+    target->set_bottom(source.bottom);
+    target->set_left(source.left);
+    target->set_right(source.right);
+}
+
+void apply_ui_config(aap_protobuf::service::media::shared::message::UiConfig* ui_config,
+                     const HeadlessConfig::UiInsets& margins,
+                     const HeadlessConfig::UiInsets& content_insets,
+                     const HeadlessConfig::UiInsets& stable_insets) {
+    if (margins.any()) {
+        apply_ui_insets(ui_config->mutable_margins(), margins);
+    }
+    if (content_insets.any()) {
+        apply_ui_insets(ui_config->mutable_content_insets(), content_insets);
+    }
+    if (stable_insets.any()) {
+        apply_ui_insets(ui_config->mutable_stable_content_insets(), stable_insets);
+    }
+}
+
 // Auto-detect BT MAC address using multiple methods for SBC portability.
 // Priority: sysfs → hciconfig → bluetoothctl → fallback
 std::string detect_bt_mac() {
@@ -233,6 +265,7 @@ HeadlessAutoEntity::HeadlessAutoEntity(
     }
     video_handler_ = std::make_shared<HeadlessVideoHandler>(
         io_service_, messenger_, output_, aa_w, aa_h, config_.video_fps, config_.video_dpi,
+        config_.aa_ui_experiment,
         config_.media_fd, &media_pipe_mutex_);
 
     media_audio_handler_ = std::make_shared<HeadlessAudioHandler>(
@@ -448,20 +481,53 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
       auto fps = config_.video_fps >= 60
           ? aap_protobuf::service::media::sink::message::VIDEO_FPS_60
           : aap_protobuf::service::media::sink::message::VIDEO_FPS_30;
+      if (config_.aa_ui_experiment.enabled()) {
+          std::cerr << "[aasdk] AA UI experiment enabled"
+                    << " width_margin=" << config_.aa_ui_experiment.width_margin
+                    << " height_margin=" << config_.aa_ui_experiment.height_margin
+                    << " pixel_aspect_e4=" << config_.aa_ui_experiment.pixel_aspect_ratio_e4
+                    << " real_density=" << config_.aa_ui_experiment.real_density
+                    << " initial_content={" << format_ui_insets(config_.aa_ui_experiment.initial_content_insets) << "}"
+                    << " initial_stable={" << format_ui_insets(config_.aa_ui_experiment.initial_stable_insets) << "}"
+                    << " runtime_delay_ms=" << config_.aa_ui_experiment.runtime_delay_ms
+                    << " runtime_content={" << format_ui_insets(config_.aa_ui_experiment.runtime_content_insets) << "}"
+                    << " runtime_stable={" << format_ui_insets(config_.aa_ui_experiment.runtime_stable_insets) << "}"
+                    << std::endl;
+      }
+      auto add_video_config = [&](int tier) {
+          auto* vc = ms->add_video_configs();
+          vc->set_codec_resolution(static_cast<aap_protobuf::service::media::sink::message::VideoCodecResolutionType>(tier));
+          vc->set_frame_rate(fps);
+          vc->set_density(config_.video_dpi);
+          vc->set_height_margin(config_.aa_ui_experiment.height_margin);
+          vc->set_width_margin(config_.aa_ui_experiment.width_margin);
+          if (config_.aa_ui_experiment.decoder_additional_depth > 0) {
+              vc->set_decoder_additional_depth(config_.aa_ui_experiment.decoder_additional_depth);
+          }
+          if (config_.aa_ui_experiment.viewing_distance > 0) {
+              vc->set_viewing_distance(config_.aa_ui_experiment.viewing_distance);
+          }
+          if (config_.aa_ui_experiment.pixel_aspect_ratio_e4 > 0) {
+              vc->set_pixel_aspect_ratio_e4(config_.aa_ui_experiment.pixel_aspect_ratio_e4);
+          }
+          if (config_.aa_ui_experiment.real_density > 0) {
+              vc->set_real_density(config_.aa_ui_experiment.real_density);
+          }
+          if (config_.aa_ui_experiment.has_initial_ui_config()) {
+              apply_ui_config(vc->mutable_ui_config(),
+                              config_.aa_ui_experiment.initial_margins,
+                              config_.aa_ui_experiment.initial_content_insets,
+                              config_.aa_ui_experiment.initial_stable_insets);
+          }
+      };
       // Offer multiple resolutions — phone picks the best it supports.
       // Primary (configured) first, then alternatives in descending order.
-      auto* vc1 = ms->add_video_configs();
-      vc1->set_codec_resolution(static_cast<aap_protobuf::service::media::sink::message::VideoCodecResolutionType>(config_.aa_resolution_tier));
-      vc1->set_frame_rate(fps);
-      vc1->set_density(config_.video_dpi); vc1->set_height_margin(0); vc1->set_width_margin(0);
+      add_video_config(config_.aa_resolution_tier);
       // Add all resolutions the phone might support as alternatives
       int tiers[] = {5, 4, 3}; // 4K, 1440p, 1080p
       for (int t : tiers) {
           if (t != config_.aa_resolution_tier) {
-              auto* vc = ms->add_video_configs();
-              vc->set_codec_resolution(static_cast<aap_protobuf::service::media::sink::message::VideoCodecResolutionType>(t));
-              vc->set_frame_rate(fps);
-              vc->set_density(config_.video_dpi); vc->set_height_margin(0); vc->set_width_margin(0);
+              add_video_config(t);
           }
       } }
     // Media Audio
@@ -1786,12 +1852,15 @@ HeadlessVideoHandler::HeadlessVideoHandler(
     aasdk::messenger::IMessenger::Pointer messenger,
     ThreadSafeOutputSink& output,
     int width, int height, int fps, int dpi,
+    const HeadlessConfig::UiConfigExperiment& ui_experiment,
     int video_fd,
     std::mutex* pipe_mutex)
     : strand_(io_service)
+    , io_service_(io_service)
     , channel_(std::make_shared<aasdk::channel::mediasink::video::channel::VideoChannel>(strand_, std::move(messenger)))
     , output_(output)
     , width_(width), height_(height), fps_(fps), dpi_(dpi)
+    , ui_experiment_(ui_experiment)
     , video_fd_(video_fd)
     , pipe_mutex_(pipe_mutex)
 {
@@ -1804,6 +1873,10 @@ void HeadlessVideoHandler::start() {
 }
 
 void HeadlessVideoHandler::stop() {
+    if (runtime_ui_timer_) {
+        runtime_ui_timer_->cancel();
+        runtime_ui_timer_.reset();
+    }
     // Channel will be stopped when transport stops.
 }
 
@@ -1847,6 +1920,50 @@ void HeadlessVideoHandler::sendUiThemeUpdate(bool night_mode) {
         },
         [](auto e) {
             std::cerr << "[aasdk] UI theme update send failed: " << e.what() << std::endl;
+        });
+    channel_->send(std::move(message), std::move(promise));
+}
+
+void HeadlessVideoHandler::sendUiConfigUpdate(
+    const HeadlessConfig::UiInsets& margins,
+    const HeadlessConfig::UiInsets& content_insets,
+    const HeadlessConfig::UiInsets& stable_insets,
+    const std::string& reason)
+{
+    if (!margins.any() && !content_insets.any() && !stable_insets.any()) {
+        return;
+    }
+
+    auto message = std::make_shared<aasdk::messenger::Message>(
+        aasdk::messenger::ChannelId::MEDIA_SINK_VIDEO,
+        aasdk::messenger::EncryptionType::ENCRYPTED,
+        aasdk::messenger::MessageType::SPECIFIC);
+    message->insertPayload(
+        aasdk::messenger::MessageId(
+            aap_protobuf::service::media::sink::MediaMessageId::MEDIA_MESSAGE_UPDATE_UI_CONFIG_REQUEST).getData());
+
+    aap_protobuf::service::control::message::UpdateUiConfigRequest request;
+    auto* ui_config = request.mutable_ui_config();
+    apply_ui_config(ui_config, margins, content_insets, stable_insets);
+    if (last_night_mode_sent_ == 1) {
+        ui_config->set_ui_theme(aap_protobuf::service::media::shared::message::UI_THEME_DARK);
+    } else if (last_night_mode_sent_ == 0) {
+        ui_config->set_ui_theme(aap_protobuf::service::media::shared::message::UI_THEME_LIGHT);
+    }
+    message->insertPayload(request);
+
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then(
+        [reason, margins, content_insets, stable_insets]() {
+            std::cerr << "[aasdk] UI config update sent (" << reason << ")"
+                      << " margins={" << format_ui_insets(margins) << "}"
+                      << " content={" << format_ui_insets(content_insets) << "}"
+                      << " stable={" << format_ui_insets(stable_insets) << "}"
+                      << std::endl;
+        },
+        [reason](auto e) {
+            std::cerr << "[aasdk] UI config update send failed (" << reason
+                      << "): " << e.what() << std::endl;
         });
     channel_->send(std::move(message), std::move(promise));
 }
@@ -1911,6 +2028,22 @@ void HeadlessVideoHandler::onMediaChannelStartIndication(
     session_ = indication.session_id();
     output_.emit(R"({"type":"event","event_type":"video_stream_start","session":)" +
                  std::to_string(session_) + "}");
+    if (!runtime_ui_config_sent_ && ui_experiment_.has_runtime_ui_config()) {
+        runtime_ui_config_sent_ = true;
+        runtime_ui_timer_ = std::make_shared<boost::asio::deadline_timer>(io_service_);
+        runtime_ui_timer_->expires_from_now(
+            boost::posix_time::milliseconds(std::max(0, ui_experiment_.runtime_delay_ms)));
+        runtime_ui_timer_->async_wait(strand_.wrap(
+            [this, self = shared_from_this(), timer = runtime_ui_timer_](const boost::system::error_code& ec) {
+                if (ec) return;
+                this->sendUiConfigUpdate(
+                    ui_experiment_.runtime_margins,
+                    ui_experiment_.runtime_content_insets,
+                    ui_experiment_.runtime_stable_insets,
+                    "runtime_experiment");
+                runtime_ui_timer_.reset();
+            }));
+    }
     channel_->receive(shared_from_this());
 }
 

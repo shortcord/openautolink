@@ -61,6 +61,16 @@ data class SettingsUiState(
     val customViewportWidth: Int = AppPreferences.DEFAULT_CUSTOM_VIEWPORT_WIDTH,
     val customViewportHeight: Int = AppPreferences.DEFAULT_CUSTOM_VIEWPORT_HEIGHT,
     val viewportAspectRatioLocked: Boolean = AppPreferences.DEFAULT_VIEWPORT_ASPECT_RATIO_LOCKED,
+    // AA safe area insets
+    val safeAreaTop: Int = AppPreferences.DEFAULT_SAFE_AREA_TOP,
+    val safeAreaBottom: Int = AppPreferences.DEFAULT_SAFE_AREA_BOTTOM,
+    val safeAreaLeft: Int = AppPreferences.DEFAULT_SAFE_AREA_LEFT,
+    val safeAreaRight: Int = AppPreferences.DEFAULT_SAFE_AREA_RIGHT,
+    // AA content insets
+    val contentInsetTop: Int = AppPreferences.DEFAULT_CONTENT_INSET_TOP,
+    val contentInsetBottom: Int = AppPreferences.DEFAULT_CONTENT_INSET_BOTTOM,
+    val contentInsetLeft: Int = AppPreferences.DEFAULT_CONTENT_INSET_LEFT,
+    val contentInsetRight: Int = AppPreferences.DEFAULT_CONTENT_INSET_RIGHT,
 )
 
 sealed class UpdateStatus {
@@ -128,6 +138,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         preferences.customViewportWidth,
         preferences.customViewportHeight,
         preferences.viewportAspectRatioLocked,
+        preferences.safeAreaTop,
+        preferences.safeAreaBottom,
+        preferences.safeAreaLeft,
+        preferences.safeAreaRight,
+        preferences.contentInsetTop,
+        preferences.contentInsetBottom,
+        preferences.contentInsetLeft,
+        preferences.contentInsetRight,
     ) { values: Array<Any> ->
         SettingsUiState(
             bridgeHost = values[0] as String,
@@ -165,6 +183,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             customViewportWidth = values[32] as Int,
             customViewportHeight = values[33] as Int,
             viewportAspectRatioLocked = values[34] as Boolean,
+            safeAreaTop = values[35] as Int,
+            safeAreaBottom = values[36] as Int,
+            safeAreaLeft = values[37] as Int,
+            safeAreaRight = values[38] as Int,
+            contentInsetTop = values[39] as Int,
+            contentInsetBottom = values[40] as Int,
+            contentInsetLeft = values[41] as Int,
+            contentInsetRight = values[42] as Int,
         )
     }.stateIn(
         viewModelScope,
@@ -443,6 +469,30 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun selectNetworkInterface(interfaceName: String) {
         viewModelScope.launch { preferences.setNetworkInterface(interfaceName) }
+    }
+
+    fun updateSafeAreaInsets(top: Int, bottom: Int, left: Int, right: Int) {
+        viewModelScope.launch {
+            preferences.setSafeAreaTop(top)
+            preferences.setSafeAreaBottom(bottom)
+            preferences.setSafeAreaLeft(left)
+            preferences.setSafeAreaRight(right)
+            sendBridgeConfig(
+                "aa_stable_insets" to "$top,$bottom,$left,$right"
+            )
+        }
+    }
+
+    fun updateContentInsets(top: Int, bottom: Int, left: Int, right: Int) {
+        viewModelScope.launch {
+            preferences.setContentInsetTop(top)
+            preferences.setContentInsetBottom(bottom)
+            preferences.setContentInsetLeft(left)
+            preferences.setContentInsetRight(right)
+            sendBridgeConfig(
+                "aa_content_insets" to "$top,$bottom,$left,$right"
+            )
+        }
     }
 
     override fun onCleared() {

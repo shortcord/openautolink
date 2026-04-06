@@ -285,6 +285,7 @@ public:
                          aasdk::messenger::IMessenger::Pointer messenger,
                          ThreadSafeOutputSink& output,
                          int width, int height, int fps, int dpi,
+                         const HeadlessConfig::UiConfigExperiment& ui_experiment,
                          int video_fd = 3,
                          std::mutex* pipe_mutex = nullptr);
 
@@ -300,6 +301,10 @@ public:
 
     // Send AA UI theme update to phone (dark/light based on car night mode)
     void sendUiThemeUpdate(bool night_mode);
+    void sendUiConfigUpdate(const HeadlessConfig::UiInsets& margins,
+                            const HeadlessConfig::UiInsets& content_insets,
+                            const HeadlessConfig::UiInsets& stable_insets,
+                            const std::string& reason);
 
     // Forward a touch event into the AA input channel (if input handler is set)
     void set_input_handler(std::shared_ptr<HeadlessInputHandler> handler) { input_handler_ = handler; }
@@ -319,9 +324,11 @@ private:
     void onChannelError(const aasdk::error::Error& e) override;
 
     boost::asio::io_service::strand strand_;
+    boost::asio::io_service& io_service_;
     std::shared_ptr<aasdk::channel::mediasink::video::channel::VideoChannel> channel_;
     ThreadSafeOutputSink& output_;
     int width_, height_, fps_, dpi_;
+    HeadlessConfig::UiConfigExperiment ui_experiment_;
     int video_fd_;
     std::mutex* pipe_mutex_;
     int32_t session_ = -1;
@@ -332,6 +339,8 @@ private:
     std::vector<uint8_t> cached_sps_pps_;
     // Track last night mode sent to avoid redundant updates
     int last_night_mode_sent_ = -1;  // -1 = never sent
+    std::shared_ptr<boost::asio::deadline_timer> runtime_ui_timer_;
+    bool runtime_ui_config_sent_ = false;
     std::vector<uint8_t> cached_idr_;
     bool has_cached_keyframe_ = false;
 };
