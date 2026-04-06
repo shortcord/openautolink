@@ -169,6 +169,12 @@ Because this is an AAOS app (not a standard phone app), getting it onto your car
 
 Active development. All core features are implemented and working on real hardware (2024 Blazer EV): video, audio, touch, vehicle data, cluster navigation, media metadata, microphone, steering wheel controls, and auto-reconnect. See the [work plan](docs/work-plan.md) for remaining items and car testing unknowns.
 
+## Known Issues
+
+- **"Unsupported device" popup on GM EVs:** When the USB Ethernet adapter is plugged into the car's USB-C port, GM's AAOS briefly shows an "Unsupported device" notification. This is cosmetic — the head unit doesn't recognize the adapter as a known accessory (phone, USB drive, etc.), but it still enumerates it as a network interface and assigns it an IP. The popup dismisses itself after a few seconds and has no effect on functionality.
+
+- **USB gadget networking does not work:** I attempted to use Linux USB gadget mode (RNDIS/ECM/NCM) so the SBC itself would present as a USB network device to the car, eliminating the need for a separate USB Ethernet adapter. After extensive testing, GM's head unit never enumerated any gadget configuration. The external USB Ethernet adapter approach is the only method that works.
+
 ## Compatibility
 
 **Not known to be universally compatible with all AAOS vehicles.** Currently tested only on a **2024 Chevrolet Blazer EV**, which enumerates a USB NIC, assigns it an IP, and allows network traffic to reach apps. Other GM vehicles on the same AAOS head unit platform likely work, but this has not been verified. Non-GM AAOS vehicles may have different USB networking behavior or restrictions that prevent this approach from working.
