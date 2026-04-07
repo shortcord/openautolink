@@ -33,6 +33,7 @@ data class SettingsUiState(
     val aaDpi: Int = AppPreferences.DEFAULT_AA_DPI,
     val aaWidthMargin: Int = AppPreferences.DEFAULT_AA_WIDTH_MARGIN,
     val aaHeightMargin: Int = AppPreferences.DEFAULT_AA_HEIGHT_MARGIN,
+    val aaPixelAspect: Int = AppPreferences.DEFAULT_AA_PIXEL_ASPECT,
     val phoneMode: String = AppPreferences.DEFAULT_PHONE_MODE,
     val wifiBand: String = AppPreferences.DEFAULT_WIFI_BAND,
     val wifiCountry: String = AppPreferences.DEFAULT_WIFI_COUNTRY,
@@ -96,6 +97,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         preferences.aaDpi,
         preferences.aaWidthMargin,
         preferences.aaHeightMargin,
+        preferences.aaPixelAspect,
         preferences.phoneMode,
         preferences.wifiBand,
         preferences.wifiCountry,
@@ -138,33 +140,34 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             aaDpi = values[10] as Int,
             aaWidthMargin = values[11] as Int,
             aaHeightMargin = values[12] as Int,
-            phoneMode = values[13] as String,
-            wifiBand = values[14] as String,
-            wifiCountry = values[15] as String,
-            wifiSsid = values[16] as String,
-            wifiPassword = values[17] as String,
-            headUnitName = values[18] as String,
-            btMac = values[19] as String,
-            driveSide = values[20] as String,
-            gpsForwarding = values[21] as Boolean,
-            clusterNavigation = values[22] as Boolean,
-            audioSource = values[23] as String,
-            callQuality = values[24] as String,
-            overlaySettingsButton = values[25] as Boolean,
-            overlayStatsButton = values[26] as Boolean,
-            overlayPhoneSwitchButton = values[27] as Boolean,
-            defaultPhoneMac = values[28] as String,
-            syncAaTheme = values[29] as Boolean,
-            hideAaClock = values[30] as Boolean,
-            sendImuSensors = values[31] as Boolean,
-            safeAreaTop = values[32] as Int,
-            safeAreaBottom = values[33] as Int,
-            safeAreaLeft = values[34] as Int,
-            safeAreaRight = values[35] as Int,
-            contentInsetTop = values[36] as Int,
-            contentInsetBottom = values[37] as Int,
-            contentInsetLeft = values[38] as Int,
-            contentInsetRight = values[39] as Int,
+            aaPixelAspect = values[13] as Int,
+            phoneMode = values[14] as String,
+            wifiBand = values[15] as String,
+            wifiCountry = values[16] as String,
+            wifiSsid = values[17] as String,
+            wifiPassword = values[18] as String,
+            headUnitName = values[19] as String,
+            btMac = values[20] as String,
+            driveSide = values[21] as String,
+            gpsForwarding = values[22] as Boolean,
+            clusterNavigation = values[23] as Boolean,
+            audioSource = values[24] as String,
+            callQuality = values[25] as String,
+            overlaySettingsButton = values[26] as Boolean,
+            overlayStatsButton = values[27] as Boolean,
+            overlayPhoneSwitchButton = values[28] as Boolean,
+            defaultPhoneMac = values[29] as String,
+            syncAaTheme = values[30] as Boolean,
+            hideAaClock = values[31] as Boolean,
+            sendImuSensors = values[32] as Boolean,
+            safeAreaTop = values[33] as Int,
+            safeAreaBottom = values[34] as Int,
+            safeAreaLeft = values[35] as Int,
+            safeAreaRight = values[36] as Int,
+            contentInsetTop = values[37] as Int,
+            contentInsetBottom = values[38] as Int,
+            contentInsetLeft = values[39] as Int,
+            contentInsetRight = values[40] as Int,
         )
     }.stateIn(
         viewModelScope,
@@ -181,17 +184,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateVideoCodec(codec: String) {
-        viewModelScope.launch {
-            preferences.setVideoCodec(codec)
-            sendBridgeConfig("video_codec" to codec)
-        }
+        viewModelScope.launch { preferences.setVideoCodec(codec) }
     }
 
     fun updateVideoFps(fps: Int) {
-        viewModelScope.launch {
-            preferences.setVideoFps(fps)
-            sendBridgeConfig("video_fps" to fps.toString())
-        }
+        viewModelScope.launch { preferences.setVideoFps(fps) }
     }
 
     fun updateDisplayMode(mode: String) {
@@ -211,87 +208,55 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateAaResolution(resolution: String) {
-        viewModelScope.launch {
-            preferences.setAaResolution(resolution)
-            sendBridgeConfig("aa_resolution" to resolution)
-        }
+        viewModelScope.launch { preferences.setAaResolution(resolution) }
     }
 
     fun updateAaDpi(dpi: Int) {
-        viewModelScope.launch {
-            preferences.setAaDpi(dpi)
-            sendBridgeConfig("aa_dpi" to dpi.toString())
-        }
+        viewModelScope.launch { preferences.setAaDpi(dpi) }
     }
 
     fun updateAaWidthMargin(margin: Int) {
-        viewModelScope.launch {
-            preferences.setAaWidthMargin(margin)
-            sendBridgeConfig("aa_width_margin" to margin.toString())
-        }
+        viewModelScope.launch { preferences.setAaWidthMargin(margin) }
     }
 
     fun updateAaHeightMargin(margin: Int) {
-        viewModelScope.launch {
-            preferences.setAaHeightMargin(margin)
-            sendBridgeConfig("aa_height_margin" to margin.toString())
-        }
+        viewModelScope.launch { preferences.setAaHeightMargin(margin) }
+    }
+
+    fun updateAaPixelAspect(value: Int) {
+        viewModelScope.launch { preferences.setAaPixelAspect(value) }
     }
 
     fun updatePhoneMode(mode: String) {
-        viewModelScope.launch {
-            preferences.setPhoneMode(mode)
-            sendBridgeConfig("phone_mode" to mode)
-        }
+        viewModelScope.launch { preferences.setPhoneMode(mode) }
     }
 
     fun updateWifiBand(band: String) {
-        viewModelScope.launch {
-            preferences.setWifiBand(band)
-            sendBridgeConfig("wifi_band" to band)
-        }
+        viewModelScope.launch { preferences.setWifiBand(band) }
     }
 
     fun updateWifiCountry(country: String) {
-        viewModelScope.launch {
-            preferences.setWifiCountry(country)
-            sendBridgeConfig("wifi_country" to country)
-        }
+        viewModelScope.launch { preferences.setWifiCountry(country) }
     }
 
     fun updateWifiSsid(ssid: String) {
-        viewModelScope.launch {
-            preferences.setWifiSsid(ssid)
-            sendBridgeConfig("wifi_ssid" to ssid)
-        }
+        viewModelScope.launch { preferences.setWifiSsid(ssid) }
     }
 
     fun updateWifiPassword(password: String) {
-        viewModelScope.launch {
-            preferences.setWifiPassword(password)
-            sendBridgeConfig("wifi_password" to password)
-        }
+        viewModelScope.launch { preferences.setWifiPassword(password) }
     }
 
     fun updateHeadUnitName(name: String) {
-        viewModelScope.launch {
-            preferences.setHeadUnitName(name)
-            sendBridgeConfig("head_unit_name" to name)
-        }
+        viewModelScope.launch { preferences.setHeadUnitName(name) }
     }
 
     fun updateBtMac(mac: String) {
-        viewModelScope.launch {
-            preferences.setBtMac(mac)
-            sendBridgeConfig("bt_mac" to mac)
-        }
+        viewModelScope.launch { preferences.setBtMac(mac) }
     }
 
     fun updateDriveSide(side: String) {
-        viewModelScope.launch {
-            preferences.setDriveSide(side)
-            sendBridgeConfig("drive_side" to side)
-        }
+        viewModelScope.launch { preferences.setDriveSide(side) }
     }
 
     fun updateGpsForwarding(enabled: Boolean) {
@@ -396,9 +361,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             preferences.setSafeAreaBottom(bottom)
             preferences.setSafeAreaLeft(left)
             preferences.setSafeAreaRight(right)
-            sendBridgeConfig(
-                "aa_stable_insets" to "$top,$bottom,$left,$right"
-            )
         }
     }
 
@@ -408,9 +370,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             preferences.setContentInsetBottom(bottom)
             preferences.setContentInsetLeft(left)
             preferences.setContentInsetRight(right)
-            sendBridgeConfig(
-                "aa_content_insets" to "$top,$bottom,$left,$right"
-            )
         }
     }
 
@@ -419,17 +378,19 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         bridgeDiscovery.stopDiscovery()
     }
 
-    private suspend fun sendBridgeConfig(vararg pairs: Pair<String, String>) {
-        ConfigUpdateSender.sendConfigUpdate(pairs.toMap())
-    }
-
     /**
-     * Send all pending config changes to the bridge, then restart bridge services.
+     * Send the full config snapshot to the bridge, then restart bridge services.
+     * All settings changes are cached locally in DataStore until this is called.
      * The bridge saves config to env, then restarts itself (and optionally WiFi/BT).
      * The phone will reconnect and renegotiate (e.g., new codec, resolution).
      */
     fun saveAndRestart(restartWireless: Boolean = true, restartBluetooth: Boolean = false) {
         viewModelScope.launch {
+            // Send full config snapshot — bridge compares and applies diffs
+            val config = preferences.getBridgeConfigSnapshot()
+            if (config.isNotEmpty()) {
+                ConfigUpdateSender.sendConfigUpdate(config)
+            }
             ConfigUpdateSender.sendRestart(
                 restartWireless = restartWireless,
                 restartBluetooth = restartBluetooth,

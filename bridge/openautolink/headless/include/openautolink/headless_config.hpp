@@ -34,6 +34,11 @@ struct HeadlessConfig {
         UiInsets runtime_content_insets;
         UiInsets runtime_stable_insets;
 
+        // Floor for stable insets from display cutout (auto-computed in handle_app_hello).
+        // When user-configured stable_insets arrive via config_update, final values
+        // are max(user, cutout_floor) per edge.
+        UiInsets cutout_stable_floor;
+
         bool has_video_overrides() const {
             return width_margin != 0 || height_margin != 0 || pixel_aspect_ratio_e4 != 0 ||
                    real_density != 0 || viewing_distance != 0 || decoder_additional_depth != 0;

@@ -97,22 +97,12 @@ private val displayModes = listOf(
     DisplayModeOption(
         "system_ui_visible",
         "System UI Visible",
-        "Video is inset to avoid status bar and nav bar. Recommended for GM."
-    ),
-    DisplayModeOption(
-        "status_bar_hidden",
-        "Status Bar Hidden",
-        "Hides status bar, video extends into that area. Nav bar stays."
-    ),
-    DisplayModeOption(
-        "nav_bar_hidden",
-        "Nav Bar Hidden",
-        "Hides nav bar/dock, video extends into that area. Status bar stays."
+        "Video avoids system bars. Recommended default."
     ),
     DisplayModeOption(
         "fullscreen_immersive",
         "Fullscreen Immersive",
-        "Hides all system bars. Video fills entire screen. Swipe edge to reveal bars."
+        "Video fills entire screen edge-to-edge."
     ),
 )
 
@@ -1484,6 +1474,36 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text("px", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        // Pixel Aspect Ratio
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.width(140.dp)) {
+                Text(
+                    text = "Pixel Aspect",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    text = "×10000. 10000=square. ${(2914f / 1134f * 10000 / (1920f / 1080f)).toInt()}=your display.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            OutlinedTextField(
+                value = if (uiState.aaPixelAspect == 0) "" else uiState.aaPixelAspect.toString(),
+                onValueChange = { value ->
+                    val v = value.filter { it.isDigit() }.toIntOrNull() ?: 0
+                    viewModel.updateAaPixelAspect(v.coerceIn(0, 30000))
+                },
+                placeholder = { Text("0 (square)") },
+                singleLine = true,
+                modifier = Modifier.width(120.dp).testTag("aaPixelAspect"),
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))

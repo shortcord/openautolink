@@ -419,6 +419,7 @@ class SessionManager(
         val actualHeight: Int
         val actualDpi: Int
         var cutTop = 0; var cutBottom = 0; var cutLeft = 0; var cutRight = 0
+        var sbarTop = 0; var sbarBottom = 0; var sbarLeft = 0; var sbarRight = 0
         if (displayWidth > 0 && displayHeight > 0 && displayDpi > 0) {
             actualWidth = displayWidth
             actualHeight = displayHeight
@@ -438,13 +439,22 @@ class SessionManager(
             cutBottom = cutoutInsets.bottom
             cutLeft = cutoutInsets.left
             cutRight = cutoutInsets.right
+            // Read system bar insets (status bar, nav bar)
+            val barInsets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                android.view.WindowInsets.Type.systemBars()
+            )
+            sbarTop = barInsets.top
+            sbarBottom = barInsets.bottom
+            sbarLeft = barInsets.left
+            sbarRight = barInsets.right
         } else {
             actualWidth = 0
             actualHeight = 0
             actualDpi = 0
         }
         Log.i(TAG, "sendAppHello: display=${actualWidth}x${actualHeight} dpi=$actualDpi" +
-            " cutout=T:$cutTop B:$cutBottom L:$cutLeft R:$cutRight")
+            " cutout=T:$cutTop B:$cutBottom L:$cutLeft R:$cutRight" +
+            " bars=T:$sbarTop B:$sbarBottom L:$sbarLeft R:$sbarRight")
         connectionManager.sendControlMessage(
             ControlMessage.AppHello(
                 version = 1,
@@ -456,6 +466,10 @@ class SessionManager(
                 cutoutBottom = cutBottom,
                 cutoutLeft = cutLeft,
                 cutoutRight = cutRight,
+                barTop = sbarTop,
+                barBottom = sbarBottom,
+                barLeft = sbarLeft,
+                barRight = sbarRight,
             )
         )
     }

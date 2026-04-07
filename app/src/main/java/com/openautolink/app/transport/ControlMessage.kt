@@ -123,6 +123,10 @@ sealed class ControlMessage {
         val cutoutBottom: Int = 0,
         val cutoutLeft: Int = 0,
         val cutoutRight: Int = 0,
+        val barTop: Int = 0,
+        val barBottom: Int = 0,
+        val barLeft: Int = 0,
+        val barRight: Int = 0,
     ) : ControlMessage()
 
     data class Touch(

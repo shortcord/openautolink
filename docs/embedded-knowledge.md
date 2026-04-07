@@ -7,10 +7,25 @@ Hard-won knowledge from the original CPC200 adapter app. These findings were val
 ## Car Hardware (GM Blazer EV, gminfo platform)
 
 ### Display
-- Physical: 2914×1134 pixels
-- Usable: ~2628×800 (with nav bar hidden)
-- DPI: 160
-- SoC: **Qualcomm Snapdragon** (NOT Intel as some GM docs suggest, but some generation are intel, so we should try to support those as the are the same screen and AAOS, just a different processor and therefore decoders)
+- Physical framebuffer: 2914×1134 pixels (reported by AAOS)
+- The physical screen is not a flat rectangle — it has a curved/sloped top edge (taller on the left, slopes down to the right) and a curved right side
+- AAOS reports the full rectangular framebuffer; physically-missing areas are reported as **display cutout insets** (T:167 B:0 L:0 R:285 on the Blazer EV)
+- System bar: status bar at top (~166px), no nav dock
+- HVAC controls are below the AAOS area (not part of the framebuffer)
+- DPI: 200
+
+### Display Cutout & Wide-Screen AA
+- AAOS display cutout insets describe where the physical screen curves/slopes away
+- The app reads these via `WindowInsets.Type.displayCutout()` and sends them to the bridge in the hello message
+- The bridge auto-computes AA video parameters from display + cutout:
+  - `pixel_aspect_ratio_e4` — tells AA to layout for the actual display AR (e.g., 14444 for 2.57:1)
+  - `height_margin` — tells AA how many video pixels are cropped by SCALE_TO_FIT_WITH_CROPPING
+  - `stable_insets` — tells AA where physical curves are (buttons stay away)
+- MediaCodec `SCALE_TO_FIT_WITH_CROPPING` stretches the 1920×1080 video to fill the display width, cropping top/bottom
+- Maps render edge-to-edge (including into curved areas); buttons/text stay in the safe center band
+- All auto-computed from AAOS APIs — works on any AAOS head unit with any screen shape
+- Override via Settings → Video tab (Width Margin, Height Margin, Pixel Aspect) or `/etc/openautolink.env`
+- SoC: **Qualcomm Snapdragon** (some GM generations use Intel — same screen/AAOS, different decoders)
 
 ### HW Video Decoders
 - `c2.qti.avc.decoder` — H.264, max 8192×4320 @ 480fps

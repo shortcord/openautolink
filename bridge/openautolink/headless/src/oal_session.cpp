@@ -523,17 +523,26 @@ void OalSession::handle_app_hello(const std::string& json) {
     oal_json_extract_int(json, "cutout_left", cut_left);
     oal_json_extract_int(json, "cutout_right", cut_right);
 
+    // Read system bar insets (status bar, nav bar — for logging/diagnostics)
+    int bar_top = 0, bar_bottom = 0, bar_left = 0, bar_right = 0;
+    oal_json_extract_int(json, "bar_top", bar_top);
+    oal_json_extract_int(json, "bar_bottom", bar_bottom);
+    oal_json_extract_int(json, "bar_left", bar_left);
+    oal_json_extract_int(json, "bar_right", bar_right);
+
     std::cerr << "[OAL] app hello: display=" << display_w << "x" << display_h
               << " dpi=" << display_dpi
               << " cutout=T:" << cut_top << " B:" << cut_bottom
-              << " L:" << cut_left << " R:" << cut_right << std::endl;
+              << " L:" << cut_left << " R:" << cut_right
+              << " bars=T:" << bar_top << " B:" << bar_bottom
+              << " L:" << bar_left << " R:" << bar_right << std::endl;
 
-    // Auto-compute AA video margins from display aspect ratio.
-    // When the app uses SCALE_TO_FIT_WITH_CROPPING, some of the 16:9 video
-    // frame is cropped to fill the wider display. height_margin tells AA
-    // to layout buttons/text within the visible center, not in cropped areas.
+    // Auto-compute AA video parameters from display aspect ratio.
+    // The app uses SCALE_TO_FIT_WITH_CROPPING — the video fills the display
+    // width proportionally, cropping top/bottom if the display is wider than 16:9.
+    // We auto-set pixel_aspect_ratio, height_margin, and stable_insets so AA
+    // layouts its UI correctly for the actual visible area.
     if (display_w > 0 && display_h > 0) {
-        // Get AA video dimensions for current resolution tier
         int video_w = 1920, video_h = 1080;
         switch (config_.aa_resolution_tier) {
             case 1: video_w = 800;  video_h = 480;  break;
@@ -546,44 +555,44 @@ void OalSession::handle_app_hello(const std::string& json) {
         double display_ar = static_cast<double>(display_w) / display_h;
         double video_ar = static_cast<double>(video_w) / video_h;
 
+        // Auto pixel_aspect_ratio: tells AA the pixels are wider than square,
+        // so it layouts UI for a wider display. Only set if not already overridden.
+        if (config_.aa_ui_experiment.pixel_aspect_ratio_e4 == 0 && display_ar > video_ar + 0.01) {
+            int par = static_cast<int>(display_ar / video_ar * 10000);
+            config_.aa_ui_experiment.pixel_aspect_ratio_e4 = par;
+            std::cerr << "[OAL] auto pixel_aspect_ratio=" << par
+                      << " (display " << display_ar << ":1 → AA sees ~"
+                      << (display_ar / video_ar) << "x wider)" << std::endl;
+        }
+
+        // Auto height_margin: with crop-to-fill on a wider display, vertical
+        // content is cropped. Tell AA to keep buttons in the visible center band.
         if (display_ar > video_ar + 0.01) {
-            // Display is wider than video — height gets cropped
-            // visible_video_h = display_h * video_w / display_w (in video pixels)
             int visible_h = static_cast<int>(static_cast<double>(display_h) * video_w / display_w);
             int margin = video_h - visible_h;
-            if (margin > 0 && margin < video_h) {
+            if (margin > 0 && margin < video_h &&
+                config_.aa_ui_experiment.height_margin == 0) {
                 config_.aa_ui_experiment.height_margin = margin;
                 std::cerr << "[OAL] auto height_margin=" << margin
-                          << " (display " << display_ar << ":1 vs video " << video_ar << ":1"
-                          << ", visible " << visible_h << "/" << video_h << "px)" << std::endl;
-            }
-        } else if (video_ar > display_ar + 0.01) {
-            // Display is taller than video — width gets cropped
-            int visible_w = static_cast<int>(static_cast<double>(display_w) * video_h / display_h);
-            int margin = video_w - visible_w;
-            if (margin > 0 && margin < video_w) {
-                config_.aa_ui_experiment.width_margin = margin;
-                std::cerr << "[OAL] auto width_margin=" << margin
-                          << " (display " << display_ar << ":1 vs video " << video_ar << ":1"
-                          << ", visible " << visible_w << "/" << video_w << "px)" << std::endl;
+                          << " (visible " << visible_h << "/" << video_h << "px)" << std::endl;
             }
         }
 
-        // Auto-merge display cutout into stable insets (safe area).
-        // Scale cutout from display pixels to AA video coordinates.
-        // With crop-to-fill, scale = display_w / video_w (width fills).
+        // Auto stable_insets from display cutout.
+        // With crop-to-fill, scale = display_w / video_w (width fills the surface).
         if (cut_top > 0 || cut_bottom > 0 || cut_left > 0 || cut_right > 0) {
             double scale = static_cast<double>(display_w) / video_w;
-            int crop_v = config_.aa_ui_experiment.height_margin / 2; // per-side vertical crop
+            int crop_v = config_.aa_ui_experiment.height_margin / 2;
 
-            // Scale cutout to video coords, subtract crop offset for vertical
             int safe_top = (cut_top > 0) ? std::max(0, static_cast<int>(cut_top / scale) - crop_v) : 0;
             int safe_bottom = (cut_bottom > 0) ? std::max(0, static_cast<int>(cut_bottom / scale) - crop_v) : 0;
             int safe_left = (cut_left > 0) ? static_cast<int>(cut_left / scale) : 0;
             int safe_right = (cut_right > 0) ? static_cast<int>(cut_right / scale) : 0;
 
-            // Merge with existing stable insets (take the larger of cutout vs user-configured)
             auto& si = config_.aa_ui_experiment.initial_stable_insets;
+            auto& floor = config_.aa_ui_experiment.cutout_stable_floor;
+            floor.top = safe_top; floor.bottom = safe_bottom;
+            floor.left = safe_left; floor.right = safe_right;
             if (safe_top > static_cast<int>(si.top)) si.top = safe_top;
             if (safe_bottom > static_cast<int>(si.bottom)) si.bottom = safe_bottom;
             if (safe_left > static_cast<int>(si.left)) si.left = safe_left;
@@ -794,6 +803,13 @@ void OalSession::handle_config_update(const std::string& json) {
         config_changed = true;
         std::cerr << "[OAL] height_margin override: " << hm << std::endl;
     }
+    int pa = 0;
+    if (oal_json_extract_int(json, "aa_pixel_aspect", pa) && pa > 0 &&
+        pa != static_cast<int>(config_.aa_ui_experiment.pixel_aspect_ratio_e4)) {
+        config_.aa_ui_experiment.pixel_aspect_ratio_e4 = pa;
+        config_changed = true;
+        std::cerr << "[OAL] pixel_aspect_ratio override: " << pa << std::endl;
+    }
 
     std::string drive_side = oal_json_extract_string(json, "drive_side");
     if (!drive_side.empty()) {
@@ -834,9 +850,17 @@ void OalSession::handle_config_update(const std::string& json) {
     if (!stable_insets.empty()) {
         HeadlessConfig::UiInsets insets;
         if (parse_insets(stable_insets, insets)) {
+            // Merge user-configured insets with auto-computed cutout floor
+            const auto& floor = config_.aa_ui_experiment.cutout_stable_floor;
+            insets.top = std::max(insets.top, floor.top);
+            insets.bottom = std::max(insets.bottom, floor.bottom);
+            insets.left = std::max(insets.left, floor.left);
+            insets.right = std::max(insets.right, floor.right);
             config_.aa_ui_experiment.initial_stable_insets = insets;
             config_changed = true;
-            std::cerr << "[OAL] safe area insets updated: " << stable_insets << std::endl;
+            std::cerr << "[OAL] safe area insets updated (merged with cutout floor): "
+                      << "T:" << insets.top << " B:" << insets.bottom
+                      << " L:" << insets.left << " R:" << insets.right << std::endl;
         }
     }
 

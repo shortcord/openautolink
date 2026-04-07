@@ -49,6 +49,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val AA_DPI = intPreferencesKey("aa_dpi")
         val AA_WIDTH_MARGIN = intPreferencesKey("aa_width_margin")
         val AA_HEIGHT_MARGIN = intPreferencesKey("aa_height_margin")
+        val AA_PIXEL_ASPECT = intPreferencesKey("aa_pixel_aspect")
         val PHONE_MODE = stringPreferencesKey("phone_mode")
         val WIFI_BAND = stringPreferencesKey("wifi_band")
         val WIFI_COUNTRY = stringPreferencesKey("wifi_country")
@@ -101,6 +102,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_AA_DPI = 200
         const val DEFAULT_AA_WIDTH_MARGIN = 0 // 0 = auto from display AR
         const val DEFAULT_AA_HEIGHT_MARGIN = 0 // 0 = auto from display AR
+        const val DEFAULT_AA_PIXEL_ASPECT = 0 // 0 = default (square pixels, 10000)
         const val DEFAULT_PHONE_MODE = "wireless"
         const val DEFAULT_WIFI_BAND = "5ghz"
         const val DEFAULT_WIFI_COUNTRY = "US"
@@ -192,6 +194,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     val aaHeightMargin: Flow<Int> = dataStore.data.map { prefs ->
         prefs[AA_HEIGHT_MARGIN] ?: DEFAULT_AA_HEIGHT_MARGIN
+    }
+
+    val aaPixelAspect: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[AA_PIXEL_ASPECT] ?: DEFAULT_AA_PIXEL_ASPECT
     }
 
     val phoneMode: Flow<String> = dataStore.data.map { prefs ->
@@ -366,6 +372,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         dataStore.edit { it[AA_HEIGHT_MARGIN] = margin }
     }
 
+    suspend fun setAaPixelAspect(value: Int) {
+        dataStore.edit { it[AA_PIXEL_ASPECT] = value }
+    }
+
     suspend fun setPhoneMode(mode: String) {
         dataStore.edit { it[PHONE_MODE] = mode }
     }
@@ -487,6 +497,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[AA_DPI]?.let { config["aa_dpi"] = it.toString() }
         prefs[AA_WIDTH_MARGIN]?.let { if (it > 0) config["aa_width_margin"] = it.toString() }
         prefs[AA_HEIGHT_MARGIN]?.let { if (it > 0) config["aa_height_margin"] = it.toString() }
+        prefs[AA_PIXEL_ASPECT]?.let { if (it > 0) config["aa_pixel_aspect"] = it.toString() }
         prefs[DRIVE_SIDE]?.let { config["drive_side"] = it }
         prefs[HEAD_UNIT_NAME]?.let { config["head_unit_name"] = it }
         prefs[BT_MAC]?.let { if (it.isNotBlank()) config["bt_mac"] = it }

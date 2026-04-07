@@ -115,13 +115,9 @@ fun ProjectionScreen(
                 top = maxOf(barTop, cutTop).toDp(),
                 bottom = cutBottom.toDp()
             )
-            // Fullscreen — only avoid physically-missing display cutout areas
-            "fullscreen_immersive" -> androidx.compose.foundation.layout.PaddingValues(
-                start = cutLeft.toDp(),
-                end = cutRight.toDp(),
-                top = cutTop.toDp(),
-                bottom = cutBottom.toDp()
-            )
+            // Fullscreen — video fills entire screen edge-to-edge.
+            // AA stable_insets (sent to bridge) keep buttons away from curves.
+            "fullscreen_immersive" -> androidx.compose.foundation.layout.PaddingValues()
             else -> androidx.compose.foundation.layout.PaddingValues()
         }
     }

@@ -10,13 +10,13 @@
 
 - Wireless Android Auto — phone connects via Bluetooth + WiFi, no cables
 - Up to 1080p60 video with H.264, H.265, or VP9 codec support
+- Auto wide-display adaptation — reads AAOS display dimensions and cutout insets, auto-computes pixel aspect ratio, crop margins, and safe areas so AA fills your screen correctly on any head unit
+- Display safe zone / insets — auto-computed from AAOS display cutout (curved bezels, sloped edges), keeps interactive AA UI in the safe area while maps render edge-to-edge. Manually tweakable via visual drag editors
 - Full audio: media, navigation prompts, phone calls, voice assistant
 - Touch, steering wheel controls, and microphone input forwarded to the phone
 - Vehicle data (speed, gear, fuel/EV range, GPS, etc.) sent to Android Auto
 - Navigation turn-by-turn displayed on the instrument cluster (lane guidance, cue text, maneuver icons)
 - Album art and track info on the cluster display (Spotify, etc.)
-- Display safe zone / insets — configurable insets tell AA to keep interactive UI away from curved bezels while rendering maps edge-to-edge
-- Custom viewport editor — adjust the projection area with draggable handles, aspect ratio lock, and presets
 - Multi-phone support: pair multiple phones, set a default, switch between them with one tap
 - Auto-reconnect on car startup — car on → brief "Connecting..." → projection appears
 - One-command SBC install

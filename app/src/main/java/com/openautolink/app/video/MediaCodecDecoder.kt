@@ -330,6 +330,10 @@ class MediaCodecDecoder(private val codecPreference: String = "h264") : VideoDec
             val mc = MediaCodec.createByCodecName(decoderName)
             mc.configure(format, surface, null, 0)
             mc.start()
+            // Fill the entire SurfaceView — AA handles layout via pixel_aspect_ratio,
+            // height_margin, and stable_insets to keep UI in the visible/safe area
+            try { mc.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING) }
+            catch (_: Exception) {}
             codec = mc
             firstFrameRendered = false
             decodeStartTimeMs = System.currentTimeMillis()
@@ -375,6 +379,8 @@ class MediaCodecDecoder(private val codecPreference: String = "h264") : VideoDec
             val mc = MediaCodec.createByCodecName(decoderName)
             mc.configure(format, surface, null, 0)
             mc.start()
+            try { mc.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING) }
+            catch (_: Exception) {}
             codec = mc
             firstFrameRendered = false
             decodeStartTimeMs = System.currentTimeMillis()

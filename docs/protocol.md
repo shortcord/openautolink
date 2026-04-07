@@ -55,7 +55,7 @@ Bidirectional newline-delimited JSON. Each message is a single JSON object follo
 ### App → Bridge
 
 ```jsonl
-{"type":"hello","version":1,"name":"OpenAutoLink App","display_width":2628,"display_height":800,"display_dpi":160}
+{"type":"hello","version":1,"name":"OpenAutoLink App","display_width":2914,"display_height":1134,"display_dpi":200,"cutout_top":167,"cutout_bottom":0,"cutout_left":0,"cutout_right":285,"bar_top":166,"bar_bottom":0,"bar_left":0,"bar_right":0}
 {"type":"touch","action":0,"x":500,"y":300,"pointer_id":0}
 {"type":"touch","action":2,"pointers":[{"id":0,"x":100,"y":200},{"id":1,"x":300,"y":400}]}
 {"type":"button","keycode":87,"down":true,"metastate":0,"longpress":false}
@@ -63,11 +63,28 @@ Bidirectional newline-delimited JSON. Each message is a single JSON object follo
 {"type":"vehicle_data","speed_kmh":65.0,"gear":"D","battery_pct":72,"turn_signal":"left","parking_brake":false,"night_mode":false}
 {"type":"vehicle_data","accel_x_e3":123,"accel_y_e3":-9810,"accel_z_e3":45,"gyro_rx_e3":10,"gyro_ry_e3":-5,"gyro_rz_e3":2,"compass_bearing_e6":127500000,"sat_in_use":8,"sat_in_view":12}
 {"type":"vehicle_data","rpm_e3":2500000}
-{"type":"config_update","video_codec":"h265","video_fps":30}
+{"type":"config_update","video_codec":"h265","video_fps":30,"aa_width_margin":"0","aa_height_margin":"0","aa_pixel_aspect":"14444"}
 {"type":"keyframe_request"}
 {"type":"list_paired_phones"}
 {"type":"switch_phone","mac":"AA:BB:CC:DD:EE:FF"}
 ```
+
+### App → Bridge: `hello` fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `display_width` | int | Full AAOS framebuffer width (pixels) |
+| `display_height` | int | Full AAOS framebuffer height (pixels) |
+| `display_dpi` | int | Logical display density |
+| `cutout_top/bottom/left/right` | int | Display cutout insets — physically curved/missing screen areas (pixels) |
+| `bar_top/bottom/left/right` | int | System bar insets — status bar, nav bar (pixels) |
+
+The bridge uses these to auto-compute AA video parameters:
+- **`pixel_aspect_ratio_e4`**: Tells AA the display is wider than 16:9, so it layouts UI for the actual display AR. Computed as `display_ar / video_ar × 10000`.
+- **`height_margin`**: Tells AA how many video pixels are cropped by `SCALE_TO_FIT_WITH_CROPPING`. AA keeps buttons in the visible center band.
+- **`stable_insets`**: Tells AA where the physical screen curves are (from cutout), scaled to video coordinates. AA keeps interactive UI away from these areas.
+
+All three are auto-computed if not overridden by env file or app config_update.
 
 ### Bridge → App: `phone_battery`
 

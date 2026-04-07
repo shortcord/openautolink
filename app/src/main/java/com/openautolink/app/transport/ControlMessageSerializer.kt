@@ -190,6 +190,13 @@ object ControlMessageSerializer {
                     put("cutout_left", message.cutoutLeft)
                     put("cutout_right", message.cutoutRight)
                 }
+                if (message.barTop != 0 || message.barBottom != 0 ||
+                    message.barLeft != 0 || message.barRight != 0) {
+                    put("bar_top", message.barTop)
+                    put("bar_bottom", message.barBottom)
+                    put("bar_left", message.barLeft)
+                    put("bar_right", message.barRight)
+                }
             }
 
             is ControlMessage.Touch -> buildJsonObject {
