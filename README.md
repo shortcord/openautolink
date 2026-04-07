@@ -182,7 +182,7 @@ Active development. All core features are implemented and working on real hardwa
 
 ## Known Issues
 
-- **Steering wheel buttons not working:** Track forward/back via steering wheel controls are not yet wired up but should be fixed soon. The voice button on the steering wheel may never work due to how GM's AAOS intercepts it. As a workaround, use the microphone button in the Android Auto UI on screen.
+- **Steering wheel controls (GM EVs):** The left-side steering wheel rocker works with Android Auto — **up = skip forward**, **down = play/pause**. There is currently no way to skip backward (previous track) from the steering wheel, as GM only exposes two media key events for this rocker. The **voice button** on the steering wheel cannot be intercepted — GM's AAOS consumes it at the system level and launches the built-in Google Assistant before the app ever sees it. As a workaround, tap the microphone icon in the Android Auto UI on screen to trigger the phone's voice assistant (Gemini, Google Assistant, etc.).
 
 - **AA projection doesn't scale to display modes:** The Android Auto UI does not properly resize when switching between display modes (e.g., full screen). This is a known layout issue and should be fixed soon.
 
