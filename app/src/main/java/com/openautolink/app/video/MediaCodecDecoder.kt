@@ -186,6 +186,13 @@ class MediaCodecDecoder(private val codecPreference: String = "h264") : VideoDec
         Log.i(TAG, "Codec config received: ${frame.data.size} bytes (flags=0x${frame.flags.toString(16)})")
         DiagnosticLog.i("video", "Codec config received: ${frame.data.size} bytes")
 
+        // New SPS/PPS means a new stream — any cached IDR from a previous session
+        // is now invalid and would produce corrupt video if replayed. Clear it.
+        if (cachedIdrFrame != null) {
+            Log.i(TAG, "Clearing stale cached IDR (new codec config received)")
+            cachedIdrFrame = null
+        }
+
         // Skip reconfigure if the codec is already running.
         // H.265 SPS/PPS varies slightly between frames (timing metadata changes),
         // but the resolution and codec profile stay the same. Reconfiguring on every
