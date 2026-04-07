@@ -108,6 +108,14 @@ jobs:
           aarch64-linux-gnu-strip openautolink-headless
 
       - name: Upload bridge binary to release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: build-bridge/openautolink-headless
+
+      - name: Upload bridge binary as artifact (manual builds)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openautolink-headless
+          path: build-bridge/openautolink-headless
