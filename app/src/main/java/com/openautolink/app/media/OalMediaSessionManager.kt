@@ -161,6 +161,12 @@ class OalMediaSessionManager(private val context: Context) {
                     builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
                     builder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, bitmap)
                 }
+            } else {
+                // Playback-only update (no new art) — preserve cached bitmap
+                cachedBitmap?.let { bitmap ->
+                    builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
+                    builder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, bitmap)
+                }
             }
 
             session.setMetadata(builder.build())

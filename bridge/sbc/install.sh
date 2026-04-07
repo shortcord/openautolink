@@ -82,6 +82,7 @@ declare -A SBC_FILES=(
     ["start-wireless.sh"]="bridge/sbc/start-wireless.sh"
     ["stop-wireless.sh"]="bridge/sbc/stop-wireless.sh"
     ["aa_bt_all.py"]="bridge/openautolink/scripts/aa_bt_all.py"
+    ["apply-bridge-update.sh"]="bridge/sbc/apply-bridge-update.sh"
     ["avahi-openautolink.service"]="bridge/openautolink/headless/avahi/openautolink.service"
 )
 
@@ -106,6 +107,11 @@ for script in run-openautolink.sh setup-network.sh \
     [ -f "${TMP_DIR}/${script}" ] && cp "${TMP_DIR}/${script}" "${INSTALL_DIR}/"
 done
 chmod +x "${INSTALL_DIR}"/*.sh 2>/dev/null || true
+
+# Update apply script goes in bin/ (called by the bridge binary)
+[ -f "${TMP_DIR}/apply-bridge-update.sh" ] && \
+    cp "${TMP_DIR}/apply-bridge-update.sh" "${INSTALL_DIR}/bin/"
+chmod +x "${INSTALL_DIR}/bin/apply-bridge-update.sh" 2>/dev/null || true
 
 # BT script
 [ -f "${TMP_DIR}/aa_bt_all.py" ] && \
@@ -227,7 +233,11 @@ echo "       (video resolution, codec, display insets, country code)"
 echo "    2. Reboot: sudo reboot"
 echo "    3. The bridge starts automatically on boot"
 echo ""
-echo "  To update later:"
-echo "    Temporarily reconnect the SBC to a network with internet,"
-echo "    then run this installer again."
+echo "  Updates:"
+echo "    The bridge binary updates automatically — the car app checks"
+echo "    GitHub for new releases and pushes updates over TCP."
+echo "    No manual action needed after initial install."
+echo ""
+echo "    To disable auto-update (for development):"
+echo "      Set OAL_BRIDGE_UPDATE_MODE=disabled in /etc/openautolink.env"
 echo ""

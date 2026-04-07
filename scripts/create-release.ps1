@@ -1,25 +1,22 @@
 <#
 .SYNOPSIS
-    Creates a GitHub Release with the AAB and bridge binary attached.
+    Creates a GitHub Release with the bridge binary attached.
 
 .DESCRIPTION
     - Reads version from secrets/version.properties
     - Creates a GitHub release with tag v<versionName>
-    - Uploads:
-      - The release AAB from app/build/outputs/bundle/release/
-      - The bridge binary from build-bridge-arm64/ (renamed to openautolink-headless-arm64)
+    - Uploads the bridge binary from build-bridge-arm64/ (as openautolink-headless)
+    - The AAB is NOT uploaded — it goes to Google Play Console separately
     - Requires: gh CLI authenticated
 
 .EXAMPLE
-    # After building both:
-    .\scripts\bundle-release.ps1
+    # After building:
     bash scripts/build-bridge-wsl.sh
     .\scripts\create-release.ps1
 #>
 param(
     [string]$Notes = "",
-    [switch]$Draft,
-    [switch]$NoBridge   # Skip attaching bridge binary
+    [switch]$Draft
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,33 +38,15 @@ Get-Content $versionFile | ForEach-Object {
 $tag = "v$($version['versionName'])"
 Write-Host "[release] Creating release: $tag"
 
-# Find AAB
-$aabDir = Join-Path $repoRoot 'app\build\outputs\bundle\release'
-$aab = Get-ChildItem -Path $aabDir -Filter '*.aab' -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $aab) {
-    Write-Warning "No AAB found in $aabDir — run bundle-release.ps1 first"
-}
-
-# Find bridge binary
+# Find bridge binary — uploaded as 'openautolink-headless' (the name the app downloads)
 $bridgeBinary = Join-Path $repoRoot 'build-bridge-arm64\openautolink-headless-stripped'
-$bridgeAsset = Join-Path $repoRoot 'build-bridge-arm64\openautolink-headless-arm64'
-$hasBridge = $false
-if (-not $NoBridge -and (Test-Path $bridgeBinary)) {
-    # Rename for the release asset name the app expects
+$bridgeAsset = Join-Path $repoRoot 'build-bridge-arm64\openautolink-headless'
+if (Test-Path $bridgeBinary) {
+    # Copy stripped binary with the release asset name the app expects
     Copy-Item -Path $bridgeBinary -Destination $bridgeAsset -Force
-    $hasBridge = $true
     Write-Host "[release] Bridge binary: $bridgeAsset"
-} elseif (-not $NoBridge) {
-    Write-Warning "No bridge binary found at $bridgeBinary — run build-bridge-wsl.sh first"
-}
-
-# Build asset list
-$assets = @()
-if ($aab) { $assets += $aab.FullName }
-if ($hasBridge) { $assets += $bridgeAsset }
-
-if ($assets.Count -eq 0) {
-    throw "No assets to upload. Build the AAB and/or bridge first."
+} else {
+    throw "No bridge binary found at $bridgeBinary — run build-bridge-wsl.sh first"
 }
 
 # Create release
@@ -79,10 +58,10 @@ if ($Notes) {
 } else {
     $ghArgs += '--generate-notes'
 }
-$ghArgs += $assets
+$ghArgs += $bridgeAsset
 
 Write-Host "[release] gh $($ghArgs -join ' ')"
 & gh @ghArgs
 
 Write-Host ""
-Write-Host "[release] Release $tag created with $($assets.Count) asset(s)"
+Write-Host "[release] Release $tag created with bridge binary"

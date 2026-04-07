@@ -44,7 +44,7 @@ class BridgeUpdateManager(
     companion object {
         private const val TAG = "BridgeUpdateManager"
         private const val GITHUB_API = "https://api.github.com"
-        private const val ASSET_NAME = "openautolink-headless-arm64"
+        private const val ASSET_NAME = "openautolink-headless"
         private const val CHUNK_SIZE = 49152 // 48KB decoded per chunk (base64 = ~65KB JSON line)
         private const val CACHE_DIR = "bridge_updates"
         private const val VERSION_CHECK_CACHE_MS = 3600_000L // 1 hour
