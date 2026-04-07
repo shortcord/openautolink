@@ -3,7 +3,6 @@ name: Release Bridge
 on:
   release:
     types: [published]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -82,12 +81,8 @@ jobs:
           EOF
 
           # Extract version from release tag (e.g. v0.1.54 → 0.1.54)
-          if [ "${{ github.event_name }}" = "release" ]; then
-            BRIDGE_VERSION="${{ github.event.release.tag_name }}"
-            BRIDGE_VERSION="${BRIDGE_VERSION#v}"
-          else
-            BRIDGE_VERSION="dev-$(date +%Y%m%d)"
-          fi
+          BRIDGE_VERSION="${{ github.event.release.tag_name }}"
+          BRIDGE_VERSION="${BRIDGE_VERSION#v}"
           echo "Building bridge version: ${BRIDGE_VERSION}"
 
           mkdir -p build-bridge
@@ -108,14 +103,6 @@ jobs:
           aarch64-linux-gnu-strip openautolink-headless
 
       - name: Upload bridge binary to release
-        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: build-bridge/openautolink-headless
-
-      - name: Upload bridge binary as artifact (manual builds)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: openautolink-headless
-          path: build-bridge/openautolink-headless
