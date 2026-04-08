@@ -1365,7 +1365,8 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         Text(
             text = "Video codec the phone uses to encode the AA stream. " +
-                    "H.264 works up to 1080p. H.265 and VP9 are required for 1440p/4K.",
+                    "H.265 is recommended for 1440p/4K. H.264 may work at higher resolutions " +
+                    "depending on your phone.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
@@ -1373,30 +1374,27 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         val isHighRes = uiState.aaResolution in listOf("1440p", "4k")
         listOf(
-            Triple("h264", "H.264", if (isHighRes) " (max 1080p)" else " (Recommended)"),
+            Triple("h264", "H.264", if (isHighRes) "" else " (Recommended)"),
             Triple("h265", "H.265 / HEVC", if (isHighRes) " (Recommended)" else ""),
             Triple("vp9", "VP9", ""),
         ).forEach { (key, label, suffix) ->
-            val isDisabled = key == "h264" && isHighRes
             Row(
                 modifier = Modifier
                     .fillMaxWidth(0.7f)
-                    .then(if (isDisabled) Modifier else Modifier.clickable { viewModel.updateVideoCodec(key) })
+                    .clickable { viewModel.updateVideoCodec(key) }
                     .padding(vertical = 10.dp)
                     .testTag("videoCodec_$key"),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 RadioButton(
                     selected = uiState.videoCodec == key,
-                    onClick = { if (!isDisabled) viewModel.updateVideoCodec(key) },
-                    enabled = !isDisabled
+                    onClick = { viewModel.updateVideoCodec(key) }
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = label + suffix,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = if (uiState.videoCodec == key) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isDisabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) else Color.Unspecified,
                 )
             }
         }
@@ -1454,14 +1452,13 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         Text(
             text = "Resolution tier the phone encodes at. Higher = better quality, more bandwidth. " +
-                    "1440p and 4K require H.265 or VP9 codec. Phone AA developer settings may need " +
+                    "H.265 or VP9 recommended for 1440p/4K. Phone AA developer settings may need " +
                     "to be enabled for resolutions above 1080p.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
         )
 
-        val isH264 = uiState.videoCodec == "h264"
         listOf(
             Triple("480p", "480p (800×480)", false),
             Triple("720p", "720p (1280×720)", false),
@@ -1470,19 +1467,17 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             Triple("4k", "4K (3840×2160)", true),
         ).forEach { (key, label, isHighRes) ->
             val warningColor = Color(0xFFFFB74D)
-            val isDisabled = isHighRes && isH264
             Row(
                 modifier = Modifier
                     .fillMaxWidth(0.7f)
-                    .then(if (isDisabled) Modifier else Modifier.clickable { viewModel.updateAaResolution(key) })
+                    .clickable { viewModel.updateAaResolution(key) }
                     .padding(vertical = 10.dp)
                     .testTag("aaResolution_$key"),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 RadioButton(
                     selected = uiState.aaResolution == key,
-                    onClick = { if (!isDisabled) viewModel.updateAaResolution(key) },
-                    enabled = !isDisabled
+                    onClick = { viewModel.updateAaResolution(key) }
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
@@ -1490,14 +1485,13 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                         text = label,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = if (uiState.aaResolution == key) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (isDisabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                               else if (isHighRes) warningColor else Color.Unspecified,
+                        color = if (isHighRes) warningColor else Color.Unspecified,
                     )
-                    if (isDisabled) {
+                    if (isHighRes) {
                         Text(
-                            text = "Requires H.265 or VP9 codec",
+                            text = "AA Developer Mode required on phone",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            color = warningColor,
                         )
                     }
                 }

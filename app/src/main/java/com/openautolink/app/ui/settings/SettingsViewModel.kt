@@ -210,16 +210,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateVideoCodec(codec: String) {
-        viewModelScope.launch {
-            preferences.setVideoCodec(codec)
-            // H.264 maxes out at 1080p — cap resolution if needed
-            if (codec == "h264") {
-                val currentRes = uiState.value.aaResolution
-                if (currentRes in listOf("1440p", "4k")) {
-                    preferences.setAaResolution("1080p")
-                }
-            }
-        }
+        viewModelScope.launch { preferences.setVideoCodec(codec) }
     }
 
     fun updateVideoFps(fps: Int) {
@@ -243,16 +234,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateAaResolution(resolution: String) {
-        viewModelScope.launch {
-            preferences.setAaResolution(resolution)
-            // 1440p/4K require H.265 or VP9 — auto-switch from H.264
-            if (resolution in listOf("1440p", "4k")) {
-                val currentCodec = uiState.value.videoCodec
-                if (currentCodec == "h264") {
-                    preferences.setVideoCodec("h265")
-                }
-            }
-        }
+        viewModelScope.launch { preferences.setAaResolution(resolution) }
     }
 
     fun updateAaDpi(dpi: Int) {
