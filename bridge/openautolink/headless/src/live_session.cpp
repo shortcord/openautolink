@@ -1167,12 +1167,12 @@ void LiveAasdkSession::on_vehicle_data(const ParsedInputMessage& message) {
 
     // payload is a JSON object with sensor fields
     // Simple inline JSON field extraction (no external JSON library)
-    auto json = std::string_view(decoded);
+    const std::string& json = decoded;
 
     auto extract_int = [&](std::string_view key) -> std::optional<int> {
         auto needle = "\"" + std::string(key) + "\":";
         auto pos = json.find(needle);
-        if (pos == std::string_view::npos) return std::nullopt;
+        if (pos == std::string::npos) return std::nullopt;
         pos += needle.size();
         while (pos < json.size() && json[pos] == ' ') ++pos;
         bool negative = false;
@@ -1191,7 +1191,7 @@ void LiveAasdkSession::on_vehicle_data(const ParsedInputMessage& message) {
     auto extract_bool = [&](std::string_view key) -> std::optional<bool> {
         auto needle = "\"" + std::string(key) + "\":";
         auto pos = json.find(needle);
-        if (pos == std::string_view::npos) return std::nullopt;
+        if (pos == std::string::npos) return std::nullopt;
         pos += needle.size();
         while (pos < json.size() && json[pos] == ' ') ++pos;
         if (pos + 3 < json.size() && json.substr(pos, 4) == "true") return true;
@@ -1203,7 +1203,7 @@ void LiveAasdkSession::on_vehicle_data(const ParsedInputMessage& message) {
         std::vector<int> result;
         auto needle = "\"" + std::string(key) + "\":[";
         auto pos = json.find(needle);
-        if (pos == std::string_view::npos) return result;
+        if (pos == std::string::npos) return result;
         pos += needle.size();
         while (pos < json.size() && json[pos] != ']') {
             while (pos < json.size() && (json[pos] == ' ' || json[pos] == ',')) ++pos;
@@ -1359,9 +1359,9 @@ void LiveAasdkSession::on_vehicle_data(const ParsedInputMessage& message) {
     }
 
     // Vehicle identity — persist to config if changed (used in next AA service discovery)
-    std::string car_make = std::string(oal_json_extract_string(json, "car_make"));
-    std::string car_model = std::string(oal_json_extract_string(json, "car_model"));
-    std::string car_year = std::string(oal_json_extract_string(json, "car_year"));
+    std::string car_make = oal_json_extract_string(json, "car_make");
+    std::string car_model = oal_json_extract_string(json, "car_model");
+    std::string car_year = oal_json_extract_string(json, "car_year");
     bool identity_changed = false;
     if (!car_make.empty() && car_make != config_.car_make) {
         config_.car_make = car_make;
