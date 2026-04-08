@@ -1524,7 +1524,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         listOf(
             "letterbox" to "Letterbox (no crop, black bars on sides)",
-            "crop" to "Crop to fill (fills screen, cuts top/bottom)",
+            "crop" to "Fill screen (set Pixel Aspect for correct proportions)",
         ).forEach { (key, label) ->
             Row(
                 modifier = Modifier

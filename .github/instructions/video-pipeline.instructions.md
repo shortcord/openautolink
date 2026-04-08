@@ -32,8 +32,10 @@ description: "Use when working on video decoding, MediaCodec configuration, Surf
 - Force even dimensions for macroblock alignment: `width and 0xFFFFFFFE.toInt()`
 
 ## Surface Sizing
-- AAOS display: 2914x1134 physical on GM. Usable area smaller (nav bar, status bar)
-- SCALE_TO_FIT_WITH_CROPPING if bridge resolution != display aspect ratio
+- AAOS display: 2914x1134 physical on GM. Usable area smaller (status bar, cutout)
+- **MUST use SCALE_TO_FIT** — Qualcomm c2.qti preserves aspect ratio with this mode
+- **NEVER use SCALE_TO_FIT_WITH_CROPPING** — Qualcomm stretches non-uniformly (circles become ovals)
+- Use `pixel_aspect_ratio` in the AA SDR to make AA pre-compensate for wide displays
 - SurfaceView preferred over TextureView (HWC overlay, lower latency)
 
 ## H.264 NAL Parsing

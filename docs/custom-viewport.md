@@ -180,7 +180,7 @@ The area outside the custom viewport must be solid black. Two approaches:
 Approach 1 should work — `Window.setBackgroundDrawable(ColorDrawable(Color.BLACK))` in Activity.
 
 ### MediaCodec Configuration
-The MediaCodec decoder should be configured with the viewport dimensions (or the AA stream dimensions, whichever the bridge sends). The SurfaceView handles scaling from codec output to physical pixels via `SCALE_TO_FIT` or `SCALE_TO_FIT_WITH_CROPPING`.
+The MediaCodec decoder should be configured with the viewport dimensions (or the AA stream dimensions, whichever the bridge sends). The SurfaceView handles scaling from codec output to physical pixels via `SCALE_TO_FIT`. **Never use `SCALE_TO_FIT_WITH_CROPPING`** — Qualcomm decoders stretch non-uniformly with it.
 
 If the viewport aspect ratio matches the stream aspect ratio (which is the whole point of ratio locking), `SCALE_TO_FIT` will fill the viewport perfectly with no letterboxing.
 

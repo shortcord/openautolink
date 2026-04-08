@@ -625,7 +625,7 @@ void OalSession::handle_app_hello(const std::string& json) {
                       << " (from env/override)" << std::endl;
         }
 
-        // height_margin: NOT auto-computed for letterbox mode (no cropping).
+        // height_margin: NOT auto-computed (AA ignores it for nav bar chrome).
         // User can override via Settings for experimentation.
         if (config_.aa_ui_experiment.height_margin > 0) {
             std::cerr << "[OAL] height_margin=" << config_.aa_ui_experiment.height_margin

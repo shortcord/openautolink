@@ -39,7 +39,7 @@ The short version: CPC200 adapters are dumb relays with fixed resolution and no 
 
 - Wireless Android Auto — phone connects via Bluetooth + WiFi, no cables
 - Up to 1080p60 video with H.264, H.265, or VP9 codec support
-- Auto wide-display adaptation — reads AAOS display dimensions and cutout insets, auto-computes pixel aspect ratio, crop margins, and safe areas so AA fills your screen correctly on any head unit
+- Auto wide-display adaptation — reads AAOS display dimensions and cutout insets, computes safe areas so AA fills your screen correctly on any head unit
 - Display safe zone / insets — auto-computed from AAOS display cutout (curved bezels, sloped edges), keeps interactive AA UI in the safe area while maps render edge-to-edge. Manually tweakable via visual drag editors
 - Full audio: media, navigation prompts, phone calls, voice assistant
 - Touch, steering wheel controls, and microphone input forwarded to the phone

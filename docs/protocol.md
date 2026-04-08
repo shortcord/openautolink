@@ -81,7 +81,7 @@ Bidirectional newline-delimited JSON. Each message is a single JSON object follo
 
 The bridge uses these to auto-compute AA video parameters:
 - **`pixel_aspect_ratio_e4`**: Tells AA the display is wider than 16:9, so it layouts UI for the actual display AR. Computed as `display_ar / video_ar × 10000`.
-- **`height_margin`**: Tells AA how many video pixels are cropped by `SCALE_TO_FIT_WITH_CROPPING`. AA keeps buttons in the visible center band.
+- **`height_margin`**: Tells AA how many video pixels are outside the visible area. AA keeps buttons in the visible center band.
 - **`stable_insets`**: Tells AA where the physical screen curves are (from cutout), scaled to video coordinates. AA keeps interactive UI away from these areas.
 
 All three are auto-computed if not overridden by env file or app config_update.
