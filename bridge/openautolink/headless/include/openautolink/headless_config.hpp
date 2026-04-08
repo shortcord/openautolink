@@ -72,8 +72,9 @@ struct HeadlessConfig {
     int video_codec = 7;
     bool left_hand_drive = true;
     std::string head_unit_name = "OpenAutoLink";
-    std::string car_model = "Chevrolet Blazer EV";
-    std::string car_year = "2024";
+    std::string car_make = "OpenAutoLink";    // Updated from app VHAL INFO_MAKE
+    std::string car_model = "Universal";       // Updated from app VHAL INFO_MODEL
+    std::string car_year = "2024";             // Updated from app VHAL INFO_MODEL_YEAR
     uint16_t tcp_port = 5277;
     int media_fd = -1;  // Binary media pipe fd (-1 = disabled)
     bool use_usb_host = false;  // true = wired AA (phone via USB), false = wireless AA (phone via WiFi)

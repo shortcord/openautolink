@@ -33,7 +33,9 @@ data class ManeuverState(
     val roundaboutExitNumber: Int? = null,
     val currentRoad: String? = null,
     val destination: String? = null,
-    val etaFormatted: String? = null
+    val etaFormatted: String? = null,
+    val displayDistance: String? = null,
+    val displayDistanceUnit: String? = null
 )
 
 data class LaneInfo(val directions: List<LaneDirectionInfo>)

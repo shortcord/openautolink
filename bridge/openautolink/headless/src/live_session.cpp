@@ -435,11 +435,11 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
     pingConfig->set_tracked_ping_count(5);
 
     auto* huInfo = response.mutable_headunit_info();
-    huInfo->set_make(config_.car_model);
-    huInfo->set_model("Universal");
+    huInfo->set_make(config_.car_make);
+    huInfo->set_model(config_.car_model);
     huInfo->set_year(config_.car_year);
-    huInfo->set_vehicle_id("piaa-001");
-    huInfo->set_head_unit_make("PiAA");
+    huInfo->set_vehicle_id("oal-001");
+    huInfo->set_head_unit_make("OpenAutoLink");
     huInfo->set_head_unit_model("Headless Bridge");
     huInfo->set_head_unit_software_build("1");
     huInfo->set_head_unit_software_version("1.0");
@@ -448,8 +448,8 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
     response.set_head_unit_make(config_.head_unit_name);
     response.set_model(config_.car_model);
     response.set_year(config_.car_year);
-    response.set_vehicle_id("piaa-001");
-    response.set_head_unit_make("PiAA");
+    response.set_vehicle_id("oal-001");
+    response.set_head_unit_make("OpenAutoLink");
     response.set_head_unit_model("Headless Bridge");
     response.set_head_unit_software_build("1");
     response.set_head_unit_software_version("1.0");
@@ -586,8 +586,10 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
       ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_COMPASS);
       ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_GPS_SATELLITE_DATA);
       ss->add_sensors()->set_sensor_type(aap_protobuf::service::sensorsource::message::SENSOR_RPM);
-      // Declare EV fuel type and connector for Google Maps EV range display
+      // Declare EV fuel type and connectors for Google Maps EV range display
+      // Blazer EV reports INFO_EV_CONNECTOR_TYPE = [1, 5] = J1772 + COMBO_1 (CCS)
       ss->add_supported_fuel_types(aap_protobuf::service::sensorsource::message::FUEL_TYPE_ELECTRIC);
+      ss->add_supported_ev_connector_types(aap_protobuf::service::sensorsource::message::EV_CONNECTOR_TYPE_J1772);
       ss->add_supported_ev_connector_types(aap_protobuf::service::sensorsource::message::EV_CONNECTOR_TYPE_COMBO_1);
       // Location characterization bitmask — tells AA about available sensor fusion
       // Bits: RAW_GPS_ONLY=256, ACCELEROMETER=4, GYROSCOPE=2, COMPASS=8, CAR_SPEED=64
@@ -1340,6 +1342,44 @@ void LiveAasdkSession::on_vehicle_data(const ParsedInputMessage& message) {
     // P6: RPM: rpm_e3 (RPM × 1000)
     if (auto rpm = extract_int("rpm_e3")) {
         sh->sendRpm(*rpm);
+    }
+
+    // Vehicle identity — persist to config if changed (used in next AA service discovery)
+    auto car_make = oal_json_extract_string(json, "car_make");
+    auto car_model = oal_json_extract_string(json, "car_model");
+    auto car_year = oal_json_extract_string(json, "car_year");
+    bool identity_changed = false;
+    if (!car_make.empty() && car_make != config_.car_make) {
+        config_.car_make = car_make;
+        identity_changed = true;
+    }
+    if (!car_model.empty() && car_model != config_.car_model) {
+        config_.car_model = car_model;
+        identity_changed = true;
+    }
+    if (!car_year.empty() && car_year != config_.car_year) {
+        config_.car_year = car_year;
+        identity_changed = true;
+    }
+    if (identity_changed) {
+        std::cerr << "[OAL] vehicle identity updated: " << config_.car_make
+                  << " " << config_.car_model << " " << config_.car_year << std::endl;
+        // Persist to env file so next boot uses correct identity
+        auto sanitize = [](const std::string& val) -> std::string {
+            std::string safe;
+            for (char c : val) {
+                if (c != '\'' && c != '"' && c != '\\' && c != '`' && c != '$' &&
+                    c != '!' && c != ';' && c != '|' && c != '&' && c != '\n' && c != '\r') {
+                    safe += c;
+                }
+            }
+            return safe;
+        };
+        std::string cmd;
+        cmd += "sed -i 's/^OAL_CAR_MAKE=.*/OAL_CAR_MAKE=" + sanitize(car_make) + "/' /etc/openautolink.env 2>/dev/null\n";
+        cmd += "sed -i 's/^OAL_CAR_MODEL=.*/OAL_CAR_MODEL=" + sanitize(car_model) + "/' /etc/openautolink.env 2>/dev/null\n";
+        cmd += "sed -i 's/^OAL_CAR_YEAR=.*/OAL_CAR_YEAR=" + sanitize(car_year) + "/' /etc/openautolink.env 2>/dev/null\n";
+        system(cmd.c_str());
     }
 
     std::cerr << "[aasdk] vehicle_data processed" << std::endl;

@@ -41,7 +41,9 @@ class NavigationDisplayImpl : NavigationDisplay {
             roundaboutExitNumber = state.roundaboutExitNumber,
             currentRoad = state.currentRoad,
             destination = state.destination,
-            etaFormatted = state.etaFormatted
+            etaFormatted = state.etaFormatted,
+            displayDistance = state.displayDistance,
+            displayDistanceUnit = state.displayDistanceUnit
         )
     }
 

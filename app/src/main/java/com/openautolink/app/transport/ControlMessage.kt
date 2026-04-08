@@ -178,6 +178,10 @@ sealed class ControlMessage {
         val evRegenBrakingLevel: Int? = null,
         val evStoppingMode: Int? = null,
         val distanceDisplayUnits: Int? = null,
+        // Vehicle identity (static VHAL properties, sent once on connect)
+        val carMake: String? = null,
+        val carModel: String? = null,
+        val carYear: String? = null,
         // P5: IMU sensors
         val accelXe3: Int? = null,
         val accelYe3: Int? = null,

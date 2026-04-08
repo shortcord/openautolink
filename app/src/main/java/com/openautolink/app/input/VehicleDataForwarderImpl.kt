@@ -69,6 +69,9 @@ class VehicleDataForwarderImpl(
             "DISTANCE_DISPLAY_UNITS" to 0x11400600,
             "INFO_FUEL_TYPE" to 0x11410105,
             "INFO_EV_CONNECTOR_TYPE" to 0x11410107,
+            "INFO_MAKE" to 0x11100101,
+            "INFO_MODEL" to 0x11100102,
+            "INFO_MODEL_YEAR" to 0x11400103,
         )
     }
 
@@ -92,6 +95,11 @@ class VehicleDataForwarderImpl(
     @Volatile
     private var previousIgnitionState: Int? = null
 
+    // Static vehicle identity — read once from VHAL INFO_* properties
+    private var carMake: String? = null
+    private var carModel: String? = null
+    private var carYear: String? = null
+
     private val _latestVehicleData = MutableStateFlow(ControlMessage.VehicleData())
     override val latestVehicleData: StateFlow<ControlMessage.VehicleData> = _latestVehicleData.asStateFlow()
 
@@ -104,6 +112,7 @@ class VehicleDataForwarderImpl(
         scope.launch {
             try {
                 connectToCar()
+                readStaticVehicleInfo()
                 registerProperties()
                 isActive = true
                 Log.i(TAG, "Vehicle data forwarding started")
@@ -192,6 +201,44 @@ class VehicleDataForwarderImpl(
             Thread.sleep(50)
         }
         return invokeBoolean(car, "isConnected") == true
+    }
+
+    /** Read static vehicle info (make/model/year) — one-time, these don't change. */
+    private fun readStaticVehicleInfo() {
+        val pm = propertyManager ?: return
+        val pmClass = pm::class.java
+
+        fun readStringProp(fieldName: String): String? {
+            val propId = resolveIntConstant("android.car.VehiclePropertyIds", fieldName) ?: return null
+            return try {
+                val pv = pmClass.getMethod("getProperty", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+                    .invoke(pm, propId, 0)
+                pv?.javaClass?.getMethod("getValue")?.invoke(pv)?.toString()
+            } catch (t: Throwable) {
+                DiagnosticLog.d("vhal", "$fieldName: read failed: ${t.rootCause().message}")
+                null
+            }
+        }
+
+        fun readIntProp(fieldName: String): Int? {
+            val propId = resolveIntConstant("android.car.VehiclePropertyIds", fieldName) ?: return null
+            return try {
+                val pv = pmClass.getMethod("getProperty", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+                    .invoke(pm, propId, 0)
+                pv?.javaClass?.getMethod("getValue")?.invoke(pv) as? Int
+            } catch (t: Throwable) {
+                DiagnosticLog.d("vhal", "$fieldName: read failed: ${t.rootCause().message}")
+                null
+            }
+        }
+
+        carMake = readStringProp("INFO_MAKE")
+        carModel = readStringProp("INFO_MODEL")
+        carYear = readIntProp("INFO_MODEL_YEAR")?.toString()
+
+        if (carMake != null || carModel != null) {
+            DiagnosticLog.i("vhal", "Vehicle identity: $carMake $carModel $carYear")
+        }
     }
 
     private fun invokeBoolean(target: Any, methodName: String): Boolean? {
@@ -536,7 +583,10 @@ class VehicleDataForwarderImpl(
             evChargeCurrentDrawLimitA = evChargeDrawLimit,
             evRegenBrakingLevel = evRegenLevel,
             evStoppingMode = evStoppingMode,
-            distanceDisplayUnits = distanceDisplayUnits
+            distanceDisplayUnits = distanceDisplayUnits,
+            carMake = carMake,
+            carModel = carModel,
+            carYear = carYear
         )
     }
 

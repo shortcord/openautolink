@@ -330,7 +330,38 @@ internal fun buildLanes(lanes: List<LaneInfo>): List<Lane> {
     }
 }
 
-internal fun toDistance(meters: Int, distanceUnits: String = "auto"): androidx.car.app.model.Distance {
+/**
+ * Convert distance to Car App Distance, preferring pre-formatted values from the phone.
+ *
+ * When [displayValue] and [displayUnit] are available (from modern NavigationState),
+ * use them directly — they match what the phone shows and avoid conversion errors.
+ * Falls back to converting raw [meters] using locale-based unit selection.
+ */
+internal fun toDistance(
+    meters: Int,
+    distanceUnits: String = "auto",
+    displayValue: String? = null,
+    displayUnit: String? = null
+): androidx.car.app.model.Distance {
+    // Prefer pre-formatted values from the phone
+    if (!displayValue.isNullOrEmpty() && !displayUnit.isNullOrEmpty()) {
+        val value = displayValue.toDoubleOrNull()
+        if (value != null) {
+            val unit = when (displayUnit) {
+                "meters" -> androidx.car.app.model.Distance.UNIT_METERS
+                "kilometers", "kilometers_p1" -> androidx.car.app.model.Distance.UNIT_KILOMETERS
+                "miles", "miles_p1" -> androidx.car.app.model.Distance.UNIT_MILES
+                "feet" -> androidx.car.app.model.Distance.UNIT_FEET
+                "yards" -> androidx.car.app.model.Distance.UNIT_YARDS
+                else -> null
+            }
+            if (unit != null) {
+                return androidx.car.app.model.Distance.create(value, unit)
+            }
+        }
+    }
+
+    // Fallback: convert raw meters
     val useImperial = when (distanceUnits) {
         "imperial" -> true
         "metric" -> false

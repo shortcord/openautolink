@@ -283,6 +283,20 @@ object ControlMessageSerializer {
                 }
                 // P6: RPM
                 message.rpmE3?.let { put("rpm_e3", it) }
+                // Vehicle identity (static — sent once, bridge persists)
+                message.carMake?.let { put("car_make", it) }
+                message.carModel?.let { put("car_model", it) }
+                message.carYear?.let { put("car_year", it) }
+                // EV extended
+                message.evChargeState?.let { put("ev_charge_state", it) }
+                message.evChargeTimeRemainingSec?.let { put("ev_charge_time_s", it) }
+                message.evCurrentBatteryCapacityWh?.let { put("ev_current_cap_wh", it) }
+                message.evBatteryTempC?.let { put("ev_battery_temp_e3", (it * 1000).toInt()) }
+                message.evChargePercentLimit?.let { put("ev_charge_limit_pct", it) }
+                message.evChargeCurrentDrawLimitA?.let { put("ev_charge_draw_a", it) }
+                message.evRegenBrakingLevel?.let { put("ev_regen_level", it) }
+                message.evStoppingMode?.let { put("ev_stopping_mode", it) }
+                message.distanceDisplayUnits?.let { put("distance_display_units", it) }
             }
 
             is ControlMessage.ConfigUpdate -> buildJsonObject {

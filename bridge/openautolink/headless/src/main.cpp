@@ -286,6 +286,11 @@ int main(int argc, char* argv[])
         c.hide_battery_level = hide_battery;
         c.aa_ui_experiment = aa_ui_experiment;
 
+        // Vehicle identity from env (persisted by app via vehicle_data)
+        if (auto v = std::getenv("OAL_CAR_MAKE")) c.car_make = v;
+        if (auto v = std::getenv("OAL_CAR_MODEL")) c.car_model = v;
+        if (auto v = std::getenv("OAL_CAR_YEAR")) c.car_year = v;
+
         // Bridge update mode from env (read directly, not via CLI flag)
         const char* update_env = std::getenv("OAL_BRIDGE_UPDATE_MODE");
         if (update_env) c.update_mode = update_env;
