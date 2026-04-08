@@ -3,7 +3,6 @@ name: Release Bridge
 on:
   release:
     types: [published]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -41,7 +40,7 @@ jobs:
             [ -f "$f" ] && sudo sed -i 's/^deb \([^[]\)/deb [arch=amd64] \1/' "$f" 2>/dev/null || true
           done
 
-          # Add ports.ubuntu.com for arm64
+          # Add ports.ubuntu.com for arm64 — include noble AND noble-updates for libudev1
           cat << 'EOF' | sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
@@ -49,6 +48,8 @@ jobs:
           EOF
 
           sudo apt-get update
+          # Install libudev1:arm64 first — required by libbluetooth3:arm64 and libusb-1.0-0:arm64
+          sudo apt-get install -y libudev1:arm64 || true
           sudo apt-get install -y \
             g++-14-aarch64-linux-gnu \
             gcc-14-aarch64-linux-gnu \
@@ -103,25 +104,7 @@ jobs:
           cmake --build . --target openautolink-headless -j$(nproc)
           aarch64-linux-gnu-strip openautolink-headless
 
-      - name: Get latest release tag (for workflow_dispatch)
-        if: github.event_name == 'workflow_dispatch'
-        id: latest_tag
-        run: |
-          TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Latest release tag: $TAG"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Upload bridge binary to release
-        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: build-bridge/openautolink-headless
-
-      - name: Upload bridge binary to latest release (workflow_dispatch)
-        if: github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: build-bridge/openautolink-headless
-          tag_name: ${{ steps.latest_tag.outputs.tag }}
