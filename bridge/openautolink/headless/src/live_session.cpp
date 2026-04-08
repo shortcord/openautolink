@@ -198,7 +198,8 @@ std::string json_event(const std::string& event_type) {
     return R"({"type":"event","event_type":")" + event_type + R"("})";
 }
 
-std::string json_event_with_phone(const std::string& event_type, const std::string& phone_name,
+[[maybe_unused]]
+static std::string json_event_with_phone(const std::string& event_type, const std::string& phone_name,
                                    const std::string& link_type = "AndroidAuto", int phone_type = 5) {
     return R"({"type":"event","event_type":")" + event_type
         + R"(","phone_name":")" + phone_name
@@ -1392,7 +1393,7 @@ void LiveAasdkSession::on_vehicle_data(const ParsedInputMessage& message) {
         cmd += "sed -i 's/^OAL_CAR_MAKE=.*/OAL_CAR_MAKE=" + sanitize(car_make) + "/' /etc/openautolink.env 2>/dev/null\n";
         cmd += "sed -i 's/^OAL_CAR_MODEL=.*/OAL_CAR_MODEL=" + sanitize(car_model) + "/' /etc/openautolink.env 2>/dev/null\n";
         cmd += "sed -i 's/^OAL_CAR_YEAR=.*/OAL_CAR_YEAR=" + sanitize(car_year) + "/' /etc/openautolink.env 2>/dev/null\n";
-        system(cmd.c_str());
+        (void)system(cmd.c_str());
     }
 
     // Fuel type and EV connector arrays — parse JSON int arrays
@@ -3177,7 +3178,7 @@ void HeadlessBluetoothHandler::onBluetoothPairingRequest(
                               "\\npair " + phone_addr +
                               "\\nconnect " + phone_addr +
                               "\\nquit' | bluetoothctl > /dev/null 2>&1";
-            system(cmd.c_str());
+            (void)system(cmd.c_str());
         }).detach();
     }
 }

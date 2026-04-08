@@ -147,5 +147,5 @@ endif()
 
 target_compile_options(openautolink-headless PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -pedantic>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -pedantic -Wno-unused-result>
 )
