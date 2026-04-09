@@ -1,18 +1,18 @@
 <#
 .SYNOPSIS
-    Creates a GitHub Release with the bridge binary attached.
+    Creates a GitHub Release that triggers the CI bridge build.
 
 .DESCRIPTION
     - Reads version from secrets/version.properties
     - Creates a GitHub release with tag v<versionName>
-    - Uploads the bridge binary from build-bridge-arm64/ (as openautolink-headless)
-    - The AAB is NOT uploaded — it goes to Google Play Console separately
+    - The release-bridge.yml CI workflow triggers on publish and cross-compiles
+      the bridge binary on GitHub Actions, then attaches it to this release
+    - The AAB is NOT uploaded - it goes to Google Play Console separately
     - Requires: gh CLI authenticated
 
 .EXAMPLE
-    # After building:
-    bash scripts/build-bridge-wsl.sh
     .\scripts\create-release.ps1
+    .\scripts\create-release.ps1 -Notes "Fixed video codec negotiation"
 #>
 param(
     [string]$Notes = "",
@@ -38,18 +38,7 @@ Get-Content $versionFile | ForEach-Object {
 $tag = "v$($version['versionName'])"
 Write-Host "[release] Creating release: $tag"
 
-# Find bridge binary — uploaded as 'openautolink-headless' (the name the app downloads)
-$bridgeBinary = Join-Path $repoRoot 'build-bridge-arm64\openautolink-headless-stripped'
-$bridgeAsset = Join-Path $repoRoot 'build-bridge-arm64\openautolink-headless'
-if (Test-Path $bridgeBinary) {
-    # Copy stripped binary with the release asset name the app expects
-    Copy-Item -Path $bridgeBinary -Destination $bridgeAsset -Force
-    Write-Host "[release] Bridge binary: $bridgeAsset"
-} else {
-    throw "No bridge binary found at $bridgeBinary - run build-bridge-wsl.sh first"
-}
-
-# Create release
+# Create release — CI (release-bridge.yml) will build and attach the bridge binary
 $ghArgs = @('release', 'create', $tag, '--title', $tag)
 if ($Draft) { $ghArgs += '--draft' }
 if ($Notes) {
@@ -58,10 +47,10 @@ if ($Notes) {
 } else {
     $ghArgs += '--generate-notes'
 }
-$ghArgs += $bridgeAsset
 
 Write-Host "[release] gh $($ghArgs -join ' ')"
 & gh @ghArgs
 
 Write-Host ""
-Write-Host "[release] Release $tag created with bridge binary"
+Write-Host "[release] Release $tag created"
+Write-Host "[release] CI will build and attach the bridge binary (release-bridge.yml)"
