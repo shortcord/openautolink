@@ -420,11 +420,6 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
     output_.emit(R"({"type":"event","event_type":"discovery_request","device_name":")" +
                  request.device_name() + R"(","device_brand":")" + request.device_name() + R"("})");
 
-    // Send phone_connected with the real device name from ServiceDiscoveryRequest
-    if (oal_session_) {
-        oal_session_->on_phone_connected(request.device_name(), "android");
-    }
-
     aap_protobuf::service::control::message::ServiceDiscoveryResponse response;
     response.mutable_channels()->Reserve(256);
 
@@ -1933,10 +1928,10 @@ void LiveAasdkSession::create_entity(aasdk::transport::ITransport::Pointer trans
         }
     });
 
-    // Propagate session to entity (phone_connected is sent later from
-    // onServiceDiscoveryRequest with the real device name)
+    // Propagate session to entity (which propagates to handlers)
     if (oal_session_) {
         entity_->set_oal_session(oal_session_);
+        oal_session_->on_phone_connected(phone_name_);
     }
 
     entity_->start();
@@ -1993,10 +1988,10 @@ void LiveAasdkSession::create_entity_no_ssl(aasdk::transport::ITransport::Pointe
         }
     });
 
-    // Propagate session to entity (phone_connected is sent later from
-    // onServiceDiscoveryRequest with the real device name)
+    // Propagate session to entity
     if (oal_session_) {
         entity_->set_oal_session(oal_session_);
+        oal_session_->on_phone_connected(phone_name_);
     }
 
     // Start the entity — it will send version request as the first thing inside the TLS tunnel
