@@ -90,6 +90,12 @@ class MediaCodecDecoder(
     @Volatile private var lastQueuedPtsMs = -1L
     private var consecutiveDrops = 0
 
+    // H.265 warm-up: skip rendering the first few output frames after codec config.
+    // Qualcomm c2.qti.hevc.decoder may output green/corrupt frames while its
+    // reference picture buffer and color pipeline initialize.
+    private var warmupFramesRemaining = 0
+    private val HEVC_WARMUP_FRAMES = 2
+
     override fun attach(surface: Surface, width: Int, height: Int) {
         val surfaceChanged = this.surface !== surface
         this.surface = surface
@@ -401,6 +407,7 @@ class MediaCodecDecoder(
             codec = mc
             firstFrameRendered = false
             decodeStartTimeMs = System.currentTimeMillis()
+            warmupFramesRemaining = if (mimeType == CodecSelector.MIME_H265) HEVC_WARMUP_FRAMES else 0
 
             // Start output drain thread
             startDrainThread(mc)
@@ -541,8 +548,15 @@ class MediaCodecDecoder(
                     val outputIndex = mc.dequeueOutputBuffer(bufferInfo, OUTPUT_TIMEOUT_US)
                     when {
                         outputIndex >= 0 -> {
-                            // Render to surface — this is live UI state, render immediately
-                            mc.releaseOutputBuffer(outputIndex, true)
+                            // H.265 warmup: skip first few frames (may be green/corrupt)
+                            if (warmupFramesRemaining > 0) {
+                                mc.releaseOutputBuffer(outputIndex, false) // don't render
+                                warmupFramesRemaining--
+                                Log.d(TAG, "Skipped H.265 warmup frame ($warmupFramesRemaining remaining)")
+                            } else {
+                                // Render to surface — this is live UI state, render immediately
+                                mc.releaseOutputBuffer(outputIndex, true)
+                            }
                             val decoded = framesDecoded.incrementAndGet()
                             if (!firstFrameRendered) {
                                 firstFrameRendered = true
@@ -599,6 +613,7 @@ class MediaCodecDecoder(
         receivedIdr = false
         lastQueuedPtsMs = -1
         consecutiveDrops = 0
+        warmupFramesRemaining = 0
     }
 
     /**
