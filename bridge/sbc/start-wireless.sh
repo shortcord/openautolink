@@ -239,11 +239,8 @@ EOF
 dnsmasq -C /opt/openautolink/dnsmasq.conf \
     --pid-file=/var/run/openautolink-wifi-dnsmasq.pid || true
 
-# ── Enable Bluetooth ─────────────────────────────────────────────────
-bluetoothctl power on 2>/dev/null || true
-bluetoothctl discoverable on 2>/dev/null || true
-bluetoothctl pairable on 2>/dev/null || true
-bluetoothctl discoverable-timeout 0 2>/dev/null || true
+# Bluetooth state is owned by openautolink-bt.service. Touching bluetoothctl
+# here is redundant and can fail or segfault while BlueZ is still initializing.
 
 # ── Persist generated credentials for BT script ─────────────────────
 # The BT script (aa_bt_all.py) reads SSID/password from env to send

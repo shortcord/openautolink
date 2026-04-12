@@ -35,11 +35,28 @@ fi
 # ── 1. System packages ───────────────────────────────────────────────
 echo ">>> [1/8] Installing system packages..."
 apt-get update -qq
+
+# Release binaries are dynamically linked against protobuf. Package names vary
+# slightly between Debian/Ubuntu releases, so resolve the runtime package here.
+PROTOBUF_RUNTIME_PKG=""
+for pkg in libprotobuf32t64 libprotobuf32; do
+    if apt-cache show "$pkg" >/dev/null 2>&1; then
+        PROTOBUF_RUNTIME_PKG="$pkg"
+        break
+    fi
+done
+if [ -z "$PROTOBUF_RUNTIME_PKG" ]; then
+    echo "WARNING: Could not find a protobuf runtime package; falling back to libprotobuf-dev" >&2
+    PROTOBUF_RUNTIME_PKG="libprotobuf-dev"
+fi
+
 apt-get install -y -qq \
     hostapd dnsmasq \
     bluez libbluetooth-dev python3-dbus python3-gi \
     avahi-daemon avahi-utils \
-    curl jq
+    curl jq \
+    "$PROTOBUF_RUNTIME_PKG"
+echo "  Protobuf runtime: ${PROTOBUF_RUNTIME_PKG}"
 echo ""
 
 # ── 2. Download latest release from GitHub ────────────────────────────
@@ -125,10 +142,12 @@ else
     echo "  /etc/openautolink.env exists — not overwriting"
 fi
 
-# Avahi service (mDNS discovery)
-if [ -d /etc/avahi/services ] && [ -f "${TMP_DIR}/avahi-openautolink.service" ]; then
-    cp "${TMP_DIR}/avahi-openautolink.service" /etc/avahi/services/openautolink.service
-    echo "  Installed Avahi mDNS service"
+# mDNS discovery is published dynamically by openautolink-headless via
+# avahi-publish-service. A static Avahi service file causes a duplicate
+# advertisement and "Local name collision" warnings at runtime.
+if [ -d /etc/avahi/services ]; then
+    rm -f /etc/avahi/services/openautolink.service
+    echo "  Removed stale static Avahi mDNS service (dynamic publish only)"
 fi
 
 # SSL certificates for Android Auto TLS handshake
@@ -198,6 +217,11 @@ done
 
 # Disable legacy services if they exist from a previous install
 systemctl disable openautolink-car-net openautolink-eth-ssh 2>/dev/null || true
+
+# We launch hostapd/dnsmasq directly from the OpenAutoLink scripts. Leaving the
+# distro package units enabled causes boot-time failures and a degraded system.
+systemctl disable --now dnsmasq hostapd 2>/dev/null || true
+systemctl reset-failed dnsmasq hostapd 2>/dev/null || true
 
 systemctl daemon-reload
 systemctl enable openautolink-network openautolink openautolink-wireless 2>/dev/null || true
