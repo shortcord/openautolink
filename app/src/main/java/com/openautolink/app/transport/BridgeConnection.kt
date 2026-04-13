@@ -16,7 +16,12 @@ interface BridgeConnection {
     val videoFrames: Flow<VideoFrame>
     val audioFrames: Flow<AudioFrame>
 
-    suspend fun connect(host: String, controlPort: Int = 5288, network: Network? = null)
+    suspend fun connect(
+        host: String,
+        controlPort: Int = 5288,
+        network: Network? = null,
+        networkResolver: NetworkResolver? = null,
+    )
     suspend fun disconnect()
     suspend fun sendControlMessage(message: ControlMessage)
     suspend fun connectVideo(host: String, port: Int)
@@ -24,6 +29,10 @@ interface BridgeConnection {
     suspend fun connectAudio(host: String, port: Int)
     suspend fun disconnectAudio()
     fun sendMicAudio(frame: AudioFrame)
+}
+
+fun interface NetworkResolver {
+    fun resolve(): Network?
 }
 
 enum class ConnectionState {

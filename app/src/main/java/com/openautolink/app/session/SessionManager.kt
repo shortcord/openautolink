@@ -33,6 +33,7 @@ import com.openautolink.app.transport.ConnectionManager
 import com.openautolink.app.transport.ConnectionState
 import com.openautolink.app.transport.ControlMessage
 import com.openautolink.app.transport.ControlMessageSerializer
+import com.openautolink.app.transport.NetworkResolver
 import com.openautolink.app.video.DecoderState
 import com.openautolink.app.video.MediaCodecDecoder
 import com.openautolink.app.video.VideoDecoder
@@ -216,7 +217,8 @@ class SessionManager(
 
     fun start(host: String, port: Int = 5288, codecPreference: String = "h264", micSourcePreference: String = "car",
                diagnosticsEnabled: Boolean = false, diagnosticsMinLevel: String = "INFO",
-               network: Network? = null, scalingMode: String = "letterbox") {
+               network: Network? = null, networkResolver: NetworkResolver? = null,
+               scalingMode: String = "letterbox") {
         targetHost = host
         micSource = micSourcePreference
         observeJob?.cancel()
@@ -394,7 +396,7 @@ class SessionManager(
             }
 
             // Start connection
-            connectionManager.connect(host, port, network = network)
+            connectionManager.connect(host, port, network = network, networkResolver = networkResolver)
         }
     }
 
@@ -472,6 +474,24 @@ class SessionManager(
 
         Log.i(TAG, "System wake detected (${elapsed / 1000}s gap, state=$state) — forcing reconnect")
         com.openautolink.app.diagnostics.DiagnosticLog.i("transport", "System wake detected (${elapsed / 1000}s gap) — forcing reconnect")
+        connectionManager.forceReconnect()
+    }
+
+    /**
+     * Called when the AAOS USB/Ethernet transport appears, disappears, or rebinds.
+     * This is common around car sleep/wake when the USB NIC is power-cycled.
+     */
+    fun onTransportNetworkChanged(reason: String) {
+        val state = _sessionState.value
+        if (state == SessionState.IDLE && !connectionManager.isReconnecting) return
+        if (state == SessionState.STREAMING) return
+
+        lastActiveTimestamp = SystemClock.elapsedRealtime()
+        Log.i(TAG, "Transport network changed ($reason) — forcing reconnect")
+        com.openautolink.app.diagnostics.DiagnosticLog.i(
+            "transport",
+            "Transport network changed ($reason) — forcing reconnect"
+        )
         connectionManager.forceReconnect()
     }
 

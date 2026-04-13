@@ -4,8 +4,11 @@ import android.app.Application
 import android.content.Context
 import android.media.AudioManager
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -70,6 +73,9 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     private val audioManager = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val sessionManager = SessionManager.getInstance(viewModelScope, application, audioManager)
+    @Volatile private var selectedNetworkInterfaceName: String = AppPreferences.DEFAULT_NETWORK_INTERFACE
+    @Volatile private var lastTransportNetworkEventAt: Long = 0L
+    private val trackedTransportNetworks = mutableSetOf<Long>()
 
     private val touchForwarder: TouchForwarder = TouchForwarderImpl { touchMessage ->
         viewModelScope.launch {
@@ -106,6 +112,29 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     private var pendingSurfaceWidth: Int = 0
     private var pendingSurfaceHeight: Int = 0
     private var surfaceDebounceJob: kotlinx.coroutines.Job? = null
+
+    private val transportNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            handleTransportNetworkUpdate(network, "available")
+        }
+
+        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+            handleTransportNetworkUpdate(network, "capabilities")
+        }
+
+        override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+            handleTransportNetworkUpdate(network, "link")
+        }
+
+        override fun onLost(network: Network) {
+            val handle = network.networkHandle
+            val wasTracked = synchronized(trackedTransportNetworks) {
+                trackedTransportNetworks.remove(handle)
+            }
+            if (!wasTracked) return
+            requestTransportReconnect("lost")
+        }
+    }
 
     val uiState: StateFlow<ProjectionUiState> = combine(
         sessionManager.sessionState,
@@ -204,6 +233,13 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 sessionManager.setDiagnosticsMinLevel(level)
             }
         }
+        viewModelScope.launch {
+            preferences.networkInterface.collect { interfaceName ->
+                selectedNetworkInterfaceName = interfaceName
+            }
+        }
+
+        registerTransportNetworkCallback()
 
         // Collect video and audio stats when streaming
         viewModelScope.launch {
@@ -254,9 +290,12 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             val diagMinLevel = preferences.remoteDiagnosticsMinLevel.first()
             val scalingMode = preferences.videoScalingMode.first()
             val network = resolveNetwork(ifaceName)
+            val networkResolver = com.openautolink.app.transport.NetworkResolver {
+                resolveNetwork(ifaceName)
+            }
             sessionManager.start(host, port, codec, micSrc,
                 diagnosticsEnabled = diagEnabled, diagnosticsMinLevel = diagMinLevel,
-                network = network, scalingMode = scalingMode)
+                network = network, networkResolver = networkResolver, scalingMode = scalingMode)
         }
     }
 
@@ -411,7 +450,49 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         sessionManager.videoDecoder?.attach(s, pendingSurfaceWidth, pendingSurfaceHeight)
     }
 
+    private fun registerTransportNetworkCallback() {
+        try {
+            connectivityManager.registerNetworkCallback(
+                NetworkRequest.Builder().build(),
+                transportNetworkCallback,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register transport network callback: ${e.message}")
+        }
+    }
+
+    private fun handleTransportNetworkUpdate(network: Network, reason: String) {
+        if (!isTransportNetwork(network)) return
+        synchronized(trackedTransportNetworks) {
+            trackedTransportNetworks.add(network.networkHandle)
+        }
+        requestTransportReconnect(reason)
+    }
+
+    private fun isTransportNetwork(network: Network): Boolean {
+        val linkProps = connectivityManager.getLinkProperties(network)
+        val interfaceName = linkProps?.interfaceName
+        if (selectedNetworkInterfaceName.isNotBlank() && interfaceName == selectedNetworkInterfaceName) {
+            return true
+        }
+
+        val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_USB)
+    }
+
+    private fun requestTransportReconnect(reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastTransportNetworkEventAt < 750L) return
+        lastTransportNetworkEventAt = now
+        Log.i(TAG, "Transport network event: $reason")
+        sessionManager.onTransportNetworkChanged("transport_$reason")
+    }
+
     override fun onCleared() {
+        try {
+            connectivityManager.unregisterNetworkCallback(transportNetworkCallback)
+        } catch (_: Exception) {}
         sessionManager.stop()
         super.onCleared()
     }

@@ -18,6 +18,7 @@ import java.io.BufferedReader
 import java.io.DataInputStream
 import java.io.InputStreamReader
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Integration tests for the transport layer against a real TCP mock server.
@@ -518,10 +519,18 @@ class TransportIntegrationTest {
         // to avoid blocking the runBlocking event loop
         val ioScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
         val connMgr = ConnectionManager(ioScope)
+        val resolveCount = AtomicInteger(0)
 
         try {
             // Connect to mock server
-            connMgr.connect("127.0.0.1", server.controlPort)
+            connMgr.connect(
+                "127.0.0.1",
+                server.controlPort,
+                networkResolver = NetworkResolver {
+                    resolveCount.incrementAndGet()
+                    null
+                }
+            )
 
             assertTrue("Should connect to control", server.awaitControlConnected(5000))
 
@@ -569,6 +578,7 @@ class TransportIntegrationTest {
                     }
                 }
                 assertEquals(ConnectionState.CONNECTED, connMgr.connectionState.value)
+                assertTrue("Network resolver should run again on reconnect", resolveCount.get() >= 2)
             } finally {
                 server2.stop()
             }

@@ -70,13 +70,22 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
     private var targetHost: String? = null
     private var targetPort: Int = 5288
     private var targetNetwork: Network? = null
+    private var targetNetworkResolver: NetworkResolver? = null
     private var autoReconnect = true
+    @Volatile private var lastResolvedNetworkHandle: Long? = null
 
-    override suspend fun connect(host: String, controlPort: Int, network: Network?) {
+    override suspend fun connect(
+        host: String,
+        controlPort: Int,
+        network: Network?,
+        networkResolver: NetworkResolver?,
+    ) {
         disconnect()
         targetHost = host
         targetPort = controlPort
         targetNetwork = network
+        targetNetworkResolver = networkResolver
+        lastResolvedNetworkHandle = null
         autoReconnect = true
         connectionJob = scope.launch { connectLoop() }
     }
@@ -91,6 +100,8 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
         connectionJob = null
         receiveJob?.cancel()
         receiveJob = null
+        targetNetworkResolver = null
+        lastResolvedNetworkHandle = null
         audioChannel.close()
         videoChannel.close()
         controlChannel.close()
@@ -110,8 +121,9 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
         disconnectVideo()
         videoJob = scope.launch {
             try {
+                val network = resolveCurrentNetwork()
                 withContext(Dispatchers.IO) {
-                    videoChannel.connect(host, port, network = targetNetwork)
+                    videoChannel.connect(host, port, network = network)
                 }
                 Log.i(TAG, "Video channel connected to $host:$port")
                 DiagnosticLog.i("transport", "Video channel connected to $host:$port")
@@ -149,8 +161,9 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
         audioEmitCount = 0
         audioJob = scope.launch {
             try {
+                val network = resolveCurrentNetwork()
                 withContext(Dispatchers.IO) {
-                    audioChannel.connect(host, port, network = targetNetwork)
+                    audioChannel.connect(host, port, network = network)
                 }
                 Log.i(TAG, "Audio channel connected to $host:$port")
                 DiagnosticLog.i("transport", "Audio channel connected to $host:$port")
@@ -243,9 +256,10 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
             _connectionState.value = ConnectionState.CONNECTING
 
             try {
+                val network = resolveCurrentNetwork()
                 withContext(Dispatchers.IO) {
                     controlChannel.close()
-                    controlChannel.connect(host, targetPort, network = targetNetwork)
+                    controlChannel.connect(host, targetPort, network = network)
                 }
 
                 Log.i(TAG, "Connected to bridge at $host:$targetPort")
@@ -273,6 +287,30 @@ class ConnectionManager(private val scope: CoroutineScope) : BridgeConnection {
             Log.d(TAG, "Reconnecting in ${RETRY_INTERVAL_MS}ms")
             delay(RETRY_INTERVAL_MS)
         }
+    }
+
+    private fun resolveCurrentNetwork(): Network? {
+        val network = try {
+            targetNetworkResolver?.resolve() ?: targetNetwork
+        } catch (e: Exception) {
+            Log.w(TAG, "Network resolver failed: ${e.message}")
+            DiagnosticLog.w("transport", "Network resolver failed: ${e.message}")
+            targetNetwork
+        }
+
+        val handle = network?.networkHandle
+        if (handle != lastResolvedNetworkHandle) {
+            if (handle == null) {
+                Log.i(TAG, "No bound transport network available - using default routing")
+                DiagnosticLog.i("transport", "No bound transport network available - using default routing")
+            } else {
+                Log.i(TAG, "Resolved transport network handle=$handle")
+                DiagnosticLog.i("transport", "Resolved transport network handle=$handle")
+            }
+            lastResolvedNetworkHandle = handle
+        }
+
+        return network
     }
 
     private suspend fun receiveMessages() {
