@@ -595,6 +595,14 @@ class SessionManager(
         connectionManager.sendControlMessage(message)
     }
 
+    /**
+     * Check if the cluster session is alive; re-launch binding if it died.
+     * Called after returning from Settings and on bridge reconnect.
+     */
+    fun ensureClusterAlive() {
+        _clusterManager?.ensureAlive()
+    }
+
     /** Update remote diagnostics enabled state at runtime. */
     fun setDiagnosticsEnabled(enabled: Boolean) {
         _remoteDiagnostics?.setEnabled(enabled)
@@ -722,6 +730,8 @@ class SessionManager(
                     syncLocalPreferences()
                     // Check for bridge binary updates (non-blocking, async)
                     _bridgeUpdateManager?.onBridgeConnected(info)
+                    // Re-launch cluster binding if it died while disconnected
+                    ensureClusterAlive()
                 }
             }
             is ControlMessage.PhoneConnected -> {

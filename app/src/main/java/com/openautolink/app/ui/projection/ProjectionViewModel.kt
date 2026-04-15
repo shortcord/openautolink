@@ -277,6 +277,8 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             // Session is already running — don't restart.
             // This prevents reconnect when navigating back from Settings
             // or when the app resumes from background.
+            // But check if cluster needs relaunching (Templates Host may have killed it).
+            sessionManager.ensureClusterAlive()
             return
         }
         hasConnected = true

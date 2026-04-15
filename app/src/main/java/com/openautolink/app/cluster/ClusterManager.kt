@@ -196,6 +196,19 @@ class ClusterManager(private val context: Context) {
     }
 
     /**
+     * Check if the cluster session is alive; if not, restart the binding chain.
+     * Called after bridge reconnect (Hello received) and when returning from Settings.
+     */
+    fun ensureAlive() {
+        if (!enabled) return
+        if (ClusterBindingState.sessionAlive) return
+
+        Log.w(TAG, "Cluster session not alive — relaunching binding")
+        DiagnosticLog.w("cluster", "Cluster session not alive — relaunching binding")
+        restartClusterBinding()
+    }
+
+    /**
      * Stop monitoring and release handler callbacks.
      */
     fun release() {
