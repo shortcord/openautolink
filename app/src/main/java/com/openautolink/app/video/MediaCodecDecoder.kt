@@ -93,13 +93,9 @@ class MediaCodecDecoder(
     // Render gate: don't render output until after a valid keyframe has been
     // queued to the decoder. Prevents green/blocky frames from P-frames
     // decoded before a valid IDR reference is established.
+    // The bridge-side fix (no stale IDR replay) ensures the first IDR the app
+    // receives is always fresh from the phone, so a single-IDR gate suffices.
     @Volatile private var renderingEnabled = false
-
-    // Mid-stream reset detection: when codec is released with an active session,
-    // the first IDR after reset may be stale (bridge cache replay). In that case,
-    // don't trust it — wait for a second (fresh) IDR before enabling rendering.
-    // On initial connection (never had an active codec), trust the first IDR.
-    @Volatile private var awaitFreshIdr = false
 
     override fun attach(surface: Surface, width: Int, height: Int) {
         val surfaceChanged = this.surface !== surface
@@ -288,28 +284,13 @@ class MediaCodecDecoder(
                 }
             }
         }
-        Log.i(TAG, "IDR keyframe received: ${frame.data.size} bytes, awaitFreshIdr=$awaitFreshIdr")
+        Log.i(TAG, "IDR keyframe received: ${frame.data.size} bytes")
         receivedIdr = true
+        renderingEnabled = true
         _needsKeyframe = false
         _needsKeyframeFlow.value = false
         cachedIdrFrame = null  // Clear cache — we have a live IDR now
-
-        if (awaitFreshIdr) {
-            // Mid-stream reset: this IDR may be stale (bridge cache replay).
-            // Queue it to prime the decoder, but don't enable rendering or
-            // P-frame acceptance yet. The NEXT IDR (fresh from the phone,
-            // triggered by the bridge's VideoFocusIndication) will be clean.
-            awaitFreshIdr = false  // next IDR will be trusted
-            renderingEnabled = false
-            Log.i(TAG, "Post-reset IDR queued (priming decoder, awaiting fresh IDR)")
-            DiagnosticLog.i("video", "Post-reset IDR — priming, awaiting fresh")
-            queueFrame(frame)
-        } else {
-            // Initial connection or second IDR after reset: trust it.
-            renderingEnabled = true
-            Log.i(TAG, "IDR accepted — rendering enabled")
-            queueFrame(frame)
-        }
+        queueFrame(frame)
     }
 
     private fun handleRegularFrame(frame: VideoFrame) {
@@ -632,12 +613,7 @@ class MediaCodecDecoder(
         try {
             codec?.release()
         } catch (_: Exception) {}
-        if (codec != null) {
-            codecResetCount++
-            // Mid-stream reset: the next IDR may be stale (bridge cache replay).
-            // Set flag so handleKeyframe knows to wait for a second (fresh) IDR.
-            awaitFreshIdr = true
-        }
+        if (codec != null) codecResetCount++
         codec = null
         receivedIdr = false
         renderingEnabled = false
