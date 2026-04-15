@@ -33,6 +33,7 @@ OalSession::OalSession(ICarTransport& control_transport,
 
 void OalSession::on_app_connected() {
     app_connected_ = true;
+    mic_frame_count_ = 0;
     {
         std::lock_guard<std::mutex> lock(video_mutex_);
         video_writes_.clear();
@@ -103,12 +104,12 @@ void OalSession::on_app_disconnected() {
 void OalSession::on_video_client_connected() {
     if (!phone_connected_) return;
 
-    // Replay cached SPS/PPS+IDR now that the video sink is connected.
-    // This ensures frames go directly to the TCP client, not into a queue
-    // that might be flushed before the client connects.
+    // Replay cached SPS/PPS (codec config only, NOT stale IDR) so the app
+    // can configure its decoder. Then request a fresh IDR from the phone.
 #ifdef PI_AA_ENABLE_AASDK_LIVE
     if (aa_session_) {
         aa_session_->replay_cached_keyframe();
+        aa_session_->request_fresh_idr();
     }
 #endif
 }
@@ -140,11 +141,7 @@ void OalSession::on_phone_disconnected(const std::string& reason) {
         if (app_connected_) {
             send_control_line(R"({"type":"bridge_update_status","status":"applying","message":"Phone disconnected — applying update..."})");
         }
-
-        std::string apply_cmd = "/opt/openautolink/bin/apply-bridge-update.sh " + update_temp_path_ + " &";
-        std::cerr << "[OAL] bridge update: running apply script" << std::endl;
-        usleep(200000);
-        system(apply_cmd.c_str());
+        apply_bridge_update();
     }
 }
 
@@ -292,6 +289,14 @@ void OalSession::on_app_audio_frame(const OalAudioHeader& hdr,
                                      const uint8_t* pcm, size_t len) {
     if (hdr.direction != OalAudioDirection::MIC) return;
     if (len == 0) return;
+
+    mic_frame_count_++;
+    if (mic_frame_count_ <= 3 || mic_frame_count_ % 500 == 0) {
+        std::cerr << "[OAL] mic frame #" << mic_frame_count_
+                  << " purpose=" << static_cast<int>(hdr.purpose)
+                  << " rate=" << hdr.sample_rate
+                  << " len=" << len << std::endl;
+    }
 
     // Route mic audio based on purpose:
     // - CALL: forward to SCO socket (phone call uplink)
@@ -1090,11 +1095,11 @@ void OalSession::handle_keyframe_request() {
     std::cerr << "[OAL] keyframe request from app" << std::endl;
 #ifdef PI_AA_ENABLE_AASDK_LIVE
     if (aa_session_) {
-        // Replay cached SPS/PPS+IDR for instant recovery (e.g. app surface recreated
-        // after navigating away and back — video TCP stayed open so
-        // on_video_client_connected() didn't fire).
+        // Replay SPS/PPS (codec config only) so the app can reconfigure its
+        // decoder after a surface change. Do NOT replay the stale cached IDR
+        // — it causes green/blocky artifacts (see replayCachedKeyframe comment).
         aa_session_->replay_cached_keyframe();
-        // Also ask the phone for a fresh IDR so content updates promptly.
+        // Ask the phone for a fresh IDR that matches the current P-frame stream.
         aa_session_->request_fresh_idr();
     }
 #endif
@@ -1493,17 +1498,72 @@ void OalSession::handle_bridge_update_complete(const std::string& json) {
         return;
     }
 
-    // Apply update via the update script
+    apply_bridge_update();
+}
+
+void OalSession::apply_bridge_update() {
+    static constexpr const char* INSTALL_DIR  = "/opt/openautolink/bin";
+    static constexpr const char* BINARY_NAME  = "openautolink-headless";
+    static constexpr const char* APPLY_SCRIPT = "/opt/openautolink/bin/apply-bridge-update.sh";
+
     send_control_line(R"({"type":"bridge_update_status","status":"applying","message":"Swapping binary..."})");
 
-    std::string apply_cmd = "/opt/openautolink/bin/apply-bridge-update.sh " + update_temp_path_ + " &";
-    std::cerr << "[OAL] bridge update: running apply script" << std::endl;
+    const std::string install_path = std::string(INSTALL_DIR) + "/" + BINARY_NAME;
+    const std::string backup_path  = install_path + ".bak";
 
-    // Give the status message time to reach the app before we restart
+    // Try the external apply script first (it may have extra platform-specific logic)
+    if (access(APPLY_SCRIPT, X_OK) == 0) {
+        std::cerr << "[OAL] bridge update: running apply script" << std::endl;
+        // Run without & so we can check the return value
+        std::string apply_cmd = std::string(APPLY_SCRIPT) + " " + update_temp_path_;
+        usleep(200000); // let status message reach app
+        int ret = system(apply_cmd.c_str());
+        if (ret == 0) {
+            // Script will have called systemctl restart — we should be dead soon.
+            // Wait a bit; if we survive, the restart didn't work.
+            usleep(5000000);
+            std::cerr << "[OAL] bridge update: apply script returned 0 but process still alive — restart may have failed" << std::endl;
+            send_control_line(R"({"type":"bridge_update_status","status":"failed","message":"Apply script succeeded but service restart failed"})");
+            return;
+        }
+        std::cerr << "[OAL] bridge update: apply script failed (exit " << ret << "), trying inline apply" << std::endl;
+    } else {
+        std::cerr << "[OAL] bridge update: apply script not found, using inline apply" << std::endl;
+    }
+
+    // Inline apply: backup → move → chmod → restart
+    // This doesn't depend on the external script being present or correct.
+
+    // Backup current binary (ignore failure — may not exist on first install)
+    std::string backup_cmd = "cp '" + install_path + "' '" + backup_path + "' 2>/dev/null; true";
+    system(backup_cmd.c_str());
+
+    // Move new binary into place
+    // mv may fail across filesystems, try cp+rm as fallback
+    std::string mv_cmd = "mv '" + update_temp_path_ + "' '" + install_path + "'";
+    int mv_ret = system(mv_cmd.c_str());
+    if (mv_ret != 0) {
+        std::string cp_cmd = "cp '" + update_temp_path_ + "' '" + install_path +
+                             "' && rm -f '" + update_temp_path_ + "'";
+        int cp_ret = system(cp_cmd.c_str());
+        if (cp_ret != 0) {
+            std::cerr << "[OAL] bridge update: failed to replace binary" << std::endl;
+            send_control_line(R"({"type":"bridge_update_status","status":"failed","message":"Failed to replace binary — check disk space and permissions"})");
+            return;
+        }
+    }
+
+    chmod(install_path.c_str(), 0755);
+    std::cerr << "[OAL] bridge update: binary replaced, restarting service" << std::endl;
+
+    // Give status message time to reach the app, then restart
     usleep(200000);
-    system(apply_cmd.c_str());
-    // The apply script will restart the service, killing this process.
-    // The app's auto-reconnect will handle reconnection.
+    system("systemctl restart openautolink.service &");
+
+    // If we're still alive after 5 seconds, the restart failed
+    usleep(5000000);
+    std::cerr << "[OAL] bridge update: still alive after restart — service restart may have failed" << std::endl;
+    send_control_line(R"({"type":"bridge_update_status","status":"failed","message":"Binary replaced but service restart failed — please reboot the SBC"})");
 }
 
 } // namespace openautolink

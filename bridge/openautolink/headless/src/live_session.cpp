@@ -2253,19 +2253,21 @@ void HeadlessVideoHandler::replayCachedKeyframe() {
     uint32_t h = static_cast<uint32_t>(height_);
 
     if (oal_session_) {
+        // Only replay SPS/PPS (codec config) so the app can configure its decoder.
+        // Do NOT replay the cached IDR — it's stale and P-frames from the live
+        // phone stream reference a different (newer) IDR. Feeding the stale IDR
+        // followed by live P-frames corrupts the decoder's reference picture buffer,
+        // producing green/blocky artifacts that persist until a fresh IDR arrives.
+        // Instead, the caller should also call request_fresh_idr() to get a clean
+        // IDR from the phone that matches the current P-frame stream.
         if (!cached_sps_pps_.empty()) {
-            std::cerr << "[aasdk] replaying cached SPS/PPS (" << cached_sps_pps_.size() << " bytes)" << std::endl;
+            std::cerr << "[aasdk] replaying cached SPS/PPS (" << cached_sps_pps_.size() << " bytes), skipping stale IDR" << std::endl;
             oal_session_->write_video_frame(
                 static_cast<uint16_t>(w), static_cast<uint16_t>(h), 0,
                 OalVideoFlags::CODEC_CONFIG,
                 cached_sps_pps_.data(), cached_sps_pps_.size());
-        }
-        if (!cached_idr_.empty() && cached_idr_ != cached_sps_pps_) {
-            std::cerr << "[aasdk] replaying cached IDR (" << cached_idr_.size() << " bytes)" << std::endl;
-            oal_session_->write_video_frame(
-                static_cast<uint16_t>(w), static_cast<uint16_t>(h), 0,
-                OalVideoFlags::KEYFRAME,
-                cached_idr_.data(), cached_idr_.size());
+        } else {
+            std::cerr << "[aasdk] no cached SPS/PPS to replay (H.265 combined frames only)" << std::endl;
         }
     } else {
         std::cerr << "[aasdk] replay skipped: oal_session_ null" << std::endl;
@@ -2707,29 +2709,34 @@ void HeadlessAudioInputHandler::stop() {}
 // fillFeatures removed (SDR built inline)
 
 void HeadlessAudioInputHandler::feedAudio(const uint8_t* data, size_t size) {
-    if (!open_) return;
+    if (!open_.load() || size == 0) return;
 
     has_real_audio_.store(true);
 
+    // Copy PCM data and dispatch send to strand — feedAudio is called from
+    // the audio TCP read thread; channel operations must run on the strand.
     aasdk::common::Data audio_data(data, data + size);
     auto ts = static_cast<aasdk::messenger::Timestamp::ValueType>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
 
-    auto promise = aasdk::channel::SendPromise::defer(strand_);
-    promise->then([]() {}, [](auto) {});
-    channel_->sendMediaSourceWithTimestampIndication(ts, audio_data, std::move(promise));
+    strand_.post([this, self = shared_from_this(), ts,
+                  audio_data = std::move(audio_data)]() mutable {
+        auto promise = aasdk::channel::SendPromise::defer(strand_);
+        promise->then([]() {}, [](auto) {});
+        channel_->sendMediaSourceWithTimestampIndication(ts, audio_data, std::move(promise));
+    });
 }
 
 void HeadlessAudioInputHandler::startSilencePump() {
-    if (!open_) return;
+    if (!open_.load()) return;
     has_real_audio_.store(false);
     silence_running_.store(true);
     pumpOneSilenceFrame();
 }
 
 void HeadlessAudioInputHandler::pumpOneSilenceFrame() {
-    if (!silence_running_.load() || !open_ || has_real_audio_.load()) return;
+    if (!silence_running_.load() || !open_.load() || has_real_audio_.load()) return;
 
     // 20ms of 16kHz 16-bit mono silence = 640 bytes
     constexpr size_t frame_size = 640;
@@ -2789,7 +2796,7 @@ void HeadlessAudioInputHandler::onMediaChannelSetupRequest(
 void HeadlessAudioInputHandler::onMediaSourceOpenRequest(
     const aap_protobuf::service::media::source::message::MicrophoneRequest& request)
 {
-    open_ = request.open();
+    open_.store(request.open());
     std::cerr << "[aasdk] mic " << (open_ ? "OPEN" : "CLOSE") << " request" << std::endl;
     output_.emit(R"({"type":"event","event_type":"audio_input_open","open":)" +
                  std::string(open_ ? "true" : "false") + "}");
