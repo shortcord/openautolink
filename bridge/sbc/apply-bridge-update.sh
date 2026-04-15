@@ -27,10 +27,19 @@ if [ ! -f "$NEW_BINARY" ]; then
     exit 1
 fi
 
-# Verify the new binary is executable (ELF)
-if ! file "$NEW_BINARY" | grep -q "ELF"; then
-    echo "[update] ERROR: new binary is not a valid ELF executable" >&2
-    exit 1
+# Verify the new binary is a valid ELF executable
+# Use 'file' if available, fall back to checking magic bytes
+if command -v file >/dev/null 2>&1; then
+    if ! file "$NEW_BINARY" | grep -q "ELF"; then
+        echo "[update] ERROR: new binary is not a valid ELF executable" >&2
+        exit 1
+    fi
+else
+    # Check ELF magic bytes (0x7f 'E' 'L' 'F') directly
+    if ! head -c4 "$NEW_BINARY" | grep -q "ELF"; then
+        echo "[update] ERROR: new binary is not a valid ELF executable (magic check)" >&2
+        exit 1
+    fi
 fi
 
 echo "[update] Stopping openautolink service..." >&2

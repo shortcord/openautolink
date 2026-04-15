@@ -438,7 +438,7 @@ private:
     boost::asio::io_service::strand strand_;
     std::shared_ptr<aasdk::channel::mediasource::MediaSourceService> channel_;
     ThreadSafeOutputSink& output_;
-    bool open_ = false;
+    std::atomic<bool> open_{false};
     std::atomic<bool> has_real_audio_{false};
     std::atomic<bool> silence_running_{false};
     uint32_t session_ = 0;

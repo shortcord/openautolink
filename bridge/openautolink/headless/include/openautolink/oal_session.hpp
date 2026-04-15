@@ -146,6 +146,7 @@ private:
     void handle_bridge_update_offer(const std::string& json);
     void handle_bridge_update_data(const std::string& json);
     void handle_bridge_update_complete(const std::string& json);
+    void apply_bridge_update();
 
     ICarTransport& control_transport_;
     ICarTransport& video_transport_;
@@ -157,6 +158,7 @@ private:
     bool phone_connected_ = false;
     bool session_active_ = false;
     std::string phone_name_;
+    uint64_t mic_frame_count_ = 0;
 
     // Thread-safe pending video write queue (aasdk thread → video TCP thread)
     std::mutex video_mutex_;
