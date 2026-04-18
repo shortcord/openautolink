@@ -1,17 +1,17 @@
 ﻿# EV Energy Model Reverse Engineering
 
-## Status: WORKING (verified on emulator + real car)
+## Status: WORKING — ACCURATE (verified on emulator + real car)
 
 EV routing with battery-on-arrival estimates is fully functional via the AA protocol.
-When connected to an EV with VHAL data, the app sends a VehicleEnergyModel protobuf
+When connected to an EV with VHAL data, the bridge sends a VehicleEnergyModel protobuf
 through undocumented sensor type 23. Google Maps on the phone processes it and shows
 battery percentage remaining at each destination in search results and during navigation.
 
 **Verified:**
-- April 2026 on AAOS emulator: Maps shows battery estimates (94%, 93%, 92%, etc.)
-- April 2026 on real Chevrolet Blazer EV (C234 2024): Maps shows battery estimates.
-  Car VHAL successfully provides EV_BATTERY_LEVEL, INFO_EV_BATTERY_CAPACITY,
-  RANGE_REMAINING ΓÇö all subscribed and reading live values.
+- April 2026 on AAOS emulator: Maps shows battery estimates
+- April 2026 on real Chevrolet Blazer EV (C234 2024): Maps shows **accurate** battery
+  estimates matching the car's actual SOC. Car VHAL provides EV_BATTERY_LEVEL,
+  INFO_EV_BATTERY_CAPACITY, RANGE_REMAINING — all subscribed and reading live values.
 
 ### How It Works
 
@@ -57,6 +57,22 @@ dropped because `trackedPropertyIds.add(propId)` happened AFTER the
 STATIC properties like `INFO_EV_BATTERY_CAPACITY` never got callback updates,
 so they were permanently missing. Fixed by moving `trackedPropertyIds.add()`
 before the initial read.
+
+**min_usable_capacity Misinterpretation (fixed in v0.1.109):** Maps was showing ~94%
+battery instead of the real ~74%. Root cause found by tracing through decompiled Maps
+code (`rah.java`, method `m33791O`): Maps reads `BatteryConfig.min_usable_capacity` as
+the **current battery level**, NOT as a static minimum usable capacity floor. It reads
+`max_capacity` as total capacity, then computes SOC = `min_usable_capacity / max_capacity`.
+We were setting `min_usable_capacity = capacityWh * 0.95` (a constant), so Maps always
+computed ~95% regardless of actual charge. Fixed by setting `min_usable_capacity = currentWh`
+(the live `EV_BATTERY_LEVEL` value).
+
+```java
+// From rah.m33791O() — how Maps constructs BatteryLevel from VEM:
+//   batteryLevelWh  = aeahVar.f10387d  → min_usable_capacity.watt_hours
+//   batteryCapacityWh = aeahVar.f10388e → max_capacity.watt_hours
+//   result = new qjp(batteryLevelWh, batteryCapacityWh, ...)
+```
 
 **Remote Debugging:** VEM send status is logged via `DiagnosticLog.i("vem", ...)`
 which flows through the bridge control channel to the relay's journal. Check with:
@@ -316,7 +332,7 @@ All steps implemented and verified:
 1. **aasdk extended** ΓÇö sensor types 23-26 in `SensorType.proto`, `SensorBatch.proto`
 2. **VehicleEnergyModel protobuf** built from VHAL data:
    - `battery.max_capacity` = `INFO_EV_BATTERY_CAPACITY`
-   - `battery.min_usable_capacity` = 95% of max
+   - `battery.min_usable_capacity` = `EV_BATTERY_LEVEL` (Maps reads this as current SOC)
    - `battery.reserve_energy` = 5% of max
    - `consumption.driving.rate` = `EV_BATTERY_LEVEL / RANGE_REMAINING * 1000` (Wh/km)
 3. **Sent as sensor 23** in the SensorBatch during AA session ΓÇö WORKING
@@ -369,6 +385,9 @@ The VEM is sent when all three VHAL values are available:
 - `com/google/android/apps/auto/sdk/nav/state/ChargingStationDetails.java`
 - `com/google/android/apps/auto/sdk/nav/state/StopDetails.java`
 
+- `p000/rah.java` — BatteryLevel construction from VEM (m33791O: min_usable_capacity → current SOC)
+- `p000/qjp.java` — BatteryLevel data class (batteryLevelWh, batteryCapacityWh)
+
 ### Protobuf-lite Type Encoding (for decoding descriptors)
 
 Type IDs in info string (GROUP is skipped):
@@ -389,13 +408,19 @@ The `sendVehicleEnergyModel(capacityWh, currentWh, rangeM)` method builds the pr
 
 ```
 battery.max_capacity.watt_hours = capacityWh          // from INFO_EV_BATTERY_CAPACITY
-battery.min_usable_capacity.watt_hours = capacityWh * 0.95
+battery.min_usable_capacity.watt_hours = currentWh     // from EV_BATTERY_LEVEL — Maps reads this as current SOC!
 battery.reserve_energy.watt_hours = capacityWh * 0.05
 battery.regen_braking_capable = true
 consumption.driving.rate = (currentWh / rangeM) * 1000  // Wh/km from car's own range estimate
 consumption.auxiliary.rate = 2.0                         // typical aux consumption
 charging_prefs.mode = 1                                  // standard
 ```
+
+> **Critical insight:** Despite the proto field name `min_usable_capacity`, Maps uses this
+> as the **current battery level in Wh**. This was discovered by tracing `rah.m33791O()` in
+> the decompiled Maps APK, which constructs `qjp(batteryLevelWh=min_usable_capacity,
+> batteryCapacityWh=max_capacity)`. Setting this to a static value (e.g. 95% of max)
+> makes Maps think the battery is always near-full.
 
 The energy consumption rate is derived from the car's own range estimate rather than hardcoded,
 so it automatically reflects the car's driving conditions, temperature, and driving style.
@@ -432,3 +457,4 @@ subscribable properties (callbacks re-populate values) but caused STATIC propert
 - Investigate sensor type 26 (EV_TRIP_SETTINGS) for trip-specific battery targets
 - Periodic VEM updates during driving to reflect changing consumption patterns
 - Consider sending fuel data (sensor 6) in parallel for hybrid vehicles
+- Investigate `rah.m33790N()` interpolation logic for edge cases (very low/high SOC)
