@@ -178,6 +178,10 @@ object ControlMessageSerializer {
                 ControlMessage.PairedPhones(phones = phones)
             }
 
+            "pairing_mode_status" -> ControlMessage.PairingModeStatus(
+                enabled = obj["enabled"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true
+            )
+
             "bridge_update_accept" -> ControlMessage.BridgeUpdateAccept()
 
             "bridge_update_reject" -> ControlMessage.BridgeUpdateReject(
@@ -352,6 +356,11 @@ object ControlMessageSerializer {
             is ControlMessage.ForgetPhone -> buildJsonObject {
                 put("type", "forget_phone")
                 put("mac", message.mac)
+            }
+
+            is ControlMessage.SetPairingMode -> buildJsonObject {
+                put("type", "set_pairing_mode")
+                put("enabled", message.enabled)
             }
 
             is ControlMessage.BridgeUpdateOffer -> buildJsonObject {

@@ -36,10 +36,16 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
         composable(AppDestinations.PROJECTION) {
             val projectionUiState by projectionViewModel.uiState.collectAsStateWithLifecycle()
             val pairedPhones by projectionViewModel.pairedPhones.collectAsStateWithLifecycle()
+            val pairingEnabled by projectionViewModel.pairingEnabled.collectAsStateWithLifecycle()
 
             // Forward paired phones from session to settings ViewModel
             LaunchedEffect(pairedPhones) {
                 settingsViewModel.onPairedPhonesReceived(pairedPhones)
+            }
+
+            // Forward pairing mode status from session to settings ViewModel
+            LaunchedEffect(pairingEnabled) {
+                settingsViewModel.onPairingModeStatus(pairingEnabled)
             }
 
             ProjectionScreen(

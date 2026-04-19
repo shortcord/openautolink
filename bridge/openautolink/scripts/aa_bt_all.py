@@ -281,7 +281,34 @@ class AAProfile(dbus.service.Object):
     def NewConnection(self, device, fd, props):
         fd = fd.take()
         _mark_bt_activity()
-        print(f"AA RFCOMM NewConnection from {device} fd={fd}", flush=True)
+
+        # Extract MAC from D-Bus device path (e.g. /org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF)
+        connecting_mac = _normalize_mac(
+            str(device).split("/")[-1].replace("dev_", "").replace("_", ":"))
+        preferred = _preferred_bt_mac()
+
+        # If a default phone is set and this isn't it, check if the default
+        # phone is currently BT-connected. If so, reject — the default phone
+        # has priority and we don't want a second phone kicking the session.
+        # If the default phone is NOT connected (not in car), allow the
+        # non-default phone through as a fallback.
+        if preferred and connecting_mac != preferred:
+            try:
+                objects = _get_managed_objects()
+                for path, ifaces in objects.items():
+                    dev_props = ifaces.get("org.bluez.Device1")
+                    if not dev_props:
+                        continue
+                    dev_mac = _normalize_mac(str(dev_props.get("Address", "")))
+                    if dev_mac == preferred and bool(dev_props.get("Connected", False)):
+                        print(f"AA RFCOMM rejected: {connecting_mac} — "
+                              f"default phone {preferred} is connected", flush=True)
+                        os.close(fd)
+                        return
+            except Exception as e:
+                print(f"AA RFCOMM: error checking default phone: {e}", flush=True)
+
+        print(f"AA RFCOMM NewConnection from {device} fd={fd} mac={connecting_mac}", flush=True)
         threading.Thread(target=handle_aa_rfcomm, args=(fd,), daemon=True).start()
     @dbus.service.method(PROFILE_IFACE, in_signature="o", out_signature="")
     def RequestDisconnection(self, dev): print(f"AA disconnect {dev}", flush=True)

@@ -143,6 +143,7 @@ private:
     void handle_list_paired_phones();
     void handle_switch_phone(const std::string& json);
     void handle_forget_phone(const std::string& json);
+    void handle_set_pairing_mode(const std::string& json);
     void handle_bridge_update_offer(const std::string& json);
     void handle_bridge_update_data(const std::string& json);
     void handle_bridge_update_complete(const std::string& json);

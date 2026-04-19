@@ -191,6 +191,12 @@ class SessionManager(
         _pairedPhonesCallback = callback
     }
 
+    // Pairing mode callback — set by ViewModels to receive pairing_mode_status responses
+    private var _pairingModeCallback: ((Boolean) -> Unit)? = null
+    fun setPairingModeCallback(callback: ((Boolean) -> Unit)?) {
+        _pairingModeCallback = callback
+    }
+
     // Paired phones list — populated when bridge responds to list_paired_phones
     private val _pairedPhones = MutableStateFlow<List<ControlMessage.PairedPhone>>(emptyList())
     val pairedPhones: StateFlow<List<ControlMessage.PairedPhone>> = _pairedPhones.asStateFlow()
@@ -880,6 +886,10 @@ class SessionManager(
                 Log.d(TAG, "Received paired phones: ${message.phones.size}")
                 _pairedPhones.value = message.phones
                 _pairedPhonesCallback?.invoke(message.phones)
+            }
+            is ControlMessage.PairingModeStatus -> {
+                Log.d(TAG, "Pairing mode: ${if (message.enabled) "enabled" else "disabled"}")
+                _pairingModeCallback?.invoke(message.enabled)
             }
             is ControlMessage.BridgeUpdateAccept,
             is ControlMessage.BridgeUpdateReject,

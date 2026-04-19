@@ -2009,6 +2009,19 @@ void LiveAasdkSession::accept_connection() {
                     return;
                 }
 
+                // If an AA session is actively running (phone connected,
+                // services started), reject new TCP connections. This prevents
+                // a second phone from kicking an active session. The legitimate
+                // same-phone reconnect case is fine: when the old TCP dies,
+                // aasdk detects the error and fires on_phone_disconnected(),
+                // clearing phone_connected_ so the next accept succeeds.
+                if (oal_session_ && oal_session_->phone_connected()) {
+                    std::cerr << "[aasdk] Wireless connection rejected (AA session active)" << std::endl;
+                    socket->close();
+                    accept_connection();
+                    return;
+                }
+
                 std::cerr << "[aasdk] TCP client connected (wireless)!" << std::endl;
                 output_.emit(R"({"type":"event","event_type":"phone_connected","transport":"wireless"})");
                 state_.connected = true;

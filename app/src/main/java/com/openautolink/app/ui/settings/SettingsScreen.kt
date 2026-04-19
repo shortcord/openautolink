@@ -588,6 +588,7 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
 private fun PhonesTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
     val pairedPhones by viewModel.pairedPhones.collectAsStateWithLifecycle()
     val phonesLoading by viewModel.phonesLoading.collectAsStateWithLifecycle()
+    val pairingEnabled by viewModel.pairingEnabled.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         viewModel.requestPairedPhones()
@@ -778,6 +779,52 @@ private fun PhonesTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                 text = "No default phone set. The bridge will connect to the first paired phone it finds.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // --- Pairing Mode ---
+        SectionHeader("New Phone Pairing")
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "When disabled, the bridge stops advertising via Bluetooth and " +
+                    "will not accept new phone pairings. Existing paired phones can " +
+                    "still connect. Useful once all your phones are paired.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .testTag("pairingModeToggle"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (pairingEnabled) "Pairing enabled" else "Pairing disabled",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = if (pairingEnabled) "Bridge is discoverable — new phones can pair"
+                           else "Bridge is hidden — only existing phones can connect",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = pairingEnabled,
+                onCheckedChange = { viewModel.setPairingMode(it) },
+                modifier = Modifier.testTag("pairingModeSwitch"),
             )
         }
     }

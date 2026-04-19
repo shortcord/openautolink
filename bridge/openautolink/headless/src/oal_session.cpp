@@ -545,6 +545,8 @@ void OalSession::on_app_json_line(const std::string& line) {
         handle_switch_phone(line);
     } else if (type == "forget_phone") {
         handle_forget_phone(line);
+    } else if (type == "set_pairing_mode") {
+        handle_set_pairing_mode(line);
     } else if (type == "bridge_update_offer") {
         handle_bridge_update_offer(line);
     } else if (type == "bridge_update_data") {
@@ -1289,6 +1291,29 @@ void OalSession::handle_forget_phone(const std::string& json) {
         on_phone_disconnected("phone_forgotten");
     }
     do_forget();
+}
+
+void OalSession::handle_set_pairing_mode(const std::string& json) {
+    // Extract "enabled" — defaults to true if missing
+    bool enabled = true;
+    std::string val = oal_json_extract_string(json, "enabled");
+    if (val == "false" || val == "0") enabled = false;
+
+    std::cerr << "[OAL] set_pairing_mode: " << (enabled ? "enabled" : "disabled") << std::endl;
+
+    // Toggle BlueZ adapter Discoverable + Pairable via bluetoothctl
+    std::string cmd = enabled
+        ? "bluetoothctl discoverable on 2>/dev/null; bluetoothctl pairable on 2>/dev/null"
+        : "bluetoothctl discoverable off 2>/dev/null; bluetoothctl pairable off 2>/dev/null";
+    int ret = system(cmd.c_str());
+    if (ret != 0) {
+        std::cerr << "[OAL] set_pairing_mode: bluetoothctl returned " << ret << std::endl;
+    }
+
+    // Respond with current state so app stays in sync
+    std::ostringstream oss;
+    oss << R"({"type":"pairing_mode_status","enabled":)" << (enabled ? "true" : "false") << "}";
+    send_control_line(oss.str());
 }
 
 // ── Bridge update handlers ───────────────────────────────────────────

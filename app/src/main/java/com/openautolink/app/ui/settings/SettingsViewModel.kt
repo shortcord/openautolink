@@ -86,6 +86,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _phonesLoading = MutableStateFlow(false)
     val phonesLoading: StateFlow<Boolean> = _phonesLoading
 
+    private val _pairingEnabled = MutableStateFlow(true)
+    val pairingEnabled: StateFlow<Boolean> = _pairingEnabled
+
     val uiState: StateFlow<SettingsUiState> = combine(
         preferences.bridgeHost,
         preferences.bridgePort,
@@ -335,6 +338,16 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             // Remove from local list immediately for responsive UI
             _pairedPhones.value = _pairedPhones.value.filter { it.mac != mac }
         }
+    }
+
+    fun setPairingMode(enabled: Boolean) {
+        viewModelScope.launch {
+            ConfigUpdateSender.sendControlMessage(ControlMessage.SetPairingMode(enabled))
+        }
+    }
+
+    fun onPairingModeStatus(enabled: Boolean) {
+        _pairingEnabled.value = enabled
     }
 
     fun updateSyncAaTheme(enabled: Boolean) {

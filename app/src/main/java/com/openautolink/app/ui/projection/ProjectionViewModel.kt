@@ -95,9 +95,13 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _bridgeUptimeSeconds = MutableStateFlow(0L)
     private val _pairedPhones = MutableStateFlow<List<com.openautolink.app.transport.ControlMessage.PairedPhone>>(emptyList())
     private val _showPhoneSwitcher = MutableStateFlow(false)
+    private val _pairingEnabled = MutableStateFlow(true)
 
     /** Paired phones list for the phone switcher popup. */
     val pairedPhones: StateFlow<List<com.openautolink.app.transport.ControlMessage.PairedPhone>> = _pairedPhones
+
+    /** Whether BT pairing is currently enabled on the bridge. */
+    val pairingEnabled: StateFlow<Boolean> = _pairingEnabled
 
     /** Whether the phone switcher popup is shown. */
     val showPhoneSwitcher: StateFlow<Boolean> = _showPhoneSwitcher
@@ -201,6 +205,9 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     }
                     is com.openautolink.app.transport.ControlMessage.PairedPhones -> {
                         _pairedPhones.value = message.phones
+                    }
+                    is com.openautolink.app.transport.ControlMessage.PairingModeStatus -> {
+                        _pairingEnabled.value = message.enabled
                     }
                     is com.openautolink.app.transport.ControlMessage.Stats -> {
                         _bridgeUptimeSeconds.value = message.uptimeSeconds
