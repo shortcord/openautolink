@@ -22,7 +22,7 @@ OpenAutoLink is an open-source wireless Android Auto bridge for AAOS head units.
 
 > **First-of-its-kind EV integration:** OpenAutoLink forwards real EV battery percentage, range, fuel type, and charge port data from the car into Android Auto. Google Maps uses this to show battery level alongside navigation — something no other aftermarket solution provides, including OEM Android Auto implementations.
 
-> This is a hobby project under active development. Core features are implemented and working on real hardware, but the project is not yet polished or broadly validated across vehicles.
+> This is a hobby project under active development, but I think I have it all pretty stable and full-featured at this point. I am primarily using an Orange Pi Zero2 now running Armbian Minimal and its working great and boots and gets connected in about 30-40 seconds.
 
 > **Discuss on XDA:** [OpenAutoLink — Wireless Android Auto bridge for AAOS (GM EVs)](https://xdaforums.com/t/open-source-openautolink-wireless-android-auto-bridge-for-aaos-gm-evs.4785192/) — questions, feedback, and build reports welcome.
 
@@ -164,11 +164,13 @@ H.264 generally tops out at 1080p for practical phone encoder support. H.265 and
 4. In the OpenAutoLink app, go to Settings → Video.
 5. Leave Auto enabled to let the phone pick the best supported mode, or manually choose a codec and resolution.
 
+> **Blazer EV note:** On a 2024 Chevrolet Blazer EV, 1440p at 230 DPI is a great combination — text and UI elements are sharp and well-proportioned for the wide display.
+
 ### Display Adaptation
 
-OpenAutoLink is designed for AAOS displays that are not simple 16:9 rectangles. It reads display dimensions and cutout insets, computes safe areas, and keeps interactive Android Auto UI away from clipped edges while still letting maps and backgrounds fill the available space.
+OpenAutoLink is designed for AAOS displays that are not simple 16:9 rectangles. The app includes a content inset editor that lets you push Android Auto's interactive UI elements inward from any edge of the screen, so buttons and controls stay away from curved bezels or clipped areas while maps and backgrounds still fill the full display.
 
-For the 2024 Blazer EV, the bridge is pre-configured with a right-side stable inset in `bridge/sbc/openautolink.env` so interactive elements stay away from the curved bezel.
+For the 2024 Blazer EV, the right edge of the display has a curved bezel — a right-side content inset keeps interactive elements comfortably inside the visible area.
 
 <details>
 <summary>🖥️ Display & Layout Screenshots</summary>
@@ -208,11 +210,13 @@ The bridge relays already-encoded video and audio, so raw CPU performance matter
 | **CPU / RAM** | Mostly affects boot time; modest ARM64 hardware is enough |
 | **Size** | Smaller is easier to hide in the console |
 
-**Recommended OS: [DietPi](https://dietpi.com/)** — lightweight Debian-based, fast to boot from eMMC, and supports a wide range of ARM64 boards. Use the headless server image.
+**Recommended OS: [DietPi](https://dietpi.com/) or [Armbian Minimal](https://www.armbian.com/)** — both are lightweight Debian-based distributions that boot quickly and support a wide range of ARM64 boards. Use the headless/minimal server image.
 
 #### Development / tested boards
 
 The primary development board is a **Khadas VIM4** (Amlogic A311D2, 8 GB RAM, 32 GB eMMC, Wi-Fi 6, GigE). The **Raspberry Pi 5 / CM5** is also tested and works well. Both are overkill for this workload — the bridge does not benefit from their CPU headroom — but they are convenient for development.
+
+The current daily-driver board is an **Orange Pi Zero2** (Allwinner H616, 1 GB RAM, Wi-Fi 5, GigE) running Armbian Minimal. It boots and connects in about 30–40 seconds and is compact enough to hide easily in the center console.
 
 #### Recommended boards (DietPi, all criteria met)
 
@@ -224,9 +228,15 @@ These boards hit the right balance of cost, boot speed, and wireless performance
 | **Radxa ROCK 5B** | ~$90–$130 | RK3588 | 4–16 GB | Wi-Fi 6E (M.2 module) | Dual 2.5 GbE; eMMC slot |
 | **Orange Pi 3B** | ~$35–$45 | RK3566 | 1–8 GB | Wi-Fi 5 (onboard) | Good lower-cost option; eMMC slot |
 
-#### Lower-end boards (pending validation on DietPi)
+#### Validated budget board
 
-These meet the spec on paper and are cheap enough to be worth trying. They will be added to the recommended list above if they perform well enough for daily use:
+| Board | Approx. Price | SoC | RAM | WiFi | Notes |
+|-------|--------------|-----|-----|------|-------|
+| **Orange Pi Zero2** | ~$20–$30 | Allwinner H616 | 1 GB | Wi-Fi 5 (onboard) | Currently in daily use with Armbian Minimal; compact, boots fast, very affordable |
+
+#### Other budget boards (pending validation)
+
+These meet the spec on paper and are cheap enough to be worth trying:
 
 | Board | Approx. Price | Notes |
 |-------|--------------|-------|
