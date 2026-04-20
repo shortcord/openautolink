@@ -102,7 +102,8 @@ class MediaCodecDecoder(
         this.surface = surface
         this.surfaceWidth = width
         this.surfaceHeight = height
-        Log.i(TAG, "Surface attached: ${width}x${height} (surfaceChanged=$surfaceChanged)")
+        Log.i(TAG, "Surface attached: ${width}x${height} (surfaceChanged=$surfaceChanged, codecActive=${codec != null}, receivedIdr=$receivedIdr, renderingEnabled=$renderingEnabled)")
+        DiagnosticLog.i("video", "Surface attached: ${width}x${height} surfaceChanged=$surfaceChanged codecActive=${codec != null} renderGate=$renderingEnabled")
 
         // Only reconfigure codec if the Surface object itself changed (e.g., after surfaceDestroyed).
         // Size-only changes don't require codec reset — MediaCodec renders to whatever size the surface is.
@@ -284,13 +285,19 @@ class MediaCodecDecoder(
                 }
             }
         }
-        Log.i(TAG, "IDR keyframe received: ${frame.data.size} bytes")
+        Log.i(TAG, "IDR keyframe received: ${frame.data.size} bytes, renderGate: false->true")
+        DiagnosticLog.i("video", "IDR received: ${frame.data.size}B, codecActive=${codec != null}, enabling render")
         receivedIdr = true
-        renderingEnabled = true
         _needsKeyframe = false
         _needsKeyframeFlow.value = false
         cachedIdrFrame = null  // Clear cache — we have a live IDR now
+        // Queue the IDR BEFORE enabling rendering — this ensures the decoder
+        // processes the IDR as its first frame. If we enable rendering first,
+        // the drain thread could render a stale output buffer before the IDR
+        // is decoded, producing green/blocky artifacts.
         queueFrame(frame)
+        renderingEnabled = true
+        updateStats(null)  // Immediately update waitingForKeyframe state for UI
     }
 
     private fun handleRegularFrame(frame: VideoFrame) {
@@ -563,9 +570,10 @@ class MediaCodecDecoder(
                                 mc.releaseOutputBuffer(outputIndex, true)
                             }
                             val decoded = framesDecoded.incrementAndGet()
-                            if (!firstFrameRendered) {
+                            if (!firstFrameRendered && renderingEnabled) {
                                 firstFrameRendered = true
                                 val elapsed = System.currentTimeMillis() - decodeStartTimeMs
+                                Log.i(TAG, "First frame RENDERED in ${elapsed}ms (renderGate=$renderingEnabled)")
                                 DiagnosticLog.i("video", "First frame rendered in ${elapsed}ms")
                             }
                             updateFps(decoded)
@@ -606,6 +614,7 @@ class MediaCodecDecoder(
     }
 
     private fun releaseCodec() {
+        val wasActive = codec != null
         stopDrainThread()
         try {
             codec?.stop()
@@ -613,7 +622,10 @@ class MediaCodecDecoder(
         try {
             codec?.release()
         } catch (_: Exception) {}
-        if (codec != null) codecResetCount++
+        if (wasActive) {
+            codecResetCount++
+            DiagnosticLog.i("video", "Codec released (reset #$codecResetCount), renderGate -> false")
+        }
         codec = null
         receivedIdr = false
         renderingEnabled = false
@@ -685,6 +697,7 @@ class MediaCodecDecoder(
             height = pendingHeight ?: current.height,
             codecResets = codecResetCount,
             bitrateKbps = currentBitrateKbps,
+            waitingForKeyframe = _needsKeyframe,
         )
     }
 }

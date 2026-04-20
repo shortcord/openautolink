@@ -599,6 +599,14 @@ void HeadlessAutoEntity::onServiceDiscoveryRequest(
                   add_video_config(t, primary_codec);
               }
           }
+          // Always add H.264 fallback when primary is VP9 or H.265.
+          // Most phones lack VP9 hardware encoders; H.264 is universal.
+          // Without this, the phone rejects the video channel entirely.
+          if (primary_codec != 3) {
+              for (int t : {3, 2, 1}) {
+                  add_video_config(t, 3); // H.264 fallback at ≤1080p
+              }
+          }
       } }
     // Media Audio
     { auto* svc = response.add_channels();
@@ -2055,11 +2063,15 @@ void LiveAasdkSession::accept_connection() {
                 active_transport_ = TransportType::WIRELESS;
                 wireless_peer_ip_ = peer_ip;
 
-                // Tear down old entity if exists (same-IP phone reconnect)
+                // Tear down old entity if exists (same-IP phone reconnect).
+                // Use graceful_shutdown with a short timeout so the old entity's
+                // async handlers complete before we create a new one. This prevents
+                // the old disconnect callback from destroying the new entity.
                 if (entity_) {
-                    std::cerr << "[aasdk] Cleaning up previous entity for reconnect" << std::endl;
-                    entity_->stop();
-                    entity_.reset();
+                    BLOG << "[aasdk] Cleaning up previous entity for reconnect" << std::endl;
+                    auto old_entity = entity_;
+                    entity_.reset();  // Detach immediately so disconnect callback is stale
+                    old_entity->stop();
                 }
 
                 do_tcp_wireless_handshake(socket);
@@ -2108,10 +2120,20 @@ void LiveAasdkSession::create_entity(aasdk::transport::ITransport::Pointer trans
         io_service_, std::move(cryptor), std::move(transport),
         std::move(messenger), output_, config_);
 
-    // On phone disconnect: notify OAL + restart scanning
-    entity_->set_disconnect_callback([this]() {
+    // On phone disconnect: notify OAL + restart scanning.
+    // Capture a weak_ptr to this entity so the callback can detect if a newer
+    // entity has already replaced it (same-IP reconnect race).
+    std::weak_ptr<HeadlessAutoEntity> entity_weak = entity_;
+    entity_->set_disconnect_callback([this, entity_weak]() {
+        // If a newer entity already replaced us, this disconnect is stale — ignore it.
+        auto locked = entity_weak.lock();
+        if (!locked || locked != entity_) {
+            BLOG << "[aasdk] stale disconnect callback (entity replaced), ignoring" << std::endl;
+            return;
+        }
+
         auto was_transport = active_transport_;
-        std::cerr << "[aasdk] disconnect callback: transport="
+        BLOG << "[aasdk] disconnect callback: transport="
                   << (was_transport == TransportType::USB ? "USB" : "wireless")
                   << " running=" << running_ << std::endl;
         state_.connected = false;
@@ -2261,6 +2283,7 @@ void HeadlessVideoHandler::stop() {
 // fillFeatures removed (SDR built inline)
 
 void HeadlessVideoHandler::sendVideoFocusIndication() {
+    std::cerr << "[aasdk] requesting fresh IDR from phone (VideoFocusIndication)" << std::endl;
     auto promise = aasdk::channel::SendPromise::defer(strand_);
     promise->then([]() {}, [](auto) {});
     aap_protobuf::service::media::video::message::VideoFocusNotification indication;
@@ -2355,21 +2378,36 @@ void HeadlessVideoHandler::replayCachedKeyframe() {
     uint32_t h = static_cast<uint32_t>(height_);
 
     if (oal_session_) {
-        // Only replay SPS/PPS (codec config) so the app can configure its decoder.
-        // Do NOT replay the cached IDR — it's stale and P-frames from the live
-        // phone stream reference a different (newer) IDR. Feeding the stale IDR
-        // followed by live P-frames corrupts the decoder's reference picture buffer,
-        // producing green/blocky artifacts that persist until a fresh IDR arrives.
-        // Instead, the caller should also call request_fresh_idr() to get a clean
-        // IDR from the phone that matches the current P-frame stream.
-        if (!cached_sps_pps_.empty()) {
-            std::cerr << "[aasdk] replaying cached SPS/PPS (" << cached_sps_pps_.size() << " bytes), skipping stale IDR" << std::endl;
-            oal_session_->write_video_frame(
-                static_cast<uint16_t>(w), static_cast<uint16_t>(h), 0,
-                OalVideoFlags::CODEC_CONFIG,
-                cached_sps_pps_.data(), cached_sps_pps_.size());
+        if (video_codec_ == 5 || video_codec_ == 6) {
+            // VP9/AV1: no SPS/PPS concept. Keyframes are self-contained, so a
+            // cached IDR can be replayed safely — VP9 doesn't use reference
+            // picture buffers that would be corrupted by a stale keyframe.
+            if (!cached_idr_.empty()) {
+                std::cerr << "[aasdk] replaying cached VP9/AV1 keyframe (" << cached_idr_.size() << " bytes)" << std::endl;
+                oal_session_->write_video_frame(
+                    static_cast<uint16_t>(w), static_cast<uint16_t>(h), 0,
+                    OalVideoFlags::KEYFRAME,
+                    cached_idr_.data(), cached_idr_.size());
+            } else {
+                std::cerr << "[aasdk] no cached VP9/AV1 keyframe to replay" << std::endl;
+            }
         } else {
-            std::cerr << "[aasdk] no cached SPS/PPS to replay (H.265 combined frames only)" << std::endl;
+            // H.264/H.265: Only replay SPS/PPS (codec config) so the app can configure its decoder.
+            // Do NOT replay the cached IDR — it's stale and P-frames from the live
+            // phone stream reference a different (newer) IDR. Feeding the stale IDR
+            // followed by live P-frames corrupts the decoder's reference picture buffer,
+            // producing green/blocky artifacts that persist until a fresh IDR arrives.
+            // Instead, the caller should also call request_fresh_idr() to get a clean
+            // IDR from the phone that matches the current P-frame stream.
+            if (!cached_sps_pps_.empty()) {
+                std::cerr << "[aasdk] replaying cached SPS/PPS (" << cached_sps_pps_.size() << " bytes), skipping stale IDR" << std::endl;
+                oal_session_->write_video_frame(
+                    static_cast<uint16_t>(w), static_cast<uint16_t>(h), 0,
+                    OalVideoFlags::CODEC_CONFIG,
+                    cached_sps_pps_.data(), cached_sps_pps_.size());
+            } else {
+                std::cerr << "[aasdk] no cached SPS/PPS to replay (H.265 combined frames only)" << std::endl;
+            }
         }
     } else {
         std::cerr << "[aasdk] replay skipped: oal_session_ null" << std::endl;
@@ -2393,6 +2431,31 @@ void HeadlessVideoHandler::onChannelOpenRequest(
 void HeadlessVideoHandler::onMediaChannelSetupRequest(
     const aap_protobuf::service::media::shared::message::Setup& request)
 {
+    // The phone tells us which codec type it will use for encoding.
+    // Update video_codec_ so keyframe detection uses the correct codec path.
+    int phone_codec = static_cast<int>(request.type());
+    const char* codec_name = "unknown";
+    switch (phone_codec) {
+        case 3: codec_name = "H.264"; break;
+        case 5: codec_name = "VP9"; break;
+        case 7: codec_name = "H.265"; break;
+    }
+    if (phone_codec == 3 || phone_codec == 5 || phone_codec == 7) {
+        if (phone_codec != video_codec_) {
+            std::cerr << "[aasdk] phone selected " << codec_name
+                      << " (requested " << video_codec_ << " -> " << phone_codec << ")" << std::endl;
+            video_codec_ = phone_codec;
+            // Notify OAL session so config_echo reflects the actual codec
+            if (oal_session_) {
+                oal_session_->notify_negotiated_codec(phone_codec);
+            }
+        } else {
+            std::cerr << "[aasdk] phone confirmed codec: " << codec_name << std::endl;
+        }
+    } else {
+        std::cerr << "[aasdk] phone selected unknown codec type: " << phone_codec << std::endl;
+    }
+
     aap_protobuf::service::media::shared::message::Config response;
     response.set_status(aap_protobuf::service::media::shared::message::Config_Status_STATUS_READY);
     response.set_max_unacked(1);

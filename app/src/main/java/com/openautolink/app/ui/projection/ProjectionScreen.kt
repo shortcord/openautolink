@@ -205,6 +205,38 @@ fun ProjectionScreen(
             )
         }
 
+        // Waiting-for-keyframe indicator — subtle spinner during STREAMING when
+        // the decoder has no IDR yet (black video). Disappears as soon as first
+        // frame is decoded. Placed bottom-center to avoid blocking the projection.
+        if (uiState.sessionState == SessionState.STREAMING && uiState.videoStats.waitingForKeyframe) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 48.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x99000000))
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .testTag("keyframeWaitIndicator"),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = "Loading video\u2026",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+
         // Floating overlay buttons — bottom-right, above nav bar. Draggable.
         Column(
             modifier = Modifier

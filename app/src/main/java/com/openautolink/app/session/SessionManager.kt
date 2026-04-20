@@ -520,7 +520,10 @@ class SessionManager(
     }
 
     suspend fun sendAppHello(displayWidth: Int, displayHeight: Int, displayDpi: Int) {
-        // Use passed values, or compute from actual display metrics if zeros
+        // Use passed values, or compute from actual display/window metrics if zeros.
+        // Uses currentWindowMetrics (respects system bar visibility from display mode)
+        // rather than maximumWindowMetrics (always full physical screen), so the bridge
+        // gets the actual usable area for pixel_aspect calculation.
         val ctx = context
         val actualWidth: Int
         val actualHeight: Int
@@ -533,10 +536,18 @@ class SessionManager(
             actualDpi = displayDpi
         } else if (ctx != null) {
             val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
-            val metrics = wm.maximumWindowMetrics
+            // currentWindowMetrics reflects the current window state (system bar
+            // visibility determined by display mode). This gives the bridge the
+            // actual area where the video surface renders.
+            val metrics = wm.currentWindowMetrics
             val bounds = metrics.bounds
-            actualWidth = bounds.width()
-            actualHeight = bounds.height()
+            // Subtract visible system bar insets to get the usable content area.
+            // In fullscreen_immersive the insets are zero so this is a no-op.
+            val visibleBarInsets = metrics.windowInsets.getInsets(
+                android.view.WindowInsets.Type.systemBars()
+            )
+            actualWidth = bounds.width() - visibleBarInsets.left - visibleBarInsets.right
+            actualHeight = bounds.height() - visibleBarInsets.top - visibleBarInsets.bottom
             actualDpi = ctx.resources.displayMetrics.densityDpi
             // Read display cutout insets (physically curved/missing screen areas)
             val cutoutInsets = metrics.windowInsets.getInsetsIgnoringVisibility(
@@ -546,7 +557,8 @@ class SessionManager(
             cutBottom = cutoutInsets.bottom
             cutLeft = cutoutInsets.left
             cutRight = cutoutInsets.right
-            // Read system bar insets (status bar, nav bar)
+            // Read system bar insets (status bar, nav bar) — report both visible
+            // and ignored-visibility for bridge diagnostics
             val barInsets = metrics.windowInsets.getInsetsIgnoringVisibility(
                 android.view.WindowInsets.Type.systemBars()
             )
@@ -584,52 +596,6 @@ class SessionManager(
     /** Send a keyframe request to the bridge. */
     suspend fun requestKeyframe() {
         connectionManager.sendControlMessage(ControlMessage.KeyframeRequest)
-    }
-
-    /**
-     * Auto-calculate and send pixel_aspect to the bridge for crop mode.
-     * The display aspect ratio differs from the 16:9 video on most car screens.
-     * pixel_aspect tells the phone to pre-distort the rendering so circles
-     * remain circular regardless of how the app scales the video surface.
-     */
-    private suspend fun autoSendPixelAspect() {
-        val ctx = context ?: return
-        val prefs = AppPreferences.getInstance(ctx)
-        val userPixelAspect = prefs.aaPixelAspect.first()
-
-        // Skip if user has set a manual value
-        if (userPixelAspect != 0) return
-
-        val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
-        val display = dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY) ?: return
-        val mode = display.mode
-        val displayW = mode.physicalWidth.toFloat()
-        val displayH = mode.physicalHeight.toFloat()
-
-        val resolution = prefs.aaResolution.first()
-        val videoW: Int
-        val videoH: Int
-        when (resolution) {
-            "480p" -> { videoW = 854; videoH = 480 }
-            "720p" -> { videoW = 1280; videoH = 720 }
-            "1440p" -> { videoW = 2560; videoH = 1440 }
-            "4k" -> { videoW = 3840; videoH = 2160 }
-            else -> { videoW = 1920; videoH = 1080 } // 1080p default
-        }
-        val videoAr = videoW.toFloat() / videoH.toFloat()
-        val displayAr = displayW / displayH
-
-        if (displayAr <= 0 || videoAr <= 0 || displayAr == videoAr) return
-
-        val pa = (displayAr / videoAr * 10000).toInt()
-        if (pa == 10000) return // square pixels, no correction needed
-
-        Log.i(TAG, "Auto pixel_aspect: $pa (display=${displayW.toInt()}x${displayH.toInt()}, video=${videoW}x${videoH})")
-
-        // Send as config_update to bridge — bridge applies it to the SDR
-        connectionManager.sendControlMessage(
-            ControlMessage.ConfigUpdate(mapOf("aa_pixel_aspect" to pa.toString()))
-        )
     }
 
     /** Sync local-only preferences that don't go to the bridge (e.g., cluster units). */
@@ -777,15 +743,9 @@ class SessionManager(
                 // Send our hello back (display dims, cutout — bridge auto-computes from these)
                 scope.launch {
                     sendAppHello(displayWidth = 0, displayHeight = 0, displayDpi = 0)
-                    // Auto-calculate pixel_aspect for crop mode and send to bridge.
-                    // The bridge's auto-computation from hello data may not account
-                    // for the scaling mode. When crop mode stretches 16:9 video to
-                    // fill a wider display, pixel_aspect tells the phone to pre-distort
-                    // so circles remain circular.
-                    autoSendPixelAspect()
-                    // No syncBridgeSettings — bridge env is the source of truth.
-                    // User changes go to env via Save & Restart. Auto-computed
-                    // values (pixel_aspect, stable_insets) come from hello data.
+                    // Bridge auto-computes pixel_aspect from display dims (hello)
+                    // and video resolution (env config). No config_update needed.
+                    // User can still override via Settings → Video → Pixel Aspect.
                     syncLocalPreferences()
                     // Check for bridge binary updates (non-blocking, async)
                     _bridgeUpdateManager?.onBridgeConnected(info)

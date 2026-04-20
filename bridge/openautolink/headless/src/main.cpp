@@ -1,3 +1,5 @@
+#include "openautolink/oal_log.hpp"
+
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -90,13 +92,14 @@ int main(int argc, char* argv[])
     bool hide_clock = false;
     bool hide_phone_signal = false;
     bool hide_battery = false;
+    bool pixel_aspect_from_env = false;
     openautolink::HeadlessConfig::UiConfigExperiment aa_ui_experiment;
     for(int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
         if(argument.rfind(kSessionModeFlag, 0) == 0) {
             const auto parsed = openautolink::parse_session_mode(argument.substr(kSessionModeFlag.size()));
             if(!parsed.has_value()) {
-                std::cerr << "unsupported session mode: " << argument.substr(kSessionModeFlag.size()) << '\n';
+                BLOG << "unsupported session mode: " << argument.substr(kSessionModeFlag.size()) << '\n';
                 return 2;
             }
             session_mode = *parsed;
@@ -196,6 +199,7 @@ int main(int argc, char* argv[])
         if(argument.rfind(kAaPixelAspectFlag, 0) == 0) {
             aa_ui_experiment.pixel_aspect_ratio_e4 = static_cast<uint32_t>(
                 std::stoul(std::string(argument.substr(kAaPixelAspectFlag.size()))));
+            pixel_aspect_from_env = true;
             continue;
         }
         if(argument.rfind(kAaRealDensityFlag, 0) == 0) {
@@ -215,21 +219,21 @@ int main(int argc, char* argv[])
         }
         if(argument.rfind(kAaInitMarginsFlag, 0) == 0) {
             if (!parse_ui_insets(argument.substr(kAaInitMarginsFlag.size()), aa_ui_experiment.initial_margins)) {
-                std::cerr << "invalid --aa-init-margins value, expected top,bottom,left,right\n";
+                BLOG << "invalid --aa-init-margins value, expected top,bottom,left,right\n";
                 return 2;
             }
             continue;
         }
         if(argument.rfind(kAaInitContentInsetsFlag, 0) == 0) {
             if (!parse_ui_insets(argument.substr(kAaInitContentInsetsFlag.size()), aa_ui_experiment.initial_content_insets)) {
-                std::cerr << "invalid --aa-init-content-insets value, expected top,bottom,left,right\n";
+                BLOG << "invalid --aa-init-content-insets value, expected top,bottom,left,right\n";
                 return 2;
             }
             continue;
         }
         if(argument.rfind(kAaInitStableInsetsFlag, 0) == 0) {
             if (!parse_ui_insets(argument.substr(kAaInitStableInsetsFlag.size()), aa_ui_experiment.initial_stable_insets)) {
-                std::cerr << "invalid --aa-init-stable-insets value, expected top,bottom,left,right\n";
+                BLOG << "invalid --aa-init-stable-insets value, expected top,bottom,left,right\n";
                 return 2;
             }
             continue;
@@ -240,21 +244,21 @@ int main(int argc, char* argv[])
         }
         if(argument.rfind(kAaRuntimeMarginsFlag, 0) == 0) {
             if (!parse_ui_insets(argument.substr(kAaRuntimeMarginsFlag.size()), aa_ui_experiment.runtime_margins)) {
-                std::cerr << "invalid --aa-runtime-margins value, expected top,bottom,left,right\n";
+                BLOG << "invalid --aa-runtime-margins value, expected top,bottom,left,right\n";
                 return 2;
             }
             continue;
         }
         if(argument.rfind(kAaRuntimeContentInsetsFlag, 0) == 0) {
             if (!parse_ui_insets(argument.substr(kAaRuntimeContentInsetsFlag.size()), aa_ui_experiment.runtime_content_insets)) {
-                std::cerr << "invalid --aa-runtime-content-insets value, expected top,bottom,left,right\n";
+                BLOG << "invalid --aa-runtime-content-insets value, expected top,bottom,left,right\n";
                 return 2;
             }
             continue;
         }
         if(argument.rfind(kAaRuntimeStableInsetsFlag, 0) == 0) {
             if (!parse_ui_insets(argument.substr(kAaRuntimeStableInsetsFlag.size()), aa_ui_experiment.runtime_stable_insets)) {
-                std::cerr << "invalid --aa-runtime-stable-insets value, expected top,bottom,left,right\n";
+                BLOG << "invalid --aa-runtime-stable-insets value, expected top,bottom,left,right\n";
                 return 2;
             }
             continue;
@@ -289,6 +293,9 @@ int main(int argc, char* argv[])
         c.hide_phone_signal = hide_phone_signal;
         c.hide_battery_level = hide_battery;
         c.aa_ui_experiment = aa_ui_experiment;
+        if (pixel_aspect_from_env && aa_ui_experiment.pixel_aspect_ratio_e4 > 0) {
+            c.pixel_aspect_explicit = true;
+        }
 
         // Vehicle identity from env (persisted by app via vehicle_data)
         if (auto v = std::getenv("OAL_CAR_MAKE")) c.car_make = v;
@@ -333,7 +340,7 @@ int main(int argc, char* argv[])
     // Synthetic data generation — no phone or aasdk needed.
     // Use --session-mode=oal-mock --tcp-car-port=5288
     if (tcp_car_port > 0 && session_mode == openautolink::SessionMode::OalMock) {
-        std::cerr << "[main] OAL mock mode: control=" << tcp_car_port
+        BLOG << "[main] OAL mock mode: control=" << tcp_car_port
                   << " audio=" << (tcp_car_port + 1)
                   << " video=" << (tcp_car_port + 2) << std::endl;
 
@@ -351,10 +358,10 @@ int main(int argc, char* argv[])
 
         // Video transport: accept + flush
         std::thread video_thread([&tcp_video, &oal]() {
-            std::cerr << "[main] video TCP (mock) listening" << std::endl;
+            BLOG << "[main] video TCP (mock) listening" << std::endl;
             tcp_video.run_oal_sink(
                 [&oal]() {
-                    std::cerr << "[main] video client connected (mock)" << std::endl;
+                    BLOG << "[main] video client connected (mock)" << std::endl;
                     oal.on_video_client_connected();
                 },
                 [&oal]() -> bool { return oal.flush_one_video(); }
@@ -364,9 +371,9 @@ int main(int argc, char* argv[])
 
         // Audio transport: bidirectional — flush writes + read mic frames
         std::thread audio_thread([&tcp_audio, &oal, &mock]() {
-            std::cerr << "[main] audio TCP (mock) listening" << std::endl;
+            BLOG << "[main] audio TCP (mock) listening" << std::endl;
             tcp_audio.run_oal_audio(
-                []() { std::cerr << "[main] audio client connected (mock)" << std::endl; },
+                []() { BLOG << "[main] audio client connected (mock)" << std::endl; },
                 [&oal]() -> bool { return oal.flush_one_audio(); },
                 [&oal, &mock](const openautolink::OalAudioHeader& hdr,
                        const uint8_t* pcm, size_t len) {
@@ -381,7 +388,7 @@ int main(int argc, char* argv[])
         mock.start();
 
         // Control transport: blocking accept + JSON line loop
-        std::cerr << "[main] starting OAL mock control loop on port " << tcp_car_port << std::endl;
+        BLOG << "[main] starting OAL mock control loop on port " << tcp_car_port << std::endl;
         tcp_control.run_oal_control(
             [&oal, &mock](const std::string& line) {
                 oal.on_app_json_line(line);
@@ -408,7 +415,7 @@ int main(int argc, char* argv[])
     // Bridge speaks OAL protocol (JSON control, binary video/audio) to car app.
     // 3 TCP channels: control(5288), audio(5289), video(5290).
     if (tcp_car_port > 0 && session_mode == openautolink::SessionMode::AasdkLive) {
-        std::cerr << "[main] OAL protocol mode: control=" << tcp_car_port
+        BLOG << "[main] OAL protocol mode: control=" << tcp_car_port
                   << " audio=" << (tcp_car_port + 1)
                   << " video=" << (tcp_car_port + 2) << std::endl;
 
@@ -444,10 +451,10 @@ int main(int argc, char* argv[])
 
         // Video transport: accept connection + flush in background
         std::thread video_thread([&tcp_video, &oal]() {
-            std::cerr << "[main] video TCP (OAL) listening" << std::endl;
+            BLOG << "[main] video TCP (OAL) listening" << std::endl;
             tcp_video.run_oal_sink(
                 [&oal]() {
-                    std::cerr << "[main] video client connected (OAL)" << std::endl;
+                    BLOG << "[main] video client connected (OAL)" << std::endl;
                     oal.on_video_client_connected();
                 },
                 [&oal]() -> bool { return oal.flush_one_video(); }
@@ -457,9 +464,9 @@ int main(int argc, char* argv[])
 
         // Audio transport: bidirectional — flush writes + read mic frames
         std::thread audio_thread([&tcp_audio, &oal]() {
-            std::cerr << "[main] audio TCP (OAL, bidirectional) listening" << std::endl;
+            BLOG << "[main] audio TCP (OAL, bidirectional) listening" << std::endl;
             tcp_audio.run_oal_audio(
-                []() { std::cerr << "[main] audio client connected (OAL)" << std::endl; },
+                []() { BLOG << "[main] audio client connected (OAL)" << std::endl; },
                 [&oal]() -> bool { return oal.flush_one_audio(); },
                 [&oal](const openautolink::OalAudioHeader& hdr,
                        const uint8_t* pcm, size_t len) {
@@ -470,7 +477,7 @@ int main(int argc, char* argv[])
         audio_thread.detach();
 
         // Control transport: accept + read JSON lines (blocking)
-        std::cerr << "[main] starting OAL control loop on port " << tcp_car_port << std::endl;
+        BLOG << "[main] starting OAL control loop on port " << tcp_car_port << std::endl;
         tcp_control.run_oal_control(
             [&oal](const std::string& line) {
                 oal.on_app_json_line(line);

@@ -125,6 +125,10 @@ public:
     bool app_connected() const { return app_connected_; }
     const HeadlessConfig& config() const { return config_; }
 
+    // Called by video handler when the phone negotiates a different codec
+    // than what was requested (e.g., VP9 requested but phone fell back to H.264).
+    void notify_negotiated_codec(int codec);
+
 private:
     // Send a JSON line to the app via the control channel.
     void send_control_line(const std::string& json_line);

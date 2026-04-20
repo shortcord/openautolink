@@ -119,6 +119,15 @@ See [bridge/sbc/BUILD.md](bridge/sbc/BUILD.md) for SBC setup. CI builds via `.gi
 - **Coroutines for async**: `viewModelScope` for UI, `Dispatchers.IO` for network/disk, dedicated threads only for real-time audio/video
 - **Test-first islands**: Every island has a public interface defined before implementation. Unit tests mock dependencies at island boundaries
 
+### Versioning & Logging
+- **Single source of truth**: `secrets/version.properties` has `versionName=X.Y.Z`. Gradle, CMake, and deploy scripts all read from it
+- **Version in every log line**: All components MUST include the version in log output so you never have to guess which code is running
+  - **Bridge C++**: Use `BLOG << "message"` (stream) or `oal_log("format", ...)` (printf) — both prepend `[bridge X.Y.Z]` via `oal_log.hpp`. Never use raw `std::cerr <<` or `fprintf(stderr,`
+  - **App Kotlin**: Use `OalLog.i(TAG, "message")` instead of `Log.i(TAG, ...)` — prepends `[app X.Y.Z]`. Import from `com.openautolink.app.diagnostics.OalLog`
+  - **BT script**: Use `oal_print("message")` instead of `print()` — prepends `[bt X.Y.Z]` using `OAL_VERSION` env var
+  - **Shell scripts**: Read `OAL_VERSION` from env and include in log lines
+- **Version bump before commit**: When making changes to app or bridge code, bump `versionName` in `secrets/version.properties` before building/committing. The deploy script stamps `OAL_VERSION` into `/etc/openautolink.env` on the SBC
+
 ### Naming
 - Project: **OpenAutoLink**
 - App package: `com.openautolink.app`

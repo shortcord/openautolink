@@ -1,4 +1,5 @@
 #include "openautolink/oal_session.hpp"
+#include "openautolink/oal_log.hpp"
 #include "openautolink/i_car_transport.hpp"
 
 #ifdef PI_AA_ENABLE_AASDK_LIVE
@@ -69,7 +70,7 @@ void OalSession::on_app_connected() {
     // If phone already connected, send phone_connected immediately
     if (phone_connected_) {
         send_phone_connected(phone_name_, "android");
-        std::cerr << "[OAL] app connected (phone already connected, sent phone_connected)" << std::endl;
+        BLOG << "[OAL] app connected (phone already connected, sent phone_connected)" << std::endl;
 
         // Note: SPS/PPS+IDR replay is deferred to on_video_client_connected()
         // so frames go directly to the connected video sink, not into a queue
@@ -87,12 +88,12 @@ void OalSession::on_app_connected() {
                 send_control_line(oss.str());
             }
             if (!active_audio_purposes_.empty()) {
-                std::cerr << "[OAL] replayed " << active_audio_purposes_.size()
+                BLOG << "[OAL] replayed " << active_audio_purposes_.size()
                           << " audio_start messages" << std::endl;
             }
         }
     } else {
-        std::cerr << "[OAL] app connected (waiting for phone)" << std::endl;
+        BLOG << "[OAL] app connected (waiting for phone)" << std::endl;
     }
 }
 
@@ -118,7 +119,7 @@ void OalSession::on_app_disconnected() {
     update_bytes_received_ = 0;
     update_expected_size_ = 0;
     update_pending_apply_ = false;
-    std::cerr << "[OAL] app disconnected" << std::endl;
+    BLOG << "[OAL] app disconnected" << std::endl;
 }
 
 void OalSession::on_video_client_connected() {
@@ -143,7 +144,7 @@ void OalSession::on_phone_connected(const std::string& phone_name,
     if (app_connected_) {
         send_phone_connected(phone_name, phone_type);
     }
-    std::cerr << "[OAL] phone connected: " << phone_name << std::endl;
+    BLOG << "[OAL] phone connected: " << phone_name << std::endl;
 }
 
 void OalSession::on_phone_disconnected(const std::string& reason) {
@@ -152,12 +153,12 @@ void OalSession::on_phone_disconnected(const std::string& reason) {
     if (app_connected_) {
         send_phone_disconnected(reason);
     }
-    std::cerr << "[OAL] phone disconnected: " << reason << std::endl;
+    BLOG << "[OAL] phone disconnected: " << reason << std::endl;
 
     // Apply deferred update now that the phone is gone
     if (update_pending_apply_ && !update_temp_path_.empty()) {
         update_pending_apply_ = false;
-        std::cerr << "[OAL] applying deferred bridge update" << std::endl;
+        BLOG << "[OAL] applying deferred bridge update" << std::endl;
         if (app_connected_) {
             send_control_line(R"({"type":"bridge_update_status","status":"applying","message":"Phone disconnected — applying update..."})");
         }
@@ -167,7 +168,7 @@ void OalSession::on_phone_disconnected(const std::string& reason) {
 
 void OalSession::on_session_active() {
     session_active_ = true;
-    std::cerr << "[OAL] session active" << std::endl;
+    BLOG << "[OAL] session active" << std::endl;
 }
 
 // ── Video/Audio writes (hot path) ────────────────────────────────────
@@ -234,13 +235,13 @@ void OalSession::write_audio_frame(
     if (ok) {
         audio_frames_written_++;
         if (audio_frames_written_ <= 10 || audio_frames_written_ % 50 == 0) {
-            std::cerr << "[OAL] audio: written=" << audio_frames_written_
+            BLOG << "[OAL] audio: written=" << audio_frames_written_
                       << " size=" << pkt.size() << std::endl;
         }
     } else {
         audio_frames_queued_++; // count drops
         if (audio_frames_queued_ <= 5 || audio_frames_queued_ % 100 == 0) {
-            std::cerr << "[OAL] audio WRITE FAILED: drops=" << audio_frames_queued_
+            BLOG << "[OAL] audio WRITE FAILED: drops=" << audio_frames_queued_
                       << " connected=" << audio_transport_.is_connected() << std::endl;
         }
     }
@@ -265,7 +266,7 @@ bool OalSession::flush_one_video() {
                 std::lock_guard<std::mutex> lock(video_mutex_);
                 pending = video_writes_.size();
             }
-            std::cerr << "[OAL] video: written=" << video_frames_written_
+            BLOG << "[OAL] video: written=" << video_frames_written_
                       << " queued=" << video_frames_queued_
                       << " dropped=" << video_frames_dropped_
                       << " pending=" << pending
@@ -294,7 +295,7 @@ bool OalSession::flush_one_audio() {
                 std::lock_guard<std::mutex> lock(audio_mutex_);
                 pending = audio_writes_.size();
             }
-            std::cerr << "[OAL] audio: written=" << audio_frames_written_
+            BLOG << "[OAL] audio: written=" << audio_frames_written_
                       << " queued=" << audio_frames_queued_
                       << " pending=" << pending
                       << " size=" << pkt.size() << std::endl;
@@ -312,7 +313,7 @@ void OalSession::on_app_audio_frame(const OalAudioHeader& hdr,
 
     mic_frame_count_++;
     if (mic_frame_count_ <= 3 || mic_frame_count_ % 500 == 0) {
-        std::cerr << "[OAL] mic frame #" << mic_frame_count_
+        BLOG << "[OAL] mic frame #" << mic_frame_count_
                   << " purpose=" << static_cast<int>(hdr.purpose)
                   << " rate=" << hdr.sample_rate
                   << " len=" << len << std::endl;
@@ -367,7 +368,7 @@ void OalSession::send_hello() {
         << R"(","build_source":")" << oal_json_escape(config_.build_source)
         << R"("})";
     send_control_line(oss.str());
-    std::cerr << "[OAL] sent hello (bridge " << config_.bridge_version
+    BLOG << "[OAL] sent hello (bridge " << config_.bridge_version
               << ", protocol v" << OAL_PROTOCOL_VERSION
               << ", build_source=" << config_.build_source << ")" << std::endl;
 }
@@ -496,7 +497,7 @@ void OalSession::send_config_echo() {
         << R"(","head_unit_name":")" << oal_json_escape(config_.head_unit_name)
         << R"("})";
     send_control_line(oss.str());
-    std::cerr << "[OAL] config echo sent" << std::endl;
+    BLOG << "[OAL] config echo sent" << std::endl;
 }
 
 void OalSession::send_error(int code, const std::string& message) {
@@ -512,6 +513,18 @@ void OalSession::send_phone_battery(int level, int time_remaining_s, bool critic
         << R"(,"time_remaining_s":)" << time_remaining_s
         << R"(,"critical":)" << (critical ? "true" : "false") << "}";
     send_control_line(oss.str());
+}
+
+void OalSession::notify_negotiated_codec(int codec) {
+    if (codec != config_.video_codec) {
+        BLOG << "[OAL] phone negotiated codec " << codec
+                  << " (was " << config_.video_codec << ") — updating config + re-sending echo" << std::endl;
+        config_.video_codec = codec;
+        // Re-send config_echo so the app knows the actual codec in use
+        if (app_connected_) {
+            send_config_echo();
+        }
+    }
 }
 
 void OalSession::send_voice_session(bool started) {
@@ -535,7 +548,7 @@ void OalSession::on_app_json_line(const std::string& line) {
     // Extract "type" field
     std::string type = oal_json_extract_string(line, "type");
     if (type.empty()) {
-        std::cerr << "[OAL] ignoring line without type: " << line.substr(0, 80) << std::endl;
+        BLOG << "[OAL] ignoring line without type: " << line.substr(0, 80) << std::endl;
         return;
     }
 
@@ -574,7 +587,7 @@ void OalSession::on_app_json_line(const std::string& line) {
     } else if (type == "bridge_update_complete") {
         handle_bridge_update_complete(line);
     } else {
-        std::cerr << "[OAL] unknown message type: " << type << std::endl;
+        BLOG << "[OAL] unknown message type: " << type << std::endl;
     }
 
     if (control_forward_) {
@@ -588,8 +601,11 @@ void OalSession::handle_app_hello(const std::string& json) {
     oal_json_extract_int(json, "display_height", display_h);
     oal_json_extract_int(json, "display_dpi", display_dpi);
 
-    if (display_w > 0) config_.video_width = display_w;
-    if (display_h > 0) config_.video_height = display_h;
+    // Store usable display area (content area after system bars).
+    // Do NOT overwrite video_width/video_height — those are the AA video
+    // resolution, not the display size.
+    if (display_w > 0) config_.display_width = display_w;
+    if (display_h > 0) config_.display_height = display_h;
     // Only use the app's physical display DPI as a fallback when no explicit
     // AA DPI was configured via env/CLI/config_update. The user's OAL_AA_DPI
     // setting controls AA layout density and must not be overwritten by the
@@ -610,7 +626,7 @@ void OalSession::handle_app_hello(const std::string& json) {
     oal_json_extract_int(json, "bar_left", bar_left);
     oal_json_extract_int(json, "bar_right", bar_right);
 
-    std::cerr << "[OAL] app hello: display=" << display_w << "x" << display_h
+    BLOG << "[OAL] app hello: display=" << display_w << "x" << display_h
               << " dpi=" << display_dpi
               << " cutout=T:" << cut_top << " B:" << cut_bottom
               << " L:" << cut_left << " R:" << cut_right
@@ -632,18 +648,31 @@ void OalSession::handle_app_hello(const std::string& json) {
             case 5: video_w = 3840; video_h = 2160; break;
         }
 
-        // pixel_aspect_ratio: NOT auto-computed — leave at 0 (square pixels)
-        // by default. User can override via Settings → Video → Pixel Aspect.
-        // Auto-computing caused double-stretch when combined with crop mode.
-        if (config_.aa_ui_experiment.pixel_aspect_ratio_e4 > 0) {
-            std::cerr << "[OAL] pixel_aspect_ratio=" << config_.aa_ui_experiment.pixel_aspect_ratio_e4
+        // pixel_aspect_ratio: auto-computed from display aspect ratio vs video
+        // aspect ratio. Tells the phone to pre-distort rendering so circles
+        // remain circular when the app scales the video to fill the display.
+        // Only auto-computed when no manual override from env/CLI/config_update.
+        if (!config_.pixel_aspect_explicit) {
+            double display_ar = static_cast<double>(display_w) / display_h;
+            double video_ar = static_cast<double>(video_w) / video_h;
+            if (display_ar > 0 && video_ar > 0 && display_ar != video_ar) {
+                uint32_t pa = static_cast<uint32_t>(display_ar / video_ar * 10000);
+                if (pa != 10000) {
+                    config_.aa_ui_experiment.pixel_aspect_ratio_e4 = pa;
+                    BLOG << "[OAL] auto pixel_aspect=" << pa
+                              << " (display=" << display_w << "x" << display_h
+                              << " video=" << video_w << "x" << video_h << ")" << std::endl;
+                }
+            }
+        } else if (config_.aa_ui_experiment.pixel_aspect_ratio_e4 > 0) {
+            BLOG << "[OAL] pixel_aspect_ratio=" << config_.aa_ui_experiment.pixel_aspect_ratio_e4
                       << " (manual override)" << std::endl;
         }
 
         // height_margin: NOT auto-computed for letterbox mode (no cropping).
         // User can override via Settings for experimentation.
         if (config_.aa_ui_experiment.height_margin > 0) {
-            std::cerr << "[OAL] height_margin=" << config_.aa_ui_experiment.height_margin
+            BLOG << "[OAL] height_margin=" << config_.aa_ui_experiment.height_margin
                       << " (manual override)" << std::endl;
         }
 
@@ -666,7 +695,7 @@ void OalSession::handle_app_hello(const std::string& json) {
             if (safe_left > static_cast<int>(si.left)) si.left = safe_left;
             if (safe_right > static_cast<int>(si.right)) si.right = safe_right;
 
-            std::cerr << "[OAL] auto stable_insets from cutout: T:" << si.top
+            BLOG << "[OAL] auto stable_insets from cutout: T:" << si.top
                       << " B:" << si.bottom << " L:" << si.left << " R:" << si.right
                       << std::endl;
         }
@@ -865,21 +894,22 @@ void OalSession::handle_config_update(const std::string& json) {
         wm != static_cast<int>(config_.aa_ui_experiment.width_margin)) {
         config_.aa_ui_experiment.width_margin = wm;
         config_changed = true;
-        std::cerr << "[OAL] width_margin override: " << wm << std::endl;
+        BLOG << "[OAL] width_margin override: " << wm << std::endl;
     }
     int hm = 0;
     if (oal_json_extract_int(json, "aa_height_margin", hm) && hm >= 0 &&
         hm != static_cast<int>(config_.aa_ui_experiment.height_margin)) {
         config_.aa_ui_experiment.height_margin = hm;
         config_changed = true;
-        std::cerr << "[OAL] height_margin override: " << hm << std::endl;
+        BLOG << "[OAL] height_margin override: " << hm << std::endl;
     }
     int pa = 0;
     if (oal_json_extract_int(json, "aa_pixel_aspect", pa) && pa >= 0 &&
         pa != static_cast<int>(config_.aa_ui_experiment.pixel_aspect_ratio_e4)) {
         config_.aa_ui_experiment.pixel_aspect_ratio_e4 = pa;
+        config_.pixel_aspect_explicit = (pa > 0);  // manual override disables auto-compute
         config_changed = true;
-        std::cerr << "[OAL] pixel_aspect_ratio override: " << pa << std::endl;
+        BLOG << "[OAL] pixel_aspect_ratio override: " << pa << std::endl;
     }
 
     std::string drive_side = oal_json_extract_string(json, "drive_side");
@@ -904,7 +934,7 @@ void OalSession::handle_config_update(const std::string& json) {
         if (hide != config_.hide_clock) {
             config_.hide_clock = hide;
             config_changed = true;
-            std::cerr << "[OAL] hide_clock updated: " << (hide ? "true" : "false") << std::endl;
+            BLOG << "[OAL] hide_clock updated: " << (hide ? "true" : "false") << std::endl;
         }
     }
 
@@ -914,7 +944,7 @@ void OalSession::handle_config_update(const std::string& json) {
         if (hide != config_.hide_phone_signal) {
             config_.hide_phone_signal = hide;
             config_changed = true;
-            std::cerr << "[OAL] hide_phone_signal updated: " << (hide ? "true" : "false") << std::endl;
+            BLOG << "[OAL] hide_phone_signal updated: " << (hide ? "true" : "false") << std::endl;
         }
     }
 
@@ -924,7 +954,7 @@ void OalSession::handle_config_update(const std::string& json) {
         if (hide != config_.hide_battery_level) {
             config_.hide_battery_level = hide;
             config_changed = true;
-            std::cerr << "[OAL] hide_battery_level updated: " << (hide ? "true" : "false") << std::endl;
+            BLOG << "[OAL] hide_battery_level updated: " << (hide ? "true" : "false") << std::endl;
         }
     }
 
@@ -960,7 +990,7 @@ void OalSession::handle_config_update(const std::string& json) {
             insets.right = std::max(insets.right, floor.right);
             config_.aa_ui_experiment.initial_stable_insets = insets;
             config_changed = true;
-            std::cerr << "[OAL] safe area insets updated (merged with cutout floor): "
+            BLOG << "[OAL] safe area insets updated (merged with cutout floor): "
                       << "T:" << insets.top << " B:" << insets.bottom
                       << " L:" << insets.left << " R:" << insets.right << std::endl;
         }
@@ -972,7 +1002,7 @@ void OalSession::handle_config_update(const std::string& json) {
         if (parse_insets(content_insets, insets)) {
             config_.aa_ui_experiment.initial_content_insets = insets;
             config_changed = true;
-            std::cerr << "[OAL] content insets updated: " << content_insets << std::endl;
+            BLOG << "[OAL] content insets updated: " << content_insets << std::endl;
         }
     }
 
@@ -1009,46 +1039,52 @@ void OalSession::handle_config_update(const std::string& json) {
     };
 
     if (config_changed || infra_changed) {
-        std::cerr << "[OAL] config updated from app" << std::endl;
+        BLOG << "[OAL] config updated from app" << std::endl;
 
-        // Persist to env file
+        // Persist to env file — use "upsert" pattern: replace if key exists, append if not.
+        // This handles env files from older installs that don't have newer keys.
+        auto env_upsert = [&sanitize](const std::string& key, const std::string& value) -> std::string {
+            std::string safe = sanitize(value);
+            return "grep -q '^" + key + "=' /etc/openautolink.env 2>/dev/null && "
+                   "sed -i 's/^" + key + "=.*/" + key + "=" + safe + "/' /etc/openautolink.env || "
+                   "echo '" + key + "=" + safe + "' >> /etc/openautolink.env\n";
+        };
+
         std::string env_update;
         if (!codec.empty())
-            env_update += "sed -i 's/^OAL_AA_CODEC=.*/OAL_AA_CODEC=" + sanitize(codec) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_AA_CODEC", codec);
         if (fps > 0)
-            env_update += "sed -i 's/^OAL_AA_FPS=.*/OAL_AA_FPS=" + std::to_string(fps) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_AA_FPS", std::to_string(fps));
         if (!aa_res.empty())
-            env_update += "sed -i 's/^OAL_AA_RESOLUTION=.*/OAL_AA_RESOLUTION=" + sanitize(aa_res) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_AA_RESOLUTION", aa_res);
         if (dpi > 0)
-            env_update += "sed -i 's/^OAL_AA_DPI=.*/OAL_AA_DPI=" + std::to_string(dpi) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_AA_DPI", std::to_string(dpi));
         if (!phone_mode.empty())
-            env_update += "sed -i 's/^OAL_PHONE_MODE=.*/OAL_PHONE_MODE=" + sanitize(phone_mode) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_PHONE_MODE", phone_mode);
         if (!wifi_band.empty())
-            env_update += "sed -i 's/^OAL_WIRELESS_BAND=.*/OAL_WIRELESS_BAND=" + sanitize(wifi_band) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_WIRELESS_BAND", wifi_band);
         if (!wifi_country.empty())
-            env_update += "sed -i 's/^OAL_WIRELESS_COUNTRY=.*/OAL_WIRELESS_COUNTRY=" + sanitize(wifi_country) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_WIRELESS_COUNTRY", wifi_country);
         if (!wifi_ssid.empty())
-            env_update += "sed -i 's/^OAL_WIRELESS_SSID=.*/OAL_WIRELESS_SSID=" + sanitize(wifi_ssid) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_WIRELESS_SSID", wifi_ssid);
         if (!wifi_password.empty())
-            env_update += "sed -i 's/^OAL_WIRELESS_PASSWORD=.*/OAL_WIRELESS_PASSWORD=" + sanitize(wifi_password) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_WIRELESS_PASSWORD", wifi_password);
         if (!head_unit.empty())
-            env_update += "sed -i 's/^OAL_HEAD_UNIT_NAME=.*/OAL_HEAD_UNIT_NAME=" + sanitize(head_unit) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_HEAD_UNIT_NAME", head_unit);
         if (!bt_mac_val.empty())
-            env_update += "sed -i 's/^OAL_BT_MAC=.*/OAL_BT_MAC=" + sanitize(bt_mac_val) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_BT_MAC", bt_mac_val);
         if (default_phone_mac_present)
-            env_update += "if grep -q '^OAL_DEFAULT_PHONE_MAC=' /etc/openautolink.env 2>/dev/null; then "
-                          "sed -i 's/^OAL_DEFAULT_PHONE_MAC=.*/OAL_DEFAULT_PHONE_MAC=" + sanitize(default_phone_mac_val) + "/' /etc/openautolink.env 2>/dev/null; "
-                          "else echo 'OAL_DEFAULT_PHONE_MAC=" + sanitize(default_phone_mac_val) + "' >> /etc/openautolink.env; fi\n";
+            env_update += env_upsert("OAL_DEFAULT_PHONE_MAC", default_phone_mac_val);
         if (!stable_insets.empty())
-            env_update += "sed -i 's/^OAL_AA_INIT_STABLE_INSETS=.*/OAL_AA_INIT_STABLE_INSETS=" + sanitize(stable_insets) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_AA_INIT_STABLE_INSETS", stable_insets);
         if (!content_insets.empty())
-            env_update += "sed -i 's/^OAL_AA_INIT_CONTENT_INSETS=.*/OAL_AA_INIT_CONTENT_INSETS=" + sanitize(content_insets) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_AA_INIT_CONTENT_INSETS", content_insets);
         if (!hide_clock_str.empty())
-            env_update += "sed -i 's/^OAL_AA_HIDE_CLOCK=.*/OAL_AA_HIDE_CLOCK=" + sanitize(hide_clock_str) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_AA_HIDE_CLOCK", hide_clock_str);
         if (!hide_phone_signal_str.empty())
-            env_update += "sed -i 's/^OAL_AA_HIDE_PHONE_SIGNAL=.*/OAL_AA_HIDE_PHONE_SIGNAL=" + sanitize(hide_phone_signal_str) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_AA_HIDE_PHONE_SIGNAL", hide_phone_signal_str);
         if (!hide_battery_str.empty())
-            env_update += "sed -i 's/^OAL_AA_HIDE_BATTERY=.*/OAL_AA_HIDE_BATTERY=" + sanitize(hide_battery_str) + "/' /etc/openautolink.env 2>/dev/null\n";
+            env_update += env_upsert("OAL_AA_HIDE_BATTERY", hide_battery_str);
         if (!env_update.empty())
             system(env_update.c_str());
 
@@ -1056,8 +1092,12 @@ void OalSession::handle_config_update(const std::string& json) {
         if (config_changed) {
 #ifdef PI_AA_ENABLE_AASDK_LIVE
             if (aa_session_) {
+                // restart_with_config sends ByeByeRequest to phone first (graceful),
+                // then calls on_phone_disconnected("config_changed") in its completion
+                // callback once the phone acknowledges or the timeout expires.
+                // Do NOT send phone_disconnected here — that causes a double-notify
+                // and the app tears down channels before the phone gets the ByeBye.
                 aa_session_->restart_with_config(config_);
-                send_phone_disconnected("config_changed");
             }
 #endif
         }
@@ -1086,7 +1126,7 @@ void OalSession::handle_restart_services(const std::string& json) {
         restart_bt = true;
     }
 
-    std::cerr << "[OAL] restart_services: wireless=" << restart_wireless
+    BLOG << "[OAL] restart_services: wireless=" << restart_wireless
               << " bt=" << restart_bt << std::endl;
 
     // Build the systemd restart command. The bridge service restarts itself last,
@@ -1110,9 +1150,9 @@ void OalSession::handle_restart_services(const std::string& json) {
     // so the phone sees a clean shutdown and won't show Communication Error 21.
 #ifdef PI_AA_ENABLE_AASDK_LIVE
     if (aa_session_ && phone_connected_) {
-        std::cerr << "[OAL] restart_services: graceful phone disconnect before restart" << std::endl;
+        BLOG << "[OAL] restart_services: graceful phone disconnect before restart" << std::endl;
         aa_session_->graceful_disconnect_phone([cmd]() {
-            std::cerr << "[OAL] restart_services: phone disconnected, restarting services" << std::endl;
+            BLOG << "[OAL] restart_services: phone disconnected, restarting services" << std::endl;
             usleep(200000);
             system(cmd.c_str());
         });
@@ -1126,7 +1166,7 @@ void OalSession::handle_restart_services(const std::string& json) {
 }
 
 void OalSession::handle_keyframe_request() {
-    std::cerr << "[OAL] keyframe request from app" << std::endl;
+    BLOG << "[OAL] keyframe request from app" << std::endl;
 #ifdef PI_AA_ENABLE_AASDK_LIVE
     if (aa_session_) {
         // Replay SPS/PPS (codec config only) so the app can reconfigure its
@@ -1148,13 +1188,13 @@ void OalSession::handle_app_log(const std::string& json) {
     // Pad level to 5 chars for alignment
     while (level.size() < 5) level += ' ';
 
-    std::cerr << "[CAR] " << level << " " << tag << "\t" << msg << std::endl;
+    BLOG << "[CAR] " << level << " " << tag << "\t" << msg << std::endl;
 }
 
 void OalSession::handle_app_telemetry(const std::string& json) {
     // Strip the "type" and "ts" wrappers — just forward the raw JSON content
     // so the full telemetry snapshot is visible in the journal
-    std::cerr << "[CAR] TELEM " << json << std::endl;
+    BLOG << "[CAR] TELEM " << json << std::endl;
 }
 
 void OalSession::send_paired_phones() {
@@ -1162,7 +1202,7 @@ void OalSession::send_paired_phones() {
     // Output format: "Device XX:XX:XX:XX:XX:XX DeviceName"
     FILE* pipe = popen("bluetoothctl devices Paired 2>/dev/null || bluetoothctl paired-devices 2>/dev/null", "r");
     if (!pipe) {
-        std::cerr << "[OAL] failed to run bluetoothctl for paired devices" << std::endl;
+        BLOG << "[OAL] failed to run bluetoothctl for paired devices" << std::endl;
         send_control_line(R"({"type":"paired_phones","phones":[]})");
         return;
     }
@@ -1208,23 +1248,23 @@ void OalSession::send_paired_phones() {
 
     oss << "]}";
     send_control_line(oss.str());
-    std::cerr << "[OAL] sent paired_phones" << std::endl;
+    BLOG << "[OAL] sent paired_phones" << std::endl;
 }
 
 void OalSession::handle_list_paired_phones() {
-    std::cerr << "[OAL] app requested paired phones list" << std::endl;
+    BLOG << "[OAL] app requested paired phones list" << std::endl;
     send_paired_phones();
 }
 
 void OalSession::handle_switch_phone(const std::string& json) {
     std::string mac = oal_json_extract_string(json, "mac");
     if (mac.empty()) {
-        std::cerr << "[OAL] switch_phone: no MAC provided" << std::endl;
+        BLOG << "[OAL] switch_phone: no MAC provided" << std::endl;
         send_error(400, "switch_phone requires a mac field");
         return;
     }
 
-    std::cerr << "[OAL] switching to phone: " << mac << std::endl;
+    BLOG << "[OAL] switching to phone: " << mac << std::endl;
 
     // Write a switch-override file that the BT script reads to temporarily
     // bypass the "is default phone connected?" RFCOMM gate. Without this,
@@ -1242,7 +1282,7 @@ void OalSession::handle_switch_phone(const std::string& json) {
             std::fprintf(f, "%s\n%lld\n", mac.c_str(), static_cast<long long>(expiry));
             std::fclose(f);
         } else {
-            std::cerr << "[OAL] switch_phone: failed to write switch override" << std::endl;
+            BLOG << "[OAL] switch_phone: failed to write switch override" << std::endl;
         }
     }
 
@@ -1266,7 +1306,7 @@ void OalSession::handle_switch_phone(const std::string& json) {
         aa_session_->graceful_disconnect_phone([this, bt_cmd]() {
             int ret = system(bt_cmd.c_str());
             if (ret != 0) {
-                std::cerr << "[OAL] switch_phone: command launch failed" << std::endl;
+                BLOG << "[OAL] switch_phone: command launch failed" << std::endl;
             }
         });
         return;
@@ -1276,7 +1316,7 @@ void OalSession::handle_switch_phone(const std::string& json) {
     // No phone connected — just do the BT switch
     int ret = system(bt_cmd.c_str());
     if (ret != 0) {
-        std::cerr << "[OAL] switch_phone: command launch failed" << std::endl;
+        BLOG << "[OAL] switch_phone: command launch failed" << std::endl;
     }
     if (phone_connected_) {
         on_phone_disconnected("phone_switch");
@@ -1286,7 +1326,7 @@ void OalSession::handle_switch_phone(const std::string& json) {
 void OalSession::handle_forget_phone(const std::string& json) {
     std::string mac = oal_json_extract_string(json, "mac");
     if (mac.empty()) {
-        std::cerr << "[OAL] forget_phone: no MAC provided" << std::endl;
+        BLOG << "[OAL] forget_phone: no MAC provided" << std::endl;
         send_error(400, "forget_phone requires a mac field");
         return;
     }
@@ -1308,14 +1348,14 @@ void OalSession::handle_forget_phone(const std::string& json) {
         }
     }
 
-    std::cerr << "[OAL] forgetting phone: " << mac << std::endl;
+    BLOG << "[OAL] forgetting phone: " << mac << std::endl;
 
     auto do_forget = [this, mac]() {
         std::string cmd = "bluetoothctl disconnect " + mac + " 2>/dev/null; "
                           "bluetoothctl remove " + mac + " 2>/dev/null";
         int ret = system(cmd.c_str());
         if (ret != 0) {
-            std::cerr << "[OAL] forget_phone: bluetoothctl command returned " << ret << std::endl;
+            BLOG << "[OAL] forget_phone: bluetoothctl command returned " << ret << std::endl;
         }
         // Send updated paired phones list
         send_paired_phones();
@@ -1344,7 +1384,7 @@ void OalSession::handle_set_pairing_mode(const std::string& json) {
     std::string val = oal_json_extract_string(json, "enabled");
     if (val == "false" || val == "0") enabled = false;
 
-    std::cerr << "[OAL] set_pairing_mode: " << (enabled ? "enabled" : "disabled") << std::endl;
+    BLOG << "[OAL] set_pairing_mode: " << (enabled ? "enabled" : "disabled") << std::endl;
 
     // Set BlueZ Adapter1 Discoverable + Pairable directly via D-Bus (busctl).
     // bluetoothctl is an interactive REPL and its exit code doesn't reliably
@@ -1357,7 +1397,7 @@ void OalSession::handle_set_pairing_mode(const std::string& json) {
         "org.bluez.Adapter1 Pairable b " + bus_val + " 2>&1";
     int ret = system(cmd.c_str());
     if (ret != 0) {
-        std::cerr << "[OAL] set_pairing_mode: busctl returned " << ret << std::endl;
+        BLOG << "[OAL] set_pairing_mode: busctl returned " << ret << std::endl;
     }
 
     // Persist to disk so the BT script can restore this state at next boot
@@ -1370,11 +1410,11 @@ void OalSession::handle_set_pairing_mode(const std::string& json) {
         std::fputs(enabled ? "on\n" : "off\n", pf);
         std::fclose(pf);
         if (::rename(persist_tmp, persist_final) != 0) {
-            std::cerr << "[OAL] set_pairing_mode: rename failed" << std::endl;
+            BLOG << "[OAL] set_pairing_mode: rename failed" << std::endl;
             ::unlink(persist_tmp);
         }
     } else {
-        std::cerr << "[OAL] set_pairing_mode: failed to open persist file" << std::endl;
+        BLOG << "[OAL] set_pairing_mode: failed to open persist file" << std::endl;
     }
 
     // Respond with current state so app stays in sync
@@ -1414,18 +1454,18 @@ void OalSession::handle_bridge_update_offer(const std::string& json) {
     std::string auto_apply_str = oal_json_extract_string(json, "auto_apply");
     update_auto_apply_ = (auto_apply_str != "false");
 
-    std::cerr << "[OAL] bridge update offer: v" << version << " size=" << size
+    BLOG << "[OAL] bridge update offer: v" << version << " size=" << size
               << " auto_apply=" << (update_auto_apply_ ? "true" : "false") << std::endl;
 
     // Check if updates are disabled (dev mode)
     if (config_.update_mode == "disabled") {
-        std::cerr << "[OAL] bridge update rejected: update mode disabled" << std::endl;
+        BLOG << "[OAL] bridge update rejected: update mode disabled" << std::endl;
         send_control_line(R"({"type":"bridge_update_reject","reason":"disabled"})");
         return;
     }
 
     if (size <= 0 || sha256.empty()) {
-        std::cerr << "[OAL] bridge update rejected: invalid offer" << std::endl;
+        BLOG << "[OAL] bridge update rejected: invalid offer" << std::endl;
         send_control_line(R"({"type":"bridge_update_reject","reason":"invalid_offer"})");
         return;
     }
@@ -1446,7 +1486,7 @@ void OalSession::handle_bridge_update_offer(const std::string& json) {
     tmpl.push_back('\0');
     update_fd_ = mkstemp(tmpl.data());
     if (update_fd_ < 0) {
-        std::cerr << "[OAL] bridge update: failed to create temp file" << std::endl;
+        BLOG << "[OAL] bridge update: failed to create temp file" << std::endl;
         send_control_line(R"({"type":"bridge_update_reject","reason":"disk_space"})");
         return;
     }
@@ -1455,7 +1495,7 @@ void OalSession::handle_bridge_update_offer(const std::string& json) {
     update_expected_size_ = static_cast<size_t>(size);
     update_bytes_received_ = 0;
 
-    std::cerr << "[OAL] bridge update accepted, writing to " << update_temp_path_ << std::endl;
+    BLOG << "[OAL] bridge update accepted, writing to " << update_temp_path_ << std::endl;
     send_control_line(R"({"type":"bridge_update_accept"})");
 }
 
@@ -1500,7 +1540,7 @@ static std::vector<uint8_t> base64_decode(const std::string& input) {
 
 void OalSession::handle_bridge_update_data(const std::string& json) {
     if (update_fd_ < 0) {
-        std::cerr << "[OAL] bridge update data: no active update" << std::endl;
+        BLOG << "[OAL] bridge update data: no active update" << std::endl;
         return;
     }
 
@@ -1512,7 +1552,7 @@ void OalSession::handle_bridge_update_data(const std::string& json) {
 
     ssize_t written = write(update_fd_, decoded.data(), decoded.size());
     if (written < 0 || static_cast<size_t>(written) != decoded.size()) {
-        std::cerr << "[OAL] bridge update: write failed" << std::endl;
+        BLOG << "[OAL] bridge update: write failed" << std::endl;
         close(update_fd_);
         update_fd_ = -1;
         unlink(update_temp_path_.c_str());
@@ -1527,14 +1567,14 @@ void OalSession::handle_bridge_update_data(const std::string& json) {
         (update_bytes_received_ / 500000) != ((update_bytes_received_ - decoded.size()) / 500000)) {
         int pct = (update_expected_size_ > 0)
             ? static_cast<int>(update_bytes_received_ * 100 / update_expected_size_) : 0;
-        std::cerr << "[OAL] bridge update: received " << update_bytes_received_
+        BLOG << "[OAL] bridge update: received " << update_bytes_received_
                   << "/" << update_expected_size_ << " bytes (" << pct << "%)" << std::endl;
     }
 }
 
 void OalSession::handle_bridge_update_complete(const std::string& json) {
     if (update_fd_ < 0) {
-        std::cerr << "[OAL] bridge update complete: no active update" << std::endl;
+        BLOG << "[OAL] bridge update complete: no active update" << std::endl;
         return;
     }
 
@@ -1548,14 +1588,14 @@ void OalSession::handle_bridge_update_complete(const std::string& json) {
     // Verify size
     struct stat st;
     if (stat(update_temp_path_.c_str(), &st) != 0 || st.st_size <= 0) {
-        std::cerr << "[OAL] bridge update: temp file stat failed" << std::endl;
+        BLOG << "[OAL] bridge update: temp file stat failed" << std::endl;
         unlink(update_temp_path_.c_str());
         send_control_line(R"({"type":"bridge_update_status","status":"failed","message":"Empty or missing file"})");
         return;
     }
 
     if (update_expected_size_ > 0 && static_cast<size_t>(st.st_size) != update_expected_size_) {
-        std::cerr << "[OAL] bridge update: size mismatch (got " << st.st_size
+        BLOG << "[OAL] bridge update: size mismatch (got " << st.st_size
                   << ", expected " << update_expected_size_ << ")" << std::endl;
         unlink(update_temp_path_.c_str());
         send_control_line(R"({"type":"bridge_update_status","status":"failed","message":"Size mismatch"})");
@@ -1579,14 +1619,14 @@ void OalSession::handle_bridge_update_complete(const std::string& json) {
     }
 
     if (actual_sha.empty() || actual_sha != expected_sha) {
-        std::cerr << "[OAL] bridge update: SHA-256 mismatch (got " << actual_sha
+        BLOG << "[OAL] bridge update: SHA-256 mismatch (got " << actual_sha
                   << ", expected " << expected_sha << ")" << std::endl;
         unlink(update_temp_path_.c_str());
         send_control_line(R"({"type":"bridge_update_status","status":"failed","message":"SHA-256 mismatch"})");
         return;
     }
 
-    std::cerr << "[OAL] bridge update: verified OK (" << st.st_size << " bytes)" << std::endl;
+    BLOG << "[OAL] bridge update: verified OK (" << st.st_size << " bytes)" << std::endl;
     send_control_line(R"({"type":"bridge_update_status","status":"verified","message":"Update verified, applying..."})");
 
     // Make executable
@@ -1596,7 +1636,7 @@ void OalSession::handle_bridge_update_complete(const std::string& json) {
     // When auto_apply is on (default), apply immediately — the 5-second
     // interruption and auto-reconnect is acceptable for most users.
     if (phone_connected_ && !update_auto_apply_) {
-        std::cerr << "[OAL] bridge update: phone connected, auto_apply=false — deferring" << std::endl;
+        BLOG << "[OAL] bridge update: phone connected, auto_apply=false — deferring" << std::endl;
         send_control_line(R"({"type":"bridge_update_status","status":"deferred","message":"Update ready — will apply when phone disconnects"})");
         update_pending_apply_ = true;
         return;
@@ -1617,7 +1657,7 @@ void OalSession::apply_bridge_update() {
 
     // Try the external apply script first (it may have extra platform-specific logic)
     if (access(APPLY_SCRIPT, X_OK) == 0) {
-        std::cerr << "[OAL] bridge update: running apply script" << std::endl;
+        BLOG << "[OAL] bridge update: running apply script" << std::endl;
         // Run without & so we can check the return value
         std::string apply_cmd = std::string(APPLY_SCRIPT) + " " + update_temp_path_;
         usleep(200000); // let status message reach app
@@ -1626,13 +1666,13 @@ void OalSession::apply_bridge_update() {
             // Script will have called systemctl restart — we should be dead soon.
             // Wait a bit; if we survive, the restart didn't work.
             usleep(5000000);
-            std::cerr << "[OAL] bridge update: apply script returned 0 but process still alive — restart may have failed" << std::endl;
+            BLOG << "[OAL] bridge update: apply script returned 0 but process still alive — restart may have failed" << std::endl;
             send_control_line(R"({"type":"bridge_update_status","status":"failed","message":"Apply script succeeded but service restart failed"})");
             return;
         }
-        std::cerr << "[OAL] bridge update: apply script failed (exit " << ret << "), trying inline apply" << std::endl;
+        BLOG << "[OAL] bridge update: apply script failed (exit " << ret << "), trying inline apply" << std::endl;
     } else {
-        std::cerr << "[OAL] bridge update: apply script not found, using inline apply" << std::endl;
+        BLOG << "[OAL] bridge update: apply script not found, using inline apply" << std::endl;
     }
 
     // Inline apply: backup → move → chmod → restart
@@ -1651,14 +1691,14 @@ void OalSession::apply_bridge_update() {
                              "' && rm -f '" + update_temp_path_ + "'";
         int cp_ret = system(cp_cmd.c_str());
         if (cp_ret != 0) {
-            std::cerr << "[OAL] bridge update: failed to replace binary" << std::endl;
+            BLOG << "[OAL] bridge update: failed to replace binary" << std::endl;
             send_control_line(R"({"type":"bridge_update_status","status":"failed","message":"Failed to replace binary — check disk space and permissions"})");
             return;
         }
     }
 
     chmod(install_path.c_str(), 0755);
-    std::cerr << "[OAL] bridge update: binary replaced, restarting service" << std::endl;
+    BLOG << "[OAL] bridge update: binary replaced, restarting service" << std::endl;
 
     // Give status message time to reach the app, then restart
     usleep(200000);
@@ -1666,7 +1706,7 @@ void OalSession::apply_bridge_update() {
 
     // If we're still alive after 5 seconds, the restart failed
     usleep(5000000);
-    std::cerr << "[OAL] bridge update: still alive after restart — service restart may have failed" << std::endl;
+    BLOG << "[OAL] bridge update: still alive after restart — service restart may have failed" << std::endl;
     send_control_line(R"({"type":"bridge_update_status","status":"failed","message":"Binary replaced but service restart failed — please reboot the SBC"})");
 }
 

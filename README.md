@@ -282,7 +282,7 @@ curl -fsSL https://raw.githubusercontent.com/mossyhub/openautolink/main/bridge/s
 
 The installer downloads packages, deploys the bridge, and applies the network configuration. When it finishes, it prints a summary showing that the onboard Ethernet is now a static car connection and the WiFi radio is a phone hotspot — **the SBC no longer has internet or general SSH access through those adapters.**
 
-After a reboot, all services start automatically and the bridge is ready for the car. If you need further ssh access, you can use the in-app "Bridge" settings to set a static Wifi password (in normal operation the Wifi password is randomly geenrated), then connect you laptop to it.
+After a reboot, all services start automatically and the bridge is ready for the car. If you need further ssh access, you can use the in-app "Bridge" settings to set a static Wifi password (in normal operation the Wifi password is randomly geenrated), then connect your laptop to it.
 
 ### App Setup
 

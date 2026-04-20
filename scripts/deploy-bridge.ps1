@@ -187,7 +187,15 @@ if (Test-Path $applyScript) {
     Invoke-Ssh "python3 -c 'import pathlib;p=pathlib.Path(\x22/tmp/apply-bridge-update.sh\x22);p.write_bytes(p.read_bytes().replace(bytes([0x0D,0x0A]),bytes([0x0A])))'; sudo mv /tmp/apply-bridge-update.sh /opt/openautolink/bin/apply-bridge-update.sh && sudo chmod +x /opt/openautolink/bin/apply-bridge-update.sh"
 }
 
-# ── Step 5: Start service ─────────────────────────────────────────────
+# ── Step 5: Stamp version in env file ─────────────────────────────────
+$versionFile = Join-Path $RepoRoot "secrets\version.properties"
+if (Test-Path $versionFile) {
+    $ver = (Get-Content $versionFile | Select-String "^versionName=").ToString().Split("=")[1]
+    Write-Host ">>> Stamping version $ver..." -ForegroundColor Yellow
+    Invoke-Ssh "grep -q '^OAL_VERSION=' /etc/openautolink.env && sudo sed -i 's/^OAL_VERSION=.*/OAL_VERSION=$ver/' /etc/openautolink.env || echo 'OAL_VERSION=$ver' | sudo tee -a /etc/openautolink.env"
+}
+
+# ── Step 6: Start service ─────────────────────────────────────────────
 Write-Host ">>> Starting service..." -ForegroundColor Yellow
 Invoke-Ssh "sudo systemctl start openautolink.service && echo '--- Service status ---' && systemctl is-active openautolink.service"
 

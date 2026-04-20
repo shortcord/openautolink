@@ -35,6 +35,23 @@ import dbus, dbus.service, dbus.mainloop.glib
 from gi.repository import GLib
 import os, time, threading, struct, fcntl, socket
 
+# ── Version-prefixed logging ─────────────────────────────────────────
+# Every log line includes the version so you never have to guess which
+# code is running when reading journalctl output.
+_OAL_VERSION = os.environ.get("OAL_VERSION", "dev")
+_LOG_PREFIX = f"[bt {_OAL_VERSION}] "
+
+def oal_print(*args, **kwargs):
+    """print() replacement that prefixes every line with [bt <version>]."""
+    import io
+    buf = io.StringIO()
+    kwargs_copy = dict(kwargs)
+    kwargs_copy["file"] = buf
+    kwargs_copy.pop("flush", None)
+    print(*args, **kwargs_copy)
+    for line in buf.getvalue().splitlines():
+        print(f"{_LOG_PREFIX}{line}", flush=True)
+
 AA_UUID = "4de17a00-52cb-11e6-bdf4-0800200c9a66"
 HFP_HF_UUID = "0000111e-0000-1000-8000-00805f9b34fb"  # Hands-Free (our role: car kit)
 HFP_AG_UUID = "0000111f-0000-1000-8000-00805f9b34fb"  # Audio Gateway (phone's role)
@@ -109,7 +126,7 @@ def _log_rejection(mac, reason):
     now = time.monotonic()
     last = _last_reject_log_at.get(mac, 0.0)
     if now - last >= REJECT_LOG_INTERVAL_SEC:
-        print(f"AA RFCOMM rejected from {mac}: {reason}", flush=True)
+        oal_print(f"AA RFCOMM rejected from {mac}: {reason}", flush=True)
         _last_reject_log_at[mac] = now
 
 def _close_rejection_fd(fd):
@@ -220,7 +237,7 @@ def _sort_paired_devices(devices, preferred_mac):
     return preferred + fallback
 
 def _connect_device(path):
-    print(f"Reconnect candidate: {path}", flush=True)
+    oal_print(f"Reconnect candidate: {path}", flush=True)
     dev = dbus.Interface(bus.get_object("org.bluez", path),
                          "org.bluez.Device1")
     dp = dbus.Interface(bus.get_object("org.bluez", path),
@@ -239,22 +256,22 @@ def _connect_device(path):
             if not already:
                 dp.Set("org.bluez.Device1", "Trusted", dbus.Boolean(True))
     except Exception as e:
-        print(f"Trust check {path}: {e}", flush=True)
+        oal_print(f"Trust check {path}: {e}", flush=True)
 
     try:
         dev.ConnectProfile(HFP_AG_UUID)
-        print(f"Connected HFP AG to {path}", flush=True)
+        oal_print(f"Connected HFP AG to {path}", flush=True)
     except Exception as e2:
-        print(f"HFP AG connect {path}: {e2}", flush=True)
+        oal_print(f"HFP AG connect {path}: {e2}", flush=True)
         try:
             dev.ConnectProfile(HSP_AG_UUID)
-            print(f"Connected HSP AG to {path}", flush=True)
+            oal_print(f"Connected HSP AG to {path}", flush=True)
         except Exception as e3:
-            print(f"HSP AG connect {path}: {e3}", flush=True)
+            oal_print(f"HSP AG connect {path}: {e3}", flush=True)
 
     try:
         dev.Connect()
-        print(f"Generic Connect to {path}", flush=True)
+        oal_print(f"Generic Connect to {path}", flush=True)
     except Exception:
         pass
 
@@ -264,13 +281,13 @@ def _probe_preferred_async(path, mac):
     Sets preferred_probe["reachable"] True on success, False on unreachable."""
     try:
         dev = dbus.Interface(bus.get_object("org.bluez", path), "org.bluez.Device1")
-        print(f"Preferred probe: attempting Connect on {mac}", flush=True)
+        oal_print(f"Preferred probe: attempting Connect on {mac}", flush=True)
         try:
             dev.Connect(timeout=8)  # D-Bus timeout; BlueZ page timeout ~5-10s
             with preferred_probe["lock"]:
                 preferred_probe["reachable"] = True
                 preferred_probe["done"] = True
-            print(f"Preferred probe: {mac} REACHABLE", flush=True)
+            oal_print(f"Preferred probe: {mac} REACHABLE", flush=True)
         except dbus.DBusException as e:
             name = e.get_dbus_name() if hasattr(e, "get_dbus_name") else str(e)
             # Errors that imply the phone IS reachable:
@@ -284,11 +301,11 @@ def _probe_preferred_async(path, mac):
                 preferred_probe["reachable"] = reachable
                 preferred_probe["done"] = True
             state = "REACHABLE" if reachable else "UNREACHABLE"
-            print(f"Preferred probe: {mac} {state} ({name})", flush=True)
+            oal_print(f"Preferred probe: {mac} {state} ({name})", flush=True)
     except Exception as e:
         with preferred_probe["lock"]:
             preferred_probe["done"] = True
-        print(f"Preferred probe error: {e}", flush=True)
+        oal_print(f"Preferred probe error: {e}", flush=True)
 
 def _reconnect_worker():
     time.sleep(RECONNECT_INITIAL_DELAY_SEC)
@@ -320,13 +337,13 @@ def _reconnect_worker():
                 # Explicit user switch — only try the target
                 for path, _, mac in devices:
                     if mac == switch_target:
-                        print(f"Reconnect switch target: {switch_target}", flush=True)
+                        oal_print(f"Reconnect switch target: {switch_target}", flush=True)
                         _connect_device(path)
                         break
             elif preferred_mac:
                 preferred_path = next((p for p, _, m in devices if m == preferred_mac), None)
                 if preferred_path:
-                    print(f"Reconnect preferred MAC: {preferred_mac} "
+                    oal_print(f"Reconnect preferred MAC: {preferred_mac} "
                           f"(miss={preferred_miss_count})", flush=True)
                     _connect_device(preferred_path)
                     preferred_miss_count += 1
@@ -343,7 +360,7 @@ def _reconnect_worker():
                 for path, _, _ in _sort_paired_devices(devices, ""):
                     _connect_device(path)
         except Exception as e:
-            print(f"Phone connect: {e}", flush=True)
+            oal_print(f"Phone connect: {e}", flush=True)
         time.sleep(RECONNECT_INTERVAL_SEC)
 
 # ---- Minimal protobuf encoding (no library needed) ----
@@ -381,22 +398,22 @@ def handle_aa_rfcomm(fd, connecting_mac=""):
     fcntl.fcntl(fd, fcntl.F_SETFL, fl & ~os.O_NONBLOCK)
 
     try:
-        print(f"Sending WifiStartRequest ip={WIFI_IP} port={WIFI_PORT}", flush=True)
+        oal_print(f"Sending WifiStartRequest ip={WIFI_IP} port={WIFI_PORT}", flush=True)
         rfcomm_send(fd, 1, pbs(1, WIFI_IP) + pbi(2, WIFI_PORT))
 
         mt, d = rfcomm_recv(fd)
-        print(f"Got msg type={mt} len={len(d)}", flush=True)
+        oal_print(f"Got msg type={mt} len={len(d)}", flush=True)
 
-        print(f"Sending WifiInfoResponse ssid={WIFI_SSID}", flush=True)
+        oal_print(f"Sending WifiInfoResponse ssid={WIFI_SSID}", flush=True)
         rfcomm_send(fd, 3, pbs(1, WIFI_SSID) + pbs(2, WIFI_KEY) + pbs(3, WIFI_BSSID) + pbi(4, 8) + pbi(5, 1))
 
         mt2, d2 = rfcomm_recv(fd)
-        print(f"Got msg type={mt2} len={len(d2)}", flush=True)
+        oal_print(f"Got msg type={mt2} len={len(d2)}", flush=True)
 
         mt3, d3 = rfcomm_recv(fd)
-        print(f"Got msg type={mt3} len={len(d3)}", flush=True)
+        oal_print(f"Got msg type={mt3} len={len(d3)}", flush=True)
 
-        print("WiFi credential exchange complete!", flush=True)
+        oal_print("WiFi credential exchange complete!", flush=True)
 
         # If this was the switch-override target, clear the override now that
         # credentials are delivered. Eliminates the need for a wall-clock timer
@@ -406,11 +423,11 @@ def handle_aa_rfcomm(fd, connecting_mac=""):
             if switch_target and switch_target == connecting_mac:
                 try:
                     os.unlink(SWITCH_OVERRIDE_FILE)
-                    print(f"Switch override cleared (target {connecting_mac} got credentials)", flush=True)
+                    oal_print(f"Switch override cleared (target {connecting_mac} got credentials)", flush=True)
                 except OSError:
                     pass
     except Exception as e:
-        print(f"RFCOMM exchange error: {e}", flush=True)
+        oal_print(f"RFCOMM exchange error: {e}", flush=True)
         try:
             os.close(fd)
         except OSError:
@@ -420,28 +437,28 @@ def handle_aa_rfcomm(fd, connecting_mac=""):
 class Agent(dbus.service.Object):
     @dbus.service.method(AGENT_IFACE, in_signature="ou", out_signature="")
     def RequestConfirmation(self, d, p):
-        print(f"Auto-confirm {d} passkey={p}", flush=True)
+        oal_print(f"Auto-confirm {d} passkey={p}", flush=True)
         # Return without error = auto-accept
     @dbus.service.method(AGENT_IFACE, in_signature="o", out_signature="s")
     def RequestPinCode(self, d):
-        print(f"Auto-pin {d} -> 123456", flush=True)
+        oal_print(f"Auto-pin {d} -> 123456", flush=True)
         return "123456"
     @dbus.service.method(AGENT_IFACE, in_signature="o", out_signature="u")
     def RequestPasskey(self, d):
-        print(f"Auto-passkey {d}", flush=True)
+        oal_print(f"Auto-passkey {d}", flush=True)
         return dbus.UInt32(0)
     @dbus.service.method(AGENT_IFACE, in_signature="ou", out_signature="")
     def DisplayPasskey(self, d, p):
-        print(f"Display passkey {d} {p}", flush=True)
+        oal_print(f"Display passkey {d} {p}", flush=True)
     @dbus.service.method(AGENT_IFACE, in_signature="os", out_signature="")
     def DisplayPinCode(self, d, p):
-        print(f"Display pin {d} {p}", flush=True)
+        oal_print(f"Display pin {d} {p}", flush=True)
     @dbus.service.method(AGENT_IFACE, in_signature="o", out_signature="")
     def RequestAuthorization(self, d):
-        print(f"Auto-authorize {d}", flush=True)
+        oal_print(f"Auto-authorize {d}", flush=True)
     @dbus.service.method(AGENT_IFACE, in_signature="os", out_signature="")
     def AuthorizeService(self, d, u):
-        print(f"Auto-authorize-svc {d} {u}", flush=True)
+        oal_print(f"Auto-authorize-svc {d} {u}", flush=True)
     @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
     def Release(self): pass
     @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
@@ -496,29 +513,29 @@ class AAProfile(dbus.service.Object):
                             reject_reason = f"default phone {preferred} is connected"
                             break
                 except Exception as e:
-                    print(f"AA RFCOMM: error checking default phone: {e}", flush=True)
+                    oal_print(f"AA RFCOMM: error checking default phone: {e}", flush=True)
 
         if reject_reason:
             _log_rejection(connecting_mac, reject_reason)
             _close_rejection_fd(fd)
             return
 
-        print(f"AA RFCOMM NewConnection from {device} fd={fd} mac={connecting_mac}", flush=True)
+        oal_print(f"AA RFCOMM NewConnection from {device} fd={fd} mac={connecting_mac}", flush=True)
         threading.Thread(target=handle_aa_rfcomm, args=(fd, connecting_mac), daemon=True).start()
     @dbus.service.method(PROFILE_IFACE, in_signature="o", out_signature="")
-    def RequestDisconnection(self, dev): print(f"AA disconnect {dev}", flush=True)
+    def RequestDisconnection(self, dev): oal_print(f"AA disconnect {dev}", flush=True)
     @dbus.service.method(PROFILE_IFACE, in_signature="", out_signature="")
-    def Release(self): print("AA Released", flush=True)
+    def Release(self): oal_print("AA Released", flush=True)
 
 class HSPProfile(dbus.service.Object):
     @dbus.service.method(PROFILE_IFACE, in_signature="oha{sv}", out_signature="")
     def NewConnection(self, device, fd, props):
         _mark_bt_activity()
-        print(f"HSP NewConnection from {device}", flush=True)
+        oal_print(f"HSP NewConnection from {device}", flush=True)
     @dbus.service.method(PROFILE_IFACE, in_signature="o", out_signature="")
-    def RequestDisconnection(self, dev): print(f"HSP disconnect {dev}", flush=True)
+    def RequestDisconnection(self, dev): oal_print(f"HSP disconnect {dev}", flush=True)
     @dbus.service.method(PROFILE_IFACE, in_signature="", out_signature="")
-    def Release(self): print("HSP Released", flush=True)
+    def Release(self): oal_print("HSP Released", flush=True)
 
 # ── HFP Hands-Free Profile (car kit role) ─────────────────────────────
 # The bridge is the HF (Hands-Free) unit. The phone is the AG (Audio Gateway).
@@ -573,6 +590,12 @@ def handle_hfp_rfcomm(fd, device):
 
     try:
         buf = b""
+        # HF initiates SLC: send AT+BRSF (our features) first.
+        # In HFP, the Hands-Free (client) must speak first.
+        init_cmd = f"AT+BRSF={HFP_HF_FEATURES}\r"
+        os.write(fd, init_cmd.encode("utf-8"))
+        oal_print(f"[HFP] >> AT+BRSF={HFP_HF_FEATURES}", flush=True)
+
         while True:
             data = os.read(fd, 1024)
             if not data:
@@ -586,16 +609,51 @@ def handle_hfp_rfcomm(fd, device):
                 if not line:
                     continue
 
-                print(f"[HFP] << {line}", flush=True)
+                oal_print(f"[HFP] << {line}", flush=True)
 
-                # ── SLC Setup Phase ──────────────────────────────
-                if line.startswith("AT+BRSF="):
-                    # Phone sends its AG features
+                # ── AG Responses (to commands we sent as HF) ─────
+                if line.startswith("+BRSF:"):
+                    # AG's supported features response
+                    try:
+                        ag_features = int(line.split(":")[1].strip())
+                    except ValueError:
+                        pass
+                    oal_print(f"[HFP] AG features: {ag_features}", flush=True)
+                    # Don't set slc_established here — wait for full SLC sequence
+
+                elif line == "OK":
+                    # AG acknowledged our last command.
+                    # Drive the SLC setup state machine forward.
+                    # Sequence: AT+BRSF → AT+CIND=? → AT+CMER → SLC done
+                    # (AT+CIND? skipped — some phones don't respond to it)
+                    if not hfp_slc_established:
+                        if ag_features > 0 and not getattr(handle_hfp_rfcomm, '_sent_cind_test', False):
+                            handle_hfp_rfcomm._sent_cind_test = True
+                            send_at("AT+CIND=?")
+                            oal_print("[HFP] >> AT+CIND=?", flush=True)
+                        elif getattr(handle_hfp_rfcomm, '_sent_cind_test', False) and not getattr(handle_hfp_rfcomm, '_sent_cmer', False):
+                            handle_hfp_rfcomm._sent_cmer = True
+                            send_at("AT+CMER=3,0,0,1")
+                            oal_print("[HFP] >> AT+CMER=3,0,0,1", flush=True)
+                        elif getattr(handle_hfp_rfcomm, '_sent_cmer', False):
+                            hfp_slc_established = True
+                            oal_print("[HFP] SLC established (full)", flush=True)
+
+                elif line.startswith("+CIND:"):
+                    # Indicator mapping or values — just log
+                    oal_print(f"[HFP] indicators: {line}", flush=True)
+
+                elif line == "ERROR":
+                    oal_print("[HFP] AG returned ERROR", flush=True)
+
+                # ── AG-initiated commands (phone asking us) ──────
+                elif line.startswith("AT+BRSF="):
+                    # Phone sends its AG features (alternate flow)
                     try:
                         ag_features = int(line.split("=")[1])
                     except ValueError:
                         pass
-                    print(f"[HFP] AG features: {ag_features}", flush=True)
+                    oal_print(f"[HFP] AG features: {ag_features}", flush=True)
                     send_at(f"\r\n+BRSF: {HFP_HF_FEATURES}")
                     send_ok()
 
@@ -641,36 +699,36 @@ def handle_hfp_rfcomm(fd, device):
                 # ── Codec Negotiation ────────────────────────────
                 elif line.startswith("AT+BAC="):
                     # Phone sends available codecs (1=CVSD, 2=mSBC)
-                    print(f"[HFP] codecs: {line.split('=')[1]}", flush=True)
+                    oal_print(f"[HFP] codecs: {line.split('=')[1]}", flush=True)
                     send_ok()
 
                 elif line.startswith("+BCS:"):
                     # AG selected codec — confirm it
                     codec = line.split(":")[1].strip()
-                    print(f"[HFP] codec selected: {codec}", flush=True)
+                    oal_print(f"[HFP] codec selected: {codec}", flush=True)
                     send_at(f"AT+BCS={codec}")
 
                 # ── Call Control ──────────────────────────────────
                 elif line == "ATA":
                     # Answer incoming call
                     send_ok()
-                    print("[HFP] call answered", flush=True)
+                    oal_print("[HFP] call answered", flush=True)
 
                 elif line == "AT+CHUP":
                     # Hang up
                     send_ok()
-                    print("[HFP] call hung up", flush=True)
+                    oal_print("[HFP] call hung up", flush=True)
 
                 elif line.startswith("ATD"):
                     # Dial
                     number = line[3:].rstrip(";")
-                    print(f"[HFP] dial: {number}", flush=True)
+                    oal_print(f"[HFP] dial: {number}", flush=True)
                     send_ok()
 
                 elif line.startswith("AT+BVRA="):
                     # Voice recognition — forward to AA via bridge
                     vr_state = line.split("=")[1]
-                    print(f"[HFP] voice recognition: {vr_state}", flush=True)
+                    oal_print(f"[HFP] voice recognition: {vr_state}", flush=True)
                     send_ok()
 
                 elif line.startswith("AT+VGS="):
@@ -721,22 +779,21 @@ def handle_hfp_rfcomm(fd, device):
 
                 else:
                     # Unknown AT command — OK to avoid phone disconnect
-                    print(f"[HFP] unknown AT: {line}", flush=True)
+                    oal_print(f"[HFP] unknown AT: {line}", flush=True)
                     send_ok()
 
-                # After SLC setup, mark connection as established
-                if not hfp_slc_established and ag_features > 0:
-                    hfp_slc_established = True
-                    print("[HFP] SLC established", flush=True)
-
     except Exception as e:
-        print(f"[HFP] RFCOMM error: {e}", flush=True)
+        oal_print(f"[HFP] RFCOMM error: {e}", flush=True)
     finally:
         os.close(fd)
         hfp_connected_device = None
         hfp_slc_established = False
+        # Clean up SLC state machine attrs
+        for attr in ('_sent_cind_test', '_sent_cmer'):
+            if hasattr(handle_hfp_rfcomm, attr):
+                delattr(handle_hfp_rfcomm, attr)
         _mark_bt_activity()
-        print("[HFP] disconnected", flush=True)
+        oal_print("[HFP] disconnected", flush=True)
 
 
 class HFPProfile(dbus.service.Object):
@@ -745,14 +802,14 @@ class HFPProfile(dbus.service.Object):
     def NewConnection(self, device, fd, props):
         fd = fd.take()
         _mark_bt_activity()
-        print(f"[HFP] NewConnection from {device} fd={fd}", flush=True)
+        oal_print(f"[HFP] NewConnection from {device} fd={fd}", flush=True)
         threading.Thread(target=handle_hfp_rfcomm, args=(fd, device), daemon=True).start()
     @dbus.service.method(PROFILE_IFACE, in_signature="o", out_signature="")
     def RequestDisconnection(self, dev):
-        print(f"[HFP] disconnect {dev}", flush=True)
+        oal_print(f"[HFP] disconnect {dev}", flush=True)
     @dbus.service.method(PROFILE_IFACE, in_signature="", out_signature="")
     def Release(self):
-        print("[HFP] Released", flush=True)
+        oal_print("[HFP] Released", flush=True)
 
 class BLEAd(dbus.service.Object):
     @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="ss", out_signature="v")
@@ -772,9 +829,9 @@ am = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"), "org.bluez.AgentM
 try:
     am.RegisterAgent("/pi_aa/agent", "NoInputNoOutput")
     am.RequestDefaultAgent("/pi_aa/agent")
-    print("Agent registered", flush=True)
+    oal_print("Agent registered", flush=True)
 except dbus.exceptions.DBusException as e:
-    print(f"Agent registration: {e} (continuing)", flush=True)
+    oal_print(f"Agent registration: {e} (continuing)", flush=True)
 
 # AA Profile (channel 8)
 aa = AAProfile(bus, "/pi_aa/aa")
@@ -800,17 +857,17 @@ try:
         "Channel": dbus.UInt16(AA_CHANNEL), "AutoConnect": True,
         "RequireAuthentication": False, "RequireAuthorization": False,
         "ServiceRecord": sdp})
-    print(f"AA profile ch={AA_CHANNEL}", flush=True)
+    oal_print(f"AA profile ch={AA_CHANNEL}", flush=True)
 except dbus.exceptions.DBusException as e:
-    print(f"AA profile: {e} (continuing)", flush=True)
+    oal_print(f"AA profile: {e} (continuing)", flush=True)
 
 # HSP HS Profile (kept for backward compat — some phones only do HSP)
 hsp = HSPProfile(bus, "/pi_aa/hsp")
 try:
     pm.RegisterProfile("/pi_aa/hsp", HSP_HS_UUID, {"Name": "HSP HS"})
-    print("HSP HS profile", flush=True)
+    oal_print("HSP HS profile", flush=True)
 except dbus.exceptions.DBusException as e:
-    print(f"HSP profile: {e} (continuing)", flush=True)
+    oal_print(f"HSP profile: {e} (continuing)", flush=True)
 
 # HFP HF Profile (Hands-Free — car kit role, primary for phone calls)
 hfp = HFPProfile(bus, "/pi_aa/hfp")
@@ -820,9 +877,9 @@ try:
         "RequireAuthentication": False, "RequireAuthorization": False,
         "Features": dbus.UInt16(HFP_HF_FEATURES),
         "Version": dbus.UInt16(0x0108)})  # HFP 1.8
-    print("HFP HF profile registered", flush=True)
+    oal_print("HFP HF profile registered", flush=True)
 except dbus.exceptions.DBusException as e:
-    print(f"HFP profile: {e} (continuing)", flush=True)
+    oal_print(f"HFP profile: {e} (continuing)", flush=True)
 
 # BLE Advertisement
 ble = BLEAd(bus, "/pi_aa/ble")
@@ -831,8 +888,8 @@ for p, i in objs.items():
     if "org.bluez.LEAdvertisingManager1" in i:
         dbus.Interface(bus.get_object("org.bluez", p), "org.bluez.LEAdvertisingManager1").RegisterAdvertisement(
             "/pi_aa/ble", {},
-            reply_handler=lambda: print("BLE AD ok", flush=True),
-            error_handler=lambda e: print(f"BLE AD err: {e}", flush=True))
+            reply_handler=lambda: oal_print("BLE AD ok", flush=True),
+            error_handler=lambda e: oal_print(f"BLE AD err: {e}", flush=True))
         break
 
 # Adapter settings
@@ -852,13 +909,13 @@ subprocess.run(["hciconfig", "hci0", "class", "0x200418"],
                capture_output=True, timeout=5)
 subprocess.run(["hciconfig", "hci0", "sspmode", "1"],
                capture_output=True, timeout=5)
-print("Adapter set (class=0x200418 Car Audio, SSP=on)", flush=True)
+oal_print("Adapter set (class=0x200418 Car Audio, SSP=on)", flush=True)
 
 # Try to read wlan0 BSSID at startup
 try:
     with open("/sys/class/net/wlan0/address") as f:
         WIFI_BSSID = f.read().strip().upper()
-    print(f"WiFi BSSID: {WIFI_BSSID}", flush=True)
+    oal_print(f"WiFi BSSID: {WIFI_BSSID}", flush=True)
 except Exception:
     pass
 
@@ -885,9 +942,9 @@ if _preferred_mac_for_probe:
             with preferred_probe["lock"]:
                 preferred_probe["done"] = True
                 preferred_probe["reachable"] = False
-            print(f"Preferred probe: {_preferred_mac_for_probe} NOT PAIRED, marking unreachable", flush=True)
+            oal_print(f"Preferred probe: {_preferred_mac_for_probe} NOT PAIRED, marking unreachable", flush=True)
     except Exception as e:
-        print(f"Preferred probe launch: {e}", flush=True)
+        oal_print(f"Preferred probe launch: {e}", flush=True)
 
-print("All services running", flush=True)
+oal_print("All services running", flush=True)
 GLib.MainLoop().run()

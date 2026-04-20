@@ -48,6 +48,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Init version-prefixed logging (reads versionName from PackageInfo)
+        try {
+            val versionName = packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+            com.openautolink.app.diagnostics.OalLog.init(versionName)
+        } catch (_: Exception) { /* OalLog falls back to [app ?] */ }
+
         // Request runtime permissions on first launch
         requestMissingPermissions()
 
@@ -57,10 +63,18 @@ class MainActivity : ComponentActivity() {
         applyDisplayMode(displayMode)
 
         // Observe display mode changes reactively — applies immediately when
-        // the user changes the setting, no app restart needed
+        // the user changes the setting, no app restart needed.
+        // Re-sends app_hello so the bridge can recompute pixel_aspect for the
+        // new usable display area (system bars visible vs hidden).
         lifecycleScope.launch {
             prefs.displayMode.collectLatest { mode ->
                 applyDisplayMode(mode)
+                // Delay briefly so the system processes inset changes before
+                // we read currentWindowMetrics for the updated content area.
+                kotlinx.coroutines.delay(300)
+                com.openautolink.app.session.SessionManager.instanceOrNull()?.let { sm ->
+                    sm.sendAppHello(displayWidth = 0, displayHeight = 0, displayDpi = 0)
+                }
             }
         }
 

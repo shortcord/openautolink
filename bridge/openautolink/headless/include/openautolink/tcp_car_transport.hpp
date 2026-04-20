@@ -1,5 +1,7 @@
 #pragma once
 
+#include "openautolink/oal_log.hpp"
+
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -51,13 +53,13 @@ public:
         snprintf(cmd, sizeof(cmd),
             "avahi-publish-service OpenAutoLink _openautolink._tcp %d &", port_);
         if (system(cmd) == 0) {
-            fprintf(stderr, "[TcpCar] mDNS: published _openautolink._tcp on port %d\n", port_);
+            oal_log("[TcpCar] mDNS: published _openautolink._tcp on port %d\n", port_);
         }
 
         discovery_thread_ = std::thread([this]() {
             int udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
             if (udp_fd < 0) {
-                fprintf(stderr, "[TcpCar] discovery socket failed: %s\n", strerror(errno));
+                oal_log("[TcpCar] discovery socket failed: %s\n", strerror(errno));
                 return;
             }
 
@@ -71,12 +73,12 @@ public:
             addr.sin_port = htons(port_ + 1);  // discovery port = TCP port + 1
 
             if (bind(udp_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-                fprintf(stderr, "[TcpCar] discovery bind(%d) failed: %s\n", port_ + 1, strerror(errno));
+                oal_log("[TcpCar] discovery bind(%d) failed: %s\n", port_ + 1, strerror(errno));
                 close(udp_fd);
                 return;
             }
 
-            fprintf(stderr, "[TcpCar] discovery responder on UDP %d\n", port_ + 1);
+            oal_log("[TcpCar] discovery responder on UDP %d\n", port_ + 1);
 
             // Set receive timeout so we can check discovery_running_ periodically
             struct timeval tv{2, 0};
@@ -97,7 +99,7 @@ public:
 
                     char ip_str[INET_ADDRSTRLEN];
                     inet_ntop(AF_INET, &from.sin_addr, ip_str, sizeof(ip_str));
-                    fprintf(stderr, "[TcpCar] discovery request from %s — responding\n", ip_str);
+                    oal_log("[TcpCar] discovery request from %s — responding\n", ip_str);
 
                     sendto(udp_fd, resp, resp_len, 0,
                            (struct sockaddr*)&from, from_len);
@@ -105,7 +107,7 @@ public:
             }
 
             close(udp_fd);
-            fprintf(stderr, "[TcpCar] discovery responder stopped\n");
+            oal_log("[TcpCar] discovery responder stopped\n");
         });
     }
 
@@ -132,7 +134,7 @@ public:
 
         listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
         if (listen_fd_ < 0) {
-            fprintf(stderr, "[TcpCar:%d] socket() failed: %s\n", port_, strerror(errno));
+            oal_log("[TcpCar:%d] socket() failed: %s\n", port_, strerror(errno));
             return;
         }
 
@@ -145,25 +147,25 @@ public:
         addr.sin_port = htons(port_);
 
         if (bind(listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-            fprintf(stderr, "[TcpCar:%d] bind failed: %s\n", port_, strerror(errno));
+            oal_log("[TcpCar:%d] bind failed: %s\n", port_, strerror(errno));
             close(listen_fd_); listen_fd_ = -1;
             return;
         }
 
         if (listen(listen_fd_, 1) < 0) {
-            fprintf(stderr, "[TcpCar:%d] listen failed: %s\n", port_, strerror(errno));
+            oal_log("[TcpCar:%d] listen failed: %s\n", port_, strerror(errno));
             close(listen_fd_); listen_fd_ = -1;
             return;
         }
 
-        fprintf(stderr, "[TcpCar:%d] OAL control listening\n", port_);
+        oal_log("[TcpCar:%d] OAL control listening\n", port_);
 
         while (running_.load()) {
             struct sockaddr_in client_addr{};
             socklen_t client_len = sizeof(client_addr);
             int client = accept(listen_fd_, (struct sockaddr*)&client_addr, &client_len);
             if (client < 0) {
-                if (running_.load()) fprintf(stderr, "[TcpCar:%d] accept failed: %s\n", port_, strerror(errno));
+                if (running_.load()) oal_log("[TcpCar:%d] accept failed: %s\n", port_, strerror(errno));
                 break;
             }
 
@@ -172,7 +174,7 @@ public:
 
             char ip_str[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
-            fprintf(stderr, "[TcpCar:%d] app connected from %s\n", port_, ip_str);
+            oal_log("[TcpCar:%d] app connected from %s\n", port_, ip_str);
 
             {
                 std::lock_guard<std::mutex> lock(write_mutex_);
@@ -187,7 +189,7 @@ public:
             while (running_.load()) {
                 ssize_t n = ::read(client, buf, sizeof(buf));
                 if (n <= 0) {
-                    fprintf(stderr, "[TcpCar:%d] client disconnected\n", port_);
+                    oal_log("[TcpCar:%d] client disconnected\n", port_);
                     break;
                 }
                 for (ssize_t i = 0; i < n; i++) {
@@ -210,7 +212,7 @@ public:
                 client_fd_ = -1;
             }
 
-            fprintf(stderr, "[TcpCar:%d] control session ended, waiting for reconnect\n", port_);
+            oal_log("[TcpCar:%d] control session ended, waiting for reconnect\n", port_);
         }
 
         close(listen_fd_);
@@ -224,7 +226,7 @@ public:
 
         listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
         if (listen_fd_ < 0) {
-            fprintf(stderr, "[TcpCar:%d] socket() failed: %s\n", port_, strerror(errno));
+            oal_log("[TcpCar:%d] socket() failed: %s\n", port_, strerror(errno));
             return;
         }
 
@@ -237,25 +239,25 @@ public:
         addr.sin_port = htons(port_);
 
         if (bind(listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-            fprintf(stderr, "[TcpCar:%d] bind failed: %s\n", port_, strerror(errno));
+            oal_log("[TcpCar:%d] bind failed: %s\n", port_, strerror(errno));
             close(listen_fd_); listen_fd_ = -1;
             return;
         }
 
         if (listen(listen_fd_, 1) < 0) {
-            fprintf(stderr, "[TcpCar:%d] listen failed: %s\n", port_, strerror(errno));
+            oal_log("[TcpCar:%d] listen failed: %s\n", port_, strerror(errno));
             close(listen_fd_); listen_fd_ = -1;
             return;
         }
 
-        fprintf(stderr, "[TcpCar:%d] OAL sink listening\n", port_);
+        oal_log("[TcpCar:%d] OAL sink listening\n", port_);
 
         while (running_.load()) {
             struct sockaddr_in client_addr{};
             socklen_t client_len = sizeof(client_addr);
             int client = accept(listen_fd_, (struct sockaddr*)&client_addr, &client_len);
             if (client < 0) {
-                if (running_.load()) fprintf(stderr, "[TcpCar:%d] accept failed: %s\n", port_, strerror(errno));
+                if (running_.load()) oal_log("[TcpCar:%d] accept failed: %s\n", port_, strerror(errno));
                 break;
             }
 
@@ -267,7 +269,7 @@ public:
                 client_fd_ = client;
             }
 
-            fprintf(stderr, "[TcpCar:%d] sink client connected\n", port_);
+            oal_log("[TcpCar:%d] sink client connected\n", port_);
             if (connect_cb) connect_cb();
 
             // Flush loop — continuously drain pending writes
@@ -281,7 +283,7 @@ public:
                 ssize_t r = recv(client, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
                 if (r == 0) {
                     // Client disconnected
-                    fprintf(stderr, "[TcpCar:%d] sink client disconnected\n", port_);
+                    oal_log("[TcpCar:%d] sink client disconnected\n", port_);
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::microseconds(500));
@@ -310,7 +312,7 @@ public:
 
         listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
         if (listen_fd_ < 0) {
-            fprintf(stderr, "[TcpCar:%d] socket() failed: %s\n", port_, strerror(errno));
+            oal_log("[TcpCar:%d] socket() failed: %s\n", port_, strerror(errno));
             return;
         }
 
@@ -323,25 +325,25 @@ public:
         addr.sin_port = htons(port_);
 
         if (bind(listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-            fprintf(stderr, "[TcpCar:%d] bind failed: %s\n", port_, strerror(errno));
+            oal_log("[TcpCar:%d] bind failed: %s\n", port_, strerror(errno));
             close(listen_fd_); listen_fd_ = -1;
             return;
         }
 
         if (listen(listen_fd_, 1) < 0) {
-            fprintf(stderr, "[TcpCar:%d] listen failed: %s\n", port_, strerror(errno));
+            oal_log("[TcpCar:%d] listen failed: %s\n", port_, strerror(errno));
             close(listen_fd_); listen_fd_ = -1;
             return;
         }
 
-        fprintf(stderr, "[TcpCar:%d] OAL audio (bidirectional) listening\n", port_);
+        oal_log("[TcpCar:%d] OAL audio (bidirectional) listening\n", port_);
 
         while (running_.load()) {
             struct sockaddr_in client_addr{};
             socklen_t client_len = sizeof(client_addr);
             int client = accept(listen_fd_, (struct sockaddr*)&client_addr, &client_len);
             if (client < 0) {
-                if (running_.load()) fprintf(stderr, "[TcpCar:%d] accept failed: %s\n", port_, strerror(errno));
+                if (running_.load()) oal_log("[TcpCar:%d] accept failed: %s\n", port_, strerror(errno));
                 break;
             }
 
@@ -353,7 +355,7 @@ public:
                 client_fd_ = client;
             }
 
-            fprintf(stderr, "[TcpCar:%d] audio client connected (bidirectional)\n", port_);
+            oal_log("[TcpCar:%d] audio client connected (bidirectional)\n", port_);
             if (connect_cb) connect_cb();
 
             // Flush thread: drain bridge→app audio writes
@@ -373,7 +375,7 @@ public:
                 ssize_t r = recv(client, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
                 if (r == 0) {
                     // Client disconnected
-                    fprintf(stderr, "[TcpCar:%d] audio client disconnected\n", port_);
+                    oal_log("[TcpCar:%d] audio client disconnected\n", port_);
                     break;
                 }
                 if (r < 0) {
@@ -383,24 +385,24 @@ public:
                         continue;
                     }
                     // Real error
-                    fprintf(stderr, "[TcpCar:%d] audio recv error: %s\n", port_, strerror(errno));
+                    oal_log("[TcpCar:%d] audio recv error: %s\n", port_, strerror(errno));
                     break;
                 }
 
                 // Data available — read the 8-byte header (blocking)
                 if (!read_fully(client, hdr_buf, OAL_AUDIO_HEADER_SIZE)) {
-                    fprintf(stderr, "[TcpCar:%d] audio header read failed\n", port_);
+                    oal_log("[TcpCar:%d] audio header read failed\n", port_);
                     break;
                 }
 
                 OalAudioHeader hdr{};
                 if (!parse_oal_audio_header(hdr_buf, hdr)) {
-                    fprintf(stderr, "[TcpCar:%d] bad audio header\n", port_);
+                    oal_log("[TcpCar:%d] bad audio header\n", port_);
                     break;
                 }
 
                 if (hdr.payload_length == 0 || hdr.payload_length > 1024 * 1024) {
-                    fprintf(stderr, "[TcpCar:%d] bad audio payload length: %u\n",
+                    oal_log("[TcpCar:%d] bad audio payload length: %u\n",
                             port_, hdr.payload_length);
                     break;
                 }
@@ -408,7 +410,7 @@ public:
                 // Read PCM payload
                 std::vector<uint8_t> pcm(hdr.payload_length);
                 if (!read_fully(client, pcm.data(), hdr.payload_length)) {
-                    fprintf(stderr, "[TcpCar:%d] audio payload read failed\n", port_);
+                    oal_log("[TcpCar:%d] audio payload read failed\n", port_);
                     break;
                 }
 

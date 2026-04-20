@@ -183,21 +183,29 @@ echo "Bad state errors: $badState"
 
 The emulator uses `c2.goldfish.h264.decoder` (software). Some drops during extreme movement (30ms diagonal swipes) are expected. Real HW decoders (`c2.qti.avc.decoder` on Snapdragon) handle 1080p60 in <1ms.
 
-## Bridge Connectivity (SSH tunnel for emulator)
+## Bridge Connectivity (ADB reverse + port proxy)
 
-The emulator can't reach 192.168.222.222 (bridge car network). Use ADB reverse + SSH tunnel:
+The emulator can't reach 192.168.222.222 directly. Use ADB reverse + Windows port proxy:
 
 ```powershell
-# ADB reverse: emulator localhost → host localhost
+# One-time setup: Windows port proxy (localhost → SBC bridge ports).
+# Survives reboots. Run once from an admin PowerShell:
+netsh interface portproxy add v4tov4 listenport=5288 listenaddress=127.0.0.1 connectport=5288 connectaddress=192.168.222.222
+netsh interface portproxy add v4tov4 listenport=5289 listenaddress=127.0.0.1 connectport=5289 connectaddress=192.168.222.222
+netsh interface portproxy add v4tov4 listenport=5290 listenaddress=127.0.0.1 connectport=5290 connectaddress=192.168.222.222
+
+# Verify:
+netsh interface portproxy show v4tov4
+
+# Per-session: ADB reverse (emulator localhost → host localhost)
 adb reverse tcp:5288 tcp:5288
 adb reverse tcp:5289 tcp:5289
 adb reverse tcp:5290 tcp:5290
-
-# SSH tunnel: host localhost → VIM4 bridge ports
-ssh -N -L 5288:localhost:5288 -L 5289:localhost:5289 -L 5290:localhost:5290 openautolink
 ```
 
 Set the app's bridge IP to `127.0.0.1` in Settings > Connection.
+
+> **Do NOT use SSH tunnels.** The SBC is directly reachable from the laptop via the USB NIC on the 192.168.222.x subnet. The port proxy handles the localhost→SBC hop without an active SSH session.
 
 ## Bridge-Side Verification
 

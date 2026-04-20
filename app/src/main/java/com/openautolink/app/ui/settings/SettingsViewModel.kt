@@ -423,7 +423,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
      * The bridge saves config to env, then restarts itself (and optionally WiFi/BT).
      * The phone will reconnect and renegotiate (e.g., new codec, resolution).
      */
-    fun saveAndRestart(restartWireless: Boolean = false, restartBluetooth: Boolean = true) {
+    fun saveAndRestart(restartWireless: Boolean = false, restartBluetooth: Boolean = false) {
         viewModelScope.launch {
             // Send both messages through the same controlMessages flow to guarantee
             // config_update is written to TCP before restart_services. Using separate

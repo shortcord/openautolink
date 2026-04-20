@@ -22,14 +22,15 @@ Three validated development environments. Choose based on what hardware is avail
 
 ### Mode 2: In-House (Real SBC + Emulator + Real Phone)
 ```
-┌─────────────┐    USB-NIC     ┌─────────────┐   onboard NIC   ┌───────────────┐
-│  Dev Laptop │◄── ICS SSH ───►│     SBC     │◄── bridge net ──►│ AAOS Emulator │
-│  (Windows)  │  192.168.137.x │ (ARM64)     │  (no car)        │ (on laptop)   │
-└─────────────┘                │             │◄── WiFi AP ──────►│  Phone (AA)   │
-                               └─────────────┘   192.168.43.x    └───────────────┘
+┌─────────────┐    USB-NIC     ┌─────────────┐
+│  Dev Laptop │◄── 222.x net ─►│     SBC     │◄── WiFi AP ──────► Phone (AA)
+│  (Windows)  │  192.168.222.x │ (ARM64)     │   192.168.43.x
+│  Emulator   │                └─────────────┘
+│  (AAOS)     │── adb reverse ──► localhost ──► netsh portproxy ──► 192.168.222.222
+└─────────────┘
 ```
-- Same SBC + SSH setup as Mode 1, just no car
-- AAOS emulator connects to SBC bridge via `adb reverse` TCP tunnels
+- SBC onboard NIC directly connected to laptop USB NIC (192.168.222.x subnet)
+- AAOS emulator connects via `adb reverse` + Windows `netsh portproxy` (no SSH tunnel)
 - Real phone pairs via BT → joins SBC WiFi AP → full AA session
 - See [docs/testing.md](../../docs/testing.md) for emulator setup
 
