@@ -4,6 +4,9 @@
 
 # OpenAutoLink
 
+> **April 20, 2026 — Active Development Notice**
+> This project is under heavy debugging and development. General streaming and projection work, but reliable phone reconnection after settings changes or bridge restarts is not fully stable yet. This notice will be removed once the connection flow is solid.
+
 [![CI](https://github.com/mossyhub/openautolink/actions/workflows/ci.yml/badge.svg)](https://github.com/mossyhub/openautolink/actions/workflows/ci.yml)
 
 OpenAutoLink is an open-source wireless Android Auto bridge for AAOS head units. An SBC handles the phone's Android Auto session over WiFi, then streams video, audio, and control data to an app on the car's display over Ethernet. The goal is to restore a native-feeling Android Auto experience on vehicles that ship with AAOS but without built-in Android Auto support.
