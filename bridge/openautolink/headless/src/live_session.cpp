@@ -2076,12 +2076,13 @@ void LiveAasdkSession::accept_connection() {
                     return;
                 }
 
-                // If we recently created an entity for this same peer and it's
-                // still active (in handshake or streaming), reject the duplicate.
-                // Also reject if an entity was created recently (within 5s) even
-                // if it already failed — this breaks the rapid RFCOMM → TCP cycle
-                // where the phone fires a new connection every 2s, each one killing
-                // the previous handshake before it can complete.
+                // Same-IP duplicate TCP handling:
+                // 1. If entity is alive (handshake or streaming), always reject
+                // 2. If entity just died but had a SUCCESSFUL handshake, block
+                //    for 10s — the phone is doing unnecessary RFCOMM retries
+                //    that will tear down the working session
+                // 3. If entity died with a FAILED handshake, let the next TCP
+                //    through immediately so the phone can retry
                 if (!wireless_peer_ip_.empty() && peer_ip == wireless_peer_ip_) {
                     if (entity_) {
                         BLOG << "[aasdk] Duplicate TCP from " << peer_ip
@@ -2093,9 +2094,11 @@ void LiveAasdkSession::accept_connection() {
                     auto now = std::chrono::steady_clock::now();
                     auto since_last = std::chrono::duration_cast<std::chrono::seconds>(
                         now - last_entity_created_).count();
-                    if (since_last < 2 && last_entity_created_.time_since_epoch().count() > 0) {
+                    if (last_handshake_succeeded_ && since_last < 10 &&
+                        last_entity_created_.time_since_epoch().count() > 0) {
                         BLOG << "[aasdk] TCP from " << peer_ip
-                                  << " rejected (entity created " << since_last << "s ago, cooling down)" << std::endl;
+                                  << " rejected (last handshake succeeded " << since_last
+                                  << "s ago, phone retrying unnecessarily)" << std::endl;
                         socket->close();
                         accept_connection();
                         return;
@@ -2216,6 +2219,7 @@ void LiveAasdkSession::create_entity(aasdk::transport::ITransport::Pointer trans
         // phone's handshake on the io_service and delay the TLS response
         // enough for the phone to timeout and RST the connection.
         entity_->set_handshake_complete_callback([this]() {
+            last_handshake_succeeded_ = true;
             if (oal_session_) {
                 oal_session_->on_phone_connected(phone_name_);
             }
@@ -2225,6 +2229,7 @@ void LiveAasdkSession::create_entity(aasdk::transport::ITransport::Pointer trans
     entity_->start();
     state_.session_active = true;
     last_entity_created_ = std::chrono::steady_clock::now();
+    last_handshake_succeeded_ = false;  // reset until handshake completes
 }
 
 void LiveAasdkSession::create_entity_no_ssl(aasdk::transport::ITransport::Pointer transport) {

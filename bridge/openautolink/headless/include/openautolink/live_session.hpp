@@ -290,6 +290,11 @@ private:
     // connections from the same phone during the SSL handshake cycling window.
     std::chrono::steady_clock::time_point last_entity_created_{};
 
+    // Tracks whether the last entity's handshake succeeded. Used to decide
+    // whether to block same-IP TCP retries (succeeded = block, phone is
+    // doing unnecessary retries) or let them through (failed = let retry).
+    bool last_handshake_succeeded_ = false;
+
     // USB host mode — kept alive for continuous device scanning
     std::shared_ptr<aasdk::usb::USBWrapper> usb_wrapper_;
     std::shared_ptr<aasdk::usb::USBHub> usb_hub_;
