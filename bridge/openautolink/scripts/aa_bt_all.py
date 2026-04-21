@@ -328,7 +328,13 @@ def _connect_device(path):
 def _probe_preferred_async(path, mac):
     """Proactively attempt to connect the preferred phone so the RFCOMM gate
     can short-circuit the startup grace. Runs in a daemon thread.
-    Sets preferred_probe["reachable"] True on success, False on unreachable."""
+    Sets preferred_probe["reachable"] True on success, False on unreachable.
+    
+    On success, also calls _connect_device to establish HFP/BR/EDR profiles.
+    The generic dev.Connect() may connect via LE, which makes BlueZ show
+    'Connected' but doesn't trigger the phone's AA RFCOMM flow. Without
+    the _connect_device follow-up, the reconnect worker sees 'Connected'
+    and backs off, leaving the phone in BT limbo with no AA session."""
     try:
         dev = dbus.Interface(bus.get_object("org.bluez", path), "org.bluez.Device1")
         oal_print(f"Preferred probe: attempting Connect on {mac}", flush=True)
@@ -338,6 +344,8 @@ def _probe_preferred_async(path, mac):
                 preferred_probe["reachable"] = True
                 preferred_probe["done"] = True
             oal_print(f"Preferred probe: {mac} REACHABLE", flush=True)
+            # Follow up with proper HFP/BR/EDR profile connection
+            _connect_device(path)
         except dbus.DBusException as e:
             name = e.get_dbus_name() if hasattr(e, "get_dbus_name") else str(e)
             # Errors that imply the phone IS reachable:
