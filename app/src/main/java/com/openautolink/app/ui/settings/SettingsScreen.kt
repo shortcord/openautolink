@@ -135,6 +135,22 @@ fun SettingsScreen(
             ctx, am
         )
         viewModel.bindUpdateManager(sm.bridgeUpdateManager)
+        sm.setPairedPhonesCallback { phones -> viewModel.onPairedPhonesReceived(phones) }
+        sm.setPairingModeCallback { enabled -> viewModel.onPairingModeStatus(enabled) }
+    }
+
+    // Clean up callbacks when leaving Settings
+    DisposableEffect(Unit) {
+        onDispose {
+            val ctx = viewModel.getApplication<android.app.Application>()
+            val am = ctx.getSystemService(android.media.AudioManager::class.java)
+            val sm = com.openautolink.app.session.SessionManager.getInstance(
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main),
+                ctx, am
+            )
+            sm.setPairedPhonesCallback(null)
+            sm.setPairingModeCallback(null)
+        }
     }
 
     Surface(
