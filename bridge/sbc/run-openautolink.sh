@@ -19,6 +19,9 @@ ARGS=(
     --head-unit-name="${OAL_HEAD_UNIT_NAME:-OpenAutoLink}"
 )
 
+if [ -n "${OAL_AA_DRIVE_SIDE:-}" ]; then
+    ARGS+=(--drive-side="${OAL_AA_DRIVE_SIDE}")
+fi
 if [ -n "${OAL_AA_WIDTH_MARGIN:-}" ]; then
     ARGS+=(--aa-width-margin="${OAL_AA_WIDTH_MARGIN}")
 fi
@@ -59,11 +62,8 @@ if [ -n "${OAL_AA_RUNTIME_STABLE_INSETS:-}" ]; then
     ARGS+=(--aa-runtime-stable-insets="${OAL_AA_RUNTIME_STABLE_INSETS}")
 fi
 
-# Session mode derived from phone protocol
-case "${OAL_PHONE_PROTOCOL:-android-auto}" in
-    android-auto) ARGS+=(--session-mode=aasdk-live) ;;
-    *)            ARGS+=(--session-mode=aasdk-live) ;;  # default to AA
-esac
+# Session mode: always aasdk-live
+ARGS+=(--session-mode=aasdk-live)
 
 # BT MAC override (empty = auto-detect from hci0)
 if [ -n "${OAL_BT_MAC:-}" ]; then

@@ -513,6 +513,12 @@ void OalSession::send_config_echo() {
         default: res_name = "1080p"; break;
     }
 
+    // Helper: read env var safely (empty string if unset)
+    auto env_or_empty = [](const char* key) -> std::string {
+        const char* v = std::getenv(key);
+        return v ? std::string(v) : std::string{};
+    };
+
     std::ostringstream oss;
     oss << R"({"type":"config_echo")"
         << R"(,"video_codec":")" << codec_name
@@ -522,8 +528,20 @@ void OalSession::send_config_echo() {
         << R"(,"video_dpi":)" << config_.video_dpi
         << R"(,"aa_resolution":")" << res_name
         << R"(","aa_pixel_aspect":)" << config_.aa_ui_experiment.pixel_aspect_ratio_e4
+        << R"(,"aa_width_margin":)" << config_.aa_ui_experiment.width_margin
+        << R"(,"aa_height_margin":)" << config_.aa_ui_experiment.height_margin
         << R"(,"drive_side":")" << (config_.left_hand_drive ? "left" : "right")
         << R"(","head_unit_name":")" << oal_json_escape(config_.head_unit_name)
+        << R"(","hide_clock":)" << (config_.hide_clock ? "true" : "false")
+        << R"(,"hide_phone_signal":)" << (config_.hide_phone_signal ? "true" : "false")
+        << R"(,"hide_battery_level":)" << (config_.hide_battery_level ? "true" : "false")
+        << R"(,"phone_mode":")" << (config_.use_usb_host ? "usb" : "wireless")
+        << R"(","bt_mac":")" << oal_json_escape(config_.bt_mac)
+        << R"(","default_phone_mac":")" << oal_json_escape(env_or_empty("OAL_DEFAULT_PHONE_MAC"))
+        << R"(","wifi_band":")" << oal_json_escape(env_or_empty("OAL_WIRELESS_BAND"))
+        << R"(","wifi_country":")" << oal_json_escape(env_or_empty("OAL_WIRELESS_COUNTRY"))
+        << R"(","wifi_ssid":")" << oal_json_escape(env_or_empty("OAL_WIRELESS_SSID"))
+        << R"(","wifi_password":")" << oal_json_escape(env_or_empty("OAL_WIRELESS_PASSWORD"))
         << R"("})";
     send_control_line(oss.str());
     BLOG << "[OAL] config echo sent" << std::endl;
@@ -946,14 +964,16 @@ void OalSession::handle_config_update(const std::string& json) {
     }
 
     int wm = 0;
-    if (oal_json_extract_int(json, "aa_width_margin", wm) && wm >= 0 &&
+    bool wm_present = oal_json_extract_int(json, "aa_width_margin", wm);
+    if (wm_present && wm >= 0 &&
         wm != static_cast<int>(config_.aa_ui_experiment.width_margin)) {
         config_.aa_ui_experiment.width_margin = wm;
         config_changed = true;
         BLOG << "[OAL] width_margin override: " << wm << std::endl;
     }
     int hm = 0;
-    if (oal_json_extract_int(json, "aa_height_margin", hm) && hm >= 0 &&
+    bool hm_present = oal_json_extract_int(json, "aa_height_margin", hm);
+    if (hm_present && hm >= 0 &&
         hm != static_cast<int>(config_.aa_ui_experiment.height_margin)) {
         config_.aa_ui_experiment.height_margin = hm;
         config_changed = true;
@@ -1160,6 +1180,13 @@ void OalSession::handle_config_update(const std::string& json) {
                               "sed -i '/^OAL_AA_PIXEL_ASPECT_E4=/d' /etc/openautolink.env\n";
             }
         }
+        // Persist drive_side and margin overrides (not persisted before)
+        if (!drive_side.empty())
+            env_update += env_upsert("OAL_AA_DRIVE_SIDE", drive_side);
+          if (wm_present && wm >= 0)
+            env_update += env_upsert("OAL_AA_WIDTH_MARGIN", std::to_string(config_.aa_ui_experiment.width_margin));
+          if (hm_present && hm >= 0)
+            env_update += env_upsert("OAL_AA_HEIGHT_MARGIN", std::to_string(config_.aa_ui_experiment.height_margin));
         if (!env_update.empty())
             system(env_update.c_str());
 

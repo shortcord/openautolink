@@ -840,6 +840,15 @@ class BLEAd(dbus.service.Object):
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 bus = dbus.SystemBus()
 
+# In USB mode the phone connects via AOAP (USB), not WiFi RFCOMM.
+# Skip the AA profile registration and reconnect worker — they do nothing
+# except fill the log with useless noise. HFP/HSP are still registered
+# so call audio works regardless of connection mode.
+_PHONE_MODE = os.environ.get("OAL_PHONE_MODE", "wireless").strip().lower()
+_USB_MODE = (_PHONE_MODE == "usb")
+if _USB_MODE:
+    oal_print("Phone mode: USB — skipping AA RFCOMM profile and reconnect worker", flush=True)
+
 # Agent
 agent = Agent(bus, "/pi_aa/agent")
 am = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"), "org.bluez.AgentManager1")
@@ -851,32 +860,34 @@ except dbus.exceptions.DBusException as e:
     oal_print(f"Agent registration: {e} (continuing)", flush=True)
 
 # AA Profile (channel 8)
-aa = AAProfile(bus, "/pi_aa/aa")
 pm = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"), "org.bluez.ProfileManager1")
-sdp = ('<?xml version="1.0" encoding="UTF-8" ?><record>'
-    '<attribute id="0x0001"><sequence>'
-    '<uuid value="' + AA_UUID + '" /><uuid value="0x1101" />'
-    '</sequence></attribute>'
-    '<attribute id="0x0004"><sequence>'
-    '<sequence><uuid value="0x0100" /></sequence>'
-    '<sequence><uuid value="0x0003" /><uint8 value="0x08" /></sequence>'
-    '</sequence></attribute>'
-    '<attribute id="0x0005"><sequence><uuid value="0x1002" /></sequence></attribute>'
-    '<attribute id="0x0009"><sequence><sequence>'
-    '<uuid value="0x1101" /><uint16 value="0x0102" />'
-    '</sequence></sequence></attribute>'
-    '<attribute id="0x0100"><text value="Android Auto Wireless" /></attribute>'
-    '<attribute id="0x0101"><text value="AndroidAuto WiFi projection automatic setup" /></attribute>'
-    '</record>')
-try:
-    pm.RegisterProfile("/pi_aa/aa", AA_UUID, {
-        "Name": "AA Wireless", "Role": "server",
-        "Channel": dbus.UInt16(AA_CHANNEL), "AutoConnect": True,
-        "RequireAuthentication": False, "RequireAuthorization": False,
-        "ServiceRecord": sdp})
-    oal_print(f"AA profile ch={AA_CHANNEL}", flush=True)
-except dbus.exceptions.DBusException as e:
-    oal_print(f"AA profile: {e} (continuing)", flush=True)
+if not _USB_MODE:
+    # AA RFCOMM profile — only needed for wireless mode (WiFi credential exchange)
+    aa = AAProfile(bus, "/pi_aa/aa")
+    sdp = ('<?xml version="1.0" encoding="UTF-8" ?><record>'
+        '<attribute id="0x0001"><sequence>'
+        '<uuid value="' + AA_UUID + '" /><uuid value="0x1101" />'
+        '</sequence></attribute>'
+        '<attribute id="0x0004"><sequence>'
+        '<sequence><uuid value="0x0100" /></sequence>'
+        '<sequence><uuid value="0x0003" /><uint8 value="0x08" /></sequence>'
+        '</sequence></attribute>'
+        '<attribute id="0x0005"><sequence><uuid value="0x1002" /></sequence></attribute>'
+        '<attribute id="0x0009"><sequence><sequence>'
+        '<uuid value="0x1101" /><uint16 value="0x0102" />'
+        '</sequence></sequence></attribute>'
+        '<attribute id="0x0100"><text value="Android Auto Wireless" /></attribute>'
+        '<attribute id="0x0101"><text value="AndroidAuto WiFi projection automatic setup" /></attribute>'
+        '</record>')
+    try:
+        pm.RegisterProfile("/pi_aa/aa", AA_UUID, {
+            "Name": "AA Wireless", "Role": "server",
+            "Channel": dbus.UInt16(AA_CHANNEL), "AutoConnect": True,
+            "RequireAuthentication": False, "RequireAuthorization": False,
+            "ServiceRecord": sdp})
+        oal_print(f"AA profile ch={AA_CHANNEL}", flush=True)
+    except dbus.exceptions.DBusException as e:
+        oal_print(f"AA profile: {e} (continuing)", flush=True)
 
 # HSP HS Profile (kept for backward compat — some phones only do HSP)
 hsp = HSPProfile(bus, "/pi_aa/hsp")
@@ -899,15 +910,17 @@ except dbus.exceptions.DBusException as e:
     oal_print(f"HFP profile: {e} (continuing)", flush=True)
 
 # BLE Advertisement
-ble = BLEAd(bus, "/pi_aa/ble")
-objs = dbus.Interface(bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager").GetManagedObjects()
-for p, i in objs.items():
-    if "org.bluez.LEAdvertisingManager1" in i:
-        dbus.Interface(bus.get_object("org.bluez", p), "org.bluez.LEAdvertisingManager1").RegisterAdvertisement(
-            "/pi_aa/ble", {},
-            reply_handler=lambda: oal_print("BLE AD ok", flush=True),
-            error_handler=lambda e: oal_print(f"BLE AD err: {e}", flush=True))
-        break
+# BLE Advertisement — only useful in wireless mode (advertises AA WiFi presence)
+if not _USB_MODE:
+    ble = BLEAd(bus, "/pi_aa/ble")
+    objs = dbus.Interface(bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager").GetManagedObjects()
+    for p, i in objs.items():
+        if "org.bluez.LEAdvertisingManager1" in i:
+            dbus.Interface(bus.get_object("org.bluez", p), "org.bluez.LEAdvertisingManager1").RegisterAdvertisement(
+                "/pi_aa/ble", {},
+                reply_handler=lambda: oal_print("BLE AD ok", flush=True),
+                error_handler=lambda e: oal_print(f"BLE AD err: {e}", flush=True))
+            break
 
 # Adapter settings
 ap = _wait_for_adapter_properties()
@@ -929,39 +942,40 @@ subprocess.run(["hciconfig", "hci0", "sspmode", "1"],
 oal_print("Adapter set (class=0x200418 Car Audio, SSP=on)", flush=True)
 
 # Try to read wlan0 BSSID at startup
-try:
-    with open("/sys/class/net/wlan0/address") as f:
-        WIFI_BSSID = f.read().strip().upper()
-    oal_print(f"WiFi BSSID: {WIFI_BSSID}", flush=True)
-except Exception:
-    pass
-
-# Periodically retry wireless AA reconnects. Prefer OAL_BT_MAC when configured,
-# but fall back to the remaining paired phones so multi-phone switching still works.
-threading.Thread(target=_reconnect_worker, daemon=True).start()
-
-# Proactively probe the preferred phone's reachability so the AA RFCOMM gate
-# can skip grace when default phone is confirmed offline. Concurrent with
-# phone's own BT auto-reconnect — whichever succeeds first wins.
-_preferred_mac_for_probe = _preferred_bt_mac()
-if _preferred_mac_for_probe:
+if not _USB_MODE:
     try:
-        for _path, _ifaces in _get_managed_objects().items():
-            _dev_props = _ifaces.get("org.bluez.Device1")
-            if _dev_props and _normalize_mac(str(_dev_props.get("Address", ""))) == _preferred_mac_for_probe:
-                threading.Thread(
-                    target=_probe_preferred_async,
-                    args=(_path, _preferred_mac_for_probe),
-                    daemon=True).start()
-                break
-        else:
-            # Preferred MAC configured but not in BlueZ's paired list — treat as unreachable.
-            with preferred_probe["lock"]:
-                preferred_probe["done"] = True
-                preferred_probe["reachable"] = False
-            oal_print(f"Preferred probe: {_preferred_mac_for_probe} NOT PAIRED, marking unreachable", flush=True)
-    except Exception as e:
-        oal_print(f"Preferred probe launch: {e}", flush=True)
+        with open("/sys/class/net/wlan0/address") as f:
+            WIFI_BSSID = f.read().strip().upper()
+        oal_print(f"WiFi BSSID: {WIFI_BSSID}", flush=True)
+    except Exception:
+        pass
+
+    # Periodically retry wireless AA reconnects. Prefer OAL_BT_MAC when configured,
+    # but fall back to the remaining paired phones so multi-phone switching still works.
+    threading.Thread(target=_reconnect_worker, daemon=True).start()
+
+    # Proactively probe the preferred phone's reachability so the AA RFCOMM gate
+    # can skip grace when default phone is confirmed offline. Concurrent with
+    # phone's own BT auto-reconnect — whichever succeeds first wins.
+    _preferred_mac_for_probe = _preferred_bt_mac()
+    if _preferred_mac_for_probe:
+        try:
+            for _path, _ifaces in _get_managed_objects().items():
+                _dev_props = _ifaces.get("org.bluez.Device1")
+                if _dev_props and _normalize_mac(str(_dev_props.get("Address", ""))) == _preferred_mac_for_probe:
+                    threading.Thread(
+                        target=_probe_preferred_async,
+                        args=(_path, _preferred_mac_for_probe),
+                        daemon=True).start()
+                    break
+            else:
+                # Preferred MAC configured but not in BlueZ's paired list — treat as unreachable.
+                with preferred_probe["lock"]:
+                    preferred_probe["done"] = True
+                    preferred_probe["reachable"] = False
+                oal_print(f"Preferred probe: {_preferred_mac_for_probe} NOT PAIRED, marking unreachable", flush=True)
+        except Exception as e:
+            oal_print(f"Preferred probe launch: {e}", flush=True)
 
 oal_print("All services running", flush=True)
 GLib.MainLoop().run()

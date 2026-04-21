@@ -602,6 +602,13 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
             config["hide_clock"]?.let { prefs[HIDE_AA_CLOCK] = it.toBooleanStrictOrNull() ?: false }
             config["hide_phone_signal"]?.let { prefs[HIDE_PHONE_SIGNAL] = it.toBooleanStrictOrNull() ?: false }
             config["hide_battery_level"]?.let { prefs[HIDE_BATTERY_LEVEL] = it.toBooleanStrictOrNull() ?: false }
+            config["phone_mode"]?.let { prefs[PHONE_MODE] = it }
+            config["bt_mac"]?.let { if (it.isNotBlank()) prefs[BT_MAC] = it }
+            config["default_phone_mac"]?.let { if (it.isNotBlank()) prefs[DEFAULT_PHONE_MAC] = it }
+            config["wifi_band"]?.let { if (it.isNotBlank()) prefs[WIFI_BAND] = it }
+            config["wifi_country"]?.let { if (it.isNotBlank()) prefs[WIFI_COUNTRY] = it }
+            config["wifi_ssid"]?.let { if (it.isNotBlank()) prefs[WIFI_SSID] = it }
+            config["wifi_password"]?.let { if (it.isNotBlank()) prefs[WIFI_PASSWORD] = it }
             // aa_stable_insets and aa_content_insets NOT synced from config_echo.
             // These are user-configured via the Display Insets editor.
         }

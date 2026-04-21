@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.DisplaySettings
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SettingsRemote
@@ -63,6 +64,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -119,6 +122,9 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableStateOf(SettingsTab.CONNECTION) }
+    val bridgeConnected = sessionState != SessionState.IDLE &&
+            sessionState != SessionState.ERROR &&
+            sessionState != SessionState.CONNECTING
 
     // Bind bridge update manager from session manager (if running)
     LaunchedEffect(Unit) {
@@ -204,13 +210,13 @@ fun SettingsScreen(
                 Box(modifier = Modifier.weight(1f)) {
                     when (selectedTab) {
                         SettingsTab.CONNECTION -> ConnectionTab(viewModel, uiState)
-                        SettingsTab.PHONES -> PhonesTab(viewModel, uiState)
+                        SettingsTab.PHONES -> PhonesTab(viewModel, uiState, bridgeConnected)
                         SettingsTab.BRIDGE -> BridgeTab(viewModel, uiState, sessionState)
                         SettingsTab.DISPLAY -> DisplayTab(
-                            viewModel, uiState,
+                            viewModel, uiState, bridgeConnected,
                             onNavigateToSafeAreaEditor,
                         )
-                        SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
+                        SettingsTab.VIDEO -> VideoTab(viewModel, uiState, bridgeConnected)
                         SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
                         SettingsTab.DIAGNOSTICS -> DiagnosticsSettingsTab(
                             viewModel, uiState, onNavigateToDiagnostics
@@ -585,7 +591,47 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
 }
 
 @Composable
-private fun PhonesTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
+private fun BridgeDisabledBanner() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth(0.7f)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "Connect to bridge to edit these settings",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * Wraps bridge-owned settings: shows a "connect to bridge" banner and dims content
+ * when disconnected. When connected, renders content normally.
+ */
+@Composable
+private fun BridgeSection(
+    enabled: Boolean,
+    content: @Composable () -> Unit,
+) {
+    if (!enabled) BridgeDisabledBanner()
+    Box(modifier = if (enabled) Modifier else Modifier
+        .alpha(0.38f)
+        .pointerInput(Unit) { /* consume all touch events when disabled */ }) {
+        content()
+    }
+}
+
+@Composable
+private fun PhonesTab(viewModel: SettingsViewModel, uiState: SettingsUiState, bridgeConnected: Boolean = false) {
     val pairedPhones by viewModel.pairedPhones.collectAsStateWithLifecycle()
     val phonesLoading by viewModel.phonesLoading.collectAsStateWithLifecycle()
     val pairingEnabled by viewModel.pairingEnabled.collectAsStateWithLifecycle()
@@ -594,6 +640,7 @@ private fun PhonesTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         viewModel.requestPairedPhones()
     }
 
+    BridgeSection(enabled = bridgeConnected) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -828,12 +875,14 @@ private fun PhonesTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             )
         }
     }
+    } // BridgeSection
 }
 
 @Composable
 private fun DisplayTab(
     viewModel: SettingsViewModel,
     uiState: SettingsUiState,
+    bridgeConnected: Boolean = false,
     onNavigateToSafeAreaEditor: () -> Unit,
 ) {
     Column(
@@ -935,7 +984,9 @@ private fun DisplayTab(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- Drive Side ---
+        // --- Drive Side (bridge-owned) ---
+        BridgeSection(enabled = bridgeConnected) {
+        Column {
         SectionHeader("Drive Side")
 
         Spacer(modifier = Modifier.height(4.dp))
@@ -970,6 +1021,8 @@ private fun DisplayTab(
         }
 
         Spacer(modifier = Modifier.height(24.dp))
+        } // Column
+        } // BridgeSection (Drive Side)
 
         HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
 
@@ -1187,6 +1240,9 @@ private fun DisplayTab(
             )
         }
 
+        // Hide flags are bridge-owned: greyed out when disconnected
+        BridgeSection(enabled = bridgeConnected) {
+        Column {
         Row(
             modifier = Modifier
                 .fillMaxWidth(0.7f)
@@ -1261,6 +1317,8 @@ private fun DisplayTab(
                 modifier = Modifier.testTag("hideBatteryLevelToggle"),
             )
         }
+        } // Column
+        } // BridgeSection (hide flags)
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -1301,7 +1359,8 @@ private fun DisplayTab(
 }
 
 @Composable
-private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
+private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState, bridgeConnected: Boolean = false) {
+    BridgeSection(enabled = bridgeConnected) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1730,6 +1789,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+    } // BridgeSection
 }
 
 @Composable

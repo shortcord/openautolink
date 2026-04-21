@@ -115,11 +115,6 @@ class SessionManager(
     private val _bridgeInfo = MutableStateFlow<BridgeInfo?>(null)
     val bridgeInfo: StateFlow<BridgeInfo?> = _bridgeInfo.asStateFlow()
 
-    // Only apply the first config_echo per control connection.
-    // Subsequent echoes (from codec negotiation, reconnects) would overwrite
-    // user edits in the Settings UI before they hit "Save & Restart".
-    private var configEchoApplied = false
-
     val controlMessages get() = connectionManager.controlMessages
 
     // Video decoder — created per session, accessible for UI binding
@@ -468,7 +463,6 @@ class SessionManager(
         _sessionState.value = SessionState.IDLE
         _statusMessage.value = "Disconnected"
         _bridgeInfo.value = null
-        configEchoApplied = false
         _phoneBatteryLevel.value = null
         _phoneBatteryCritical.value = false
         _voiceSessionActive.value = false
@@ -888,25 +882,20 @@ class SessionManager(
                 _bridgeUpdateManager?.onUpdateMessage(message)
             }
             is ControlMessage.ConfigEcho -> {
-                // Bridge sent its current config — update app's DataStore to match,
-                // but only once per connection. Subsequent echoes (from codec negotiation
-                // etc.) would overwrite user edits in the Settings UI.
-                if (!configEchoApplied) {
-                    configEchoApplied = true
-                    scope.launch {
-                        val ctx = context ?: return@launch
-                        try {
-                            val prefs = AppPreferences.getInstance(ctx)
-                            prefs.applyConfigEcho(message.config)
-                            Log.i(TAG, "Applied config_echo from bridge: ${message.config.keys}")
-                            _remoteDiagnostics?.log(DiagnosticLevel.DEBUG, "config",
-                                "Applied config_echo: ${message.config.keys}")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to apply config_echo: ${e.message}")
-                        }
+                // Bridge sent its current config — always update app's DataStore.
+                // Bridge is the single source of truth for bridge-owned settings.
+                // Echoes are sent after: initial connect, config_update, codec negotiation.
+                scope.launch {
+                    val ctx = context ?: return@launch
+                    try {
+                        val prefs = AppPreferences.getInstance(ctx)
+                        prefs.applyConfigEcho(message.config)
+                        Log.i(TAG, "Applied config_echo from bridge: ${message.config.keys}")
+                        _remoteDiagnostics?.log(DiagnosticLevel.DEBUG, "config",
+                            "Applied config_echo: ${message.config.keys}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to apply config_echo: ${e.message}")
                     }
-                } else {
-                    Log.d(TAG, "Ignoring duplicate config_echo (already applied this connection)")
                 }
             }
             else -> {} // Other messages handled by island-specific collectors

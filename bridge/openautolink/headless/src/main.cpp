@@ -49,6 +49,7 @@ std::string_view kAaRuntimeDelayFlag = "--aa-runtime-delay-ms=";
 std::string_view kAaRuntimeMarginsFlag = "--aa-runtime-margins=";
 std::string_view kAaRuntimeContentInsetsFlag = "--aa-runtime-content-insets=";
 std::string_view kAaRuntimeStableInsetsFlag = "--aa-runtime-stable-insets=";
+std::string_view kDriveSideFlag = "--drive-side=";
 
 bool parse_ui_insets(std::string_view value, openautolink::HeadlessConfig::UiInsets& out) {
     unsigned long parsed[4] = {};
@@ -88,6 +89,7 @@ int main(int argc, char* argv[])
     std::string head_unit_name;
     int tcp_car_port = 0;    // TCP port for car app (e.g. 5288)
     bool use_usb = false;    // Wired AA: phone via USB host port
+    bool left_hand_drive = true;  // true = LHD (default), false = RHD
     std::string bt_mac;      // BT MAC override (empty = auto-detect)
     bool hide_clock = false;
     bool hide_phone_signal = false;
@@ -168,6 +170,11 @@ int main(int argc, char* argv[])
         }
         if(argument == kUsbFlag) {
             use_usb = true;
+            continue;
+        }
+        if(argument.rfind(kDriveSideFlag, 0) == 0) {
+            auto val = std::string(argument.substr(kDriveSideFlag.size()));
+            left_hand_drive = (val != "right");  // default to LHD unless "right"
             continue;
         }
         if(argument.rfind(kBtMacFlag, 0) == 0) {
@@ -288,6 +295,7 @@ int main(int argc, char* argv[])
         if (!head_unit_name.empty()) c.head_unit_name = head_unit_name;
         if (media_fd >= 0) c.media_fd = media_fd;
         c.use_usb_host = use_usb;
+        c.left_hand_drive = left_hand_drive;
         c.bt_mac = bt_mac;
         c.hide_clock = hide_clock;
         c.hide_phone_signal = hide_phone_signal;
