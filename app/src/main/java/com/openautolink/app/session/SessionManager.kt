@@ -594,9 +594,10 @@ class SessionManager(
             " cutout=T:$cutTop B:$cutBottom L:$cutLeft R:$cutRight" +
             " bars=T:$sbarTop B:$sbarBottom L:$sbarLeft R:$sbarRight")
 
-        // Detect if the device has a Qualcomm decoder that ignores SCALE_TO_FIT
-        // and fills the surface (stretching the video). This tells the bridge to
-        // auto-compute pixel_aspect to compensate.
+        // Historical note: decoderFillsSurface was used in v0 when decoders had different SCALE_TO_FIT behavior.
+        // Both c2.qti and c2.goldfish now honor SCALE_TO_FIT and letterbox identically.
+        // Bridge auto-computes pixel_aspect based on display AR instead of decoder vendor.
+        // This field is kept for future use (e.g., vendor-specific codec selection) but doesn't gate auto-compute.
         val decoderFills = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
             .codecInfos.any { !it.isEncoder && it.name.startsWith("c2.qti.") }
 

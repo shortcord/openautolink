@@ -655,9 +655,9 @@ void OalSession::handle_app_hello(const std::string& json) {
     oal_json_extract_int(json, "bar_left", bar_left);
     oal_json_extract_int(json, "bar_right", bar_right);
 
-    // Read video scaling mode and decoder behavior
+    // Read video scaling mode
     std::string scaling_mode = oal_json_extract_string(json, "video_scaling_mode");
-    bool decoder_fills = oal_json_extract_string(json, "decoder_fills_surface") == "true";
+    // decoder_fills_surface flag sent by app for historical/future use, not used in auto-compute gate
 
     BLOG << "[OAL] app hello: display=" << display_w << "x" << display_h
               << " dpi=" << display_dpi
@@ -666,7 +666,6 @@ void OalSession::handle_app_hello(const std::string& json) {
               << " bars=T:" << bar_top << " B:" << bar_bottom
               << " L:" << bar_left << " R:" << bar_right
               << " scaling=" << (scaling_mode.empty() ? "crop" : scaling_mode)
-              << " decoder_fills=" << (decoder_fills ? "true" : "false")
               << std::endl;
 
     // Bug fix #1: Push auto-computed values to LiveAasdkSession's SDR before phone connects.
@@ -689,32 +688,29 @@ void OalSession::handle_app_hello(const std::string& json) {
             case 5: video_w = 3840; video_h = 2160; break;
         }
 
-        // pixel_aspect_ratio: compensates for non-uniform scaling when the
-        // decoder stretches the video to fill a non-16:9 surface.
-        // Only auto-computed when the app reports decoder_fills_surface=true
-        // (Qualcomm c2.qti decoders ignore SCALE_TO_FIT and fill the surface).
-        // Other decoders (goldfish, Intel) use SCALE_TO_FIT properly — no
-        // distortion, so pixel_aspect stays at 0 (square pixels).
+        // pixel_aspect_ratio: compensates for wide displays (non-16:9 AR).
+        // When AA's default 16:9 layout renders into a letterboxed area on wide displays,
+        // it wastes space on the sides. pixel_aspect_ratio pre-distorts AA's rendering so
+        // circles stay circular when phone applies letterbox letterboxing + scaling.
+        // Both c2.qti and c2.goldfish honor SCALE_TO_FIT and letterbox the same way.
+        // Auto-compute triggers when display AR significantly differs from video AR (16:9).
         // Manual override via OAL_AA_PIXEL_ASPECT_E4 env always takes priority.
         if (!config_.pixel_aspect_explicit) {
-            if (decoder_fills) {
-                double display_ar = static_cast<double>(display_w) / display_h;
-                double video_ar = static_cast<double>(video_w) / video_h;
-                if (display_ar > 0 && video_ar > 0 && display_ar != video_ar) {
-                    uint32_t pa = static_cast<uint32_t>(display_ar / video_ar * 10000);
-                    if (pa != 10000) {
-                        config_.aa_ui_experiment.pixel_aspect_ratio_e4 = pa;
-                        BLOG << "[OAL] auto pixel_aspect=" << pa
-                                  << " (display=" << display_w << "x" << display_h
-                                  << " video=" << video_w << "x" << video_h
-                                  << " decoder_fills=true)" << std::endl;
-                    }
+            double display_ar = static_cast<double>(display_w) / display_h;
+            double video_ar = static_cast<double>(video_w) / video_h;
+            if (display_ar > 0 && video_ar > 0 && display_ar != video_ar) {
+                uint32_t pa = static_cast<uint32_t>(display_ar / video_ar * 10000);
+                if (pa != 10000) {
+                    config_.aa_ui_experiment.pixel_aspect_ratio_e4 = pa;
+                    BLOG << "[OAL] auto pixel_aspect=" << pa
+                              << " (display=" << display_w << "x" << display_h
+                              << " video=" << video_w << "x" << video_h << ")" << std::endl;
                 }
             } else {
-                // Decoder uses SCALE_TO_FIT — no distortion, square pixels
+                // Display AR matches video AR (16:9) — no compensation needed
                 if (config_.aa_ui_experiment.pixel_aspect_ratio_e4 != 0) {
                     config_.aa_ui_experiment.pixel_aspect_ratio_e4 = 0;
-                    BLOG << "[OAL] pixel_aspect=0 (decoder does not fill surface)" << std::endl;
+                    BLOG << "[OAL] pixel_aspect=0 (display AR matches video AR)" << std::endl;
                 }
             }
         } else if (config_.aa_ui_experiment.pixel_aspect_ratio_e4 > 0) {

@@ -33,9 +33,10 @@ description: "Use when working on video decoding, MediaCodec configuration, Surf
 
 ## Surface Sizing
 - AAOS display: 2914x1134 physical on GM. Usable area smaller (status bar, cutout)
-- **MUST use SCALE_TO_FIT** — Qualcomm c2.qti preserves aspect ratio with this mode
-- **NEVER use SCALE_TO_FIT_WITH_CROPPING** — Qualcomm stretches non-uniformly (circles become ovals)
-- Use `pixel_aspect_ratio` in the AA SDR to make AA pre-compensate for wide displays
+- **MUST use SCALE_TO_FIT** — Both c2.qti and c2.goldfish preserve aspect ratio with this mode (uniform letterbox)
+- **NEVER use SCALE_TO_FIT_WITH_CROPPING** — Stretches non-uniformly on c2.qti (verified on-car: circles become ovals)
+- Use `pixel_aspect_ratio` in the AA SDR to make AA pre-compensate for wide displays (e.g., 2914x1134 → pixel_aspect ~14454)
+- Bridge auto-computes pixel_aspect when display AR ≠ 16:9 (wide displays need compensation regardless of decoder vendor)
 - SurfaceView preferred over TextureView (HWC overlay, lower latency)
 
 ## H.264 NAL Parsing
