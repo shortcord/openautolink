@@ -922,6 +922,10 @@ class SessionManager(
 
     private fun startVideoChannel(host: String, videoPort: Int) {
         videoCollectJob?.cancel()
+        // Reset decoder state for the new phone — clears receivedIdr flag so we
+        // wait for a fresh IDR, and reconfigures codec from fresh SPS/PPS.
+        // Without this, a stale IDR from the previous phone could be rendered.
+        _videoDecoder?.resume()
         // Start collecting video frames FIRST so the SharedFlow has an active subscriber
         // before the bridge starts sending replay frames.
         videoCollectJob = scope.launch(videoDispatcher) {

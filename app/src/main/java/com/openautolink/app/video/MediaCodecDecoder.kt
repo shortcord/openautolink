@@ -130,6 +130,8 @@ class MediaCodecDecoder(
     override fun detach() {
         Log.i(TAG, "Detaching surface")
         releaseCodec()
+        cachedIdrFrame = null  // Prevent stale IDR replay on reattach (e.g. phone switch)
+        codecConfigData = null // Force fresh SPS/PPS from new phone
         surface = null
         surfaceWidth = 0
         surfaceHeight = 0
