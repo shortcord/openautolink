@@ -169,4 +169,57 @@ object AaMessageConverter {
 
         return AaMessage.fromProto(AaChannel.SENSOR, AaMsgType.MEDIA_DATA, batch.build())
     }
+
+    /**
+     * Build a VehicleEnergyModel SensorBatch (field 23) for EV battery data.
+     * This is what makes Maps show battery-on-arrival percentage.
+     *
+     * Maps reads:
+     *   min_usable_capacity.watt_hours → current battery level Wh
+     *   max_capacity.watt_hours → total battery capacity Wh
+     *   consumption.driving.rate → energy consumption Wh/km
+     */
+    fun buildVemSensorBatch(vd: ControlMessage.VehicleData): AaMessage? {
+        val capacityWh = vd.evBatteryCapacityWh?.toInt() ?: return null
+        val currentWh = vd.evBatteryLevelWh?.toInt() ?: return null
+        val rangeM = vd.rangeKm?.let { (it * 1000).toInt() } ?: return null
+        if (capacityWh <= 0 || currentWh <= 0 || rangeM <= 0) return null
+
+        val vem = com.openautolink.app.proto.VehicleEnergyModelProto.VehicleEnergyModel.newBuilder()
+
+        // Battery config
+        val batt = com.openautolink.app.proto.VehicleEnergyModelProto.BatteryConfig.newBuilder()
+            .setConfigId(1)
+            .setMaxCapacity(com.openautolink.app.proto.VehicleEnergyModelProto.EnergyValue.newBuilder()
+                .setWattHours(capacityWh).build())
+            .setMinUsableCapacity(com.openautolink.app.proto.VehicleEnergyModelProto.EnergyValue.newBuilder()
+                .setWattHours(currentWh).build())
+            .setReserveEnergy(com.openautolink.app.proto.VehicleEnergyModelProto.EnergyValue.newBuilder()
+                .setWattHours((capacityWh * 0.05).toInt()).build())
+            .setRegenBrakingCapable(true)
+            .setMaxChargePowerW(vd.evChargeRateW?.toInt()?.takeIf { it > 0 } ?: 150000)
+            .setMaxDischargePowerW(150000)
+        vem.setBattery(batt.build())
+
+        // Energy consumption from range estimate
+        val whPerKm = currentWh.toFloat() / rangeM.toFloat() * 1000f
+        val cons = com.openautolink.app.proto.VehicleEnergyModelProto.EnergyConsumption.newBuilder()
+            .setDriving(com.openautolink.app.proto.VehicleEnergyModelProto.EnergyRate.newBuilder()
+                .setRate(whPerKm).build())
+            .setAuxiliary(com.openautolink.app.proto.VehicleEnergyModelProto.EnergyRate.newBuilder()
+                .setRate(2.0f).build())
+            .setAerodynamic(com.openautolink.app.proto.VehicleEnergyModelProto.EnergyRate.newBuilder()
+                .setRate(0.36f).build())
+        vem.setConsumption(cons.build())
+
+        // Charging prefs
+        vem.setChargingPrefs(com.openautolink.app.proto.VehicleEnergyModelProto.ChargingPrefs.newBuilder()
+            .setMode(1).build())
+
+        val batch = Sensors.SensorBatch.newBuilder()
+            .addVehicleEnergyModelData(vem.build())
+            .build()
+
+        return AaMessage.fromProto(AaChannel.SENSOR, AaMsgType.MEDIA_DATA, batch)
+    }
 }

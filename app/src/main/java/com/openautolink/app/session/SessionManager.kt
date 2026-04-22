@@ -707,9 +707,15 @@ class SessionManager(
                 is ControlMessage.Touch -> session.sendMessage(
                     com.openautolink.app.transport.direct.AaMessageConverter.touchToProto(message)
                 )
-                is ControlMessage.VehicleData -> session.sendMessage(
-                    com.openautolink.app.transport.direct.AaMessageConverter.vehicleDataToProto(message)
-                )
+                is ControlMessage.VehicleData -> {
+                    session.sendMessage(
+                        com.openautolink.app.transport.direct.AaMessageConverter.vehicleDataToProto(message)
+                    )
+                    // Also send VEM if EV battery data is available
+                    com.openautolink.app.transport.direct.AaMessageConverter.buildVemSensorBatch(message)?.let {
+                        session.sendMessage(it)
+                    }
+                }
                 is ControlMessage.Button -> session.sendMessage(
                     com.openautolink.app.transport.direct.AaMessageConverter.buttonToProto(message)
                 )
