@@ -500,33 +500,92 @@ class DirectAaSession(
         }
     }
 
+    // Track last turn detail for combining with distance events
+    private var lastTurnDetail: com.openautolink.app.proto.NavigationStatus.NextTurnDetail? = null
+
     private suspend fun handleNavigation(msg: AaMessage) {
-        // Parse navigation turn events and forward as control messages
-        // The nav data comes as MEDIA_DATA on the navigation channel
-        if (msg.type == AaMsgType.MEDIA_START || msg.type == AaMsgType.MEDIA_DATA) {
-            try {
-                val navData = msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
-                // TODO: Parse NavigationStatus proto and emit as ControlMessage.NavState
-                OalLog.d(TAG, "Nav data received (${navData.size}B)")
-            } catch (e: Exception) {
-                OalLog.e(TAG, "Nav parse error: ${e.message}")
+        val navDetailType = 0x8004  // NEXTTURNDETAILS
+        val navDistType = 0x8005    // NEXTTURNDISTANCEANDTIME
+
+        when (msg.type) {
+            navDetailType -> {
+                try {
+                    val data = msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
+                    val detail = com.openautolink.app.proto.NavigationStatus.NextTurnDetail.parseFrom(data)
+                    lastTurnDetail = detail
+                    val maneuver = mapNextEvent(detail.nextturn)
+                    _controlMessages.emit(ControlMessage.NavState(
+                        maneuver = maneuver,
+                        distanceMeters = null,
+                        road = detail.road,
+                        etaSeconds = null,
+                        roundaboutExitNumber = if (detail.hasTrunnumer()) detail.trunnumer.toInt() else null,
+                        roundaboutExitAngle = if (detail.hasTurnangel()) detail.turnangel.toInt() else null,
+                    ))
+                    OalLog.d(TAG, "Nav: turn=$maneuver road=${detail.road}")
+                } catch (e: Exception) {
+                    OalLog.e(TAG, "Nav detail parse error: ${e.message}")
+                }
             }
-        } else {
-            handleChannelControl(msg)
+
+            navDistType -> {
+                try {
+                    val data = msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
+                    val event = com.openautolink.app.proto.NavigationStatus.NextTurnDistanceEvent.parseFrom(data)
+                    val detail = lastTurnDetail
+                    _controlMessages.emit(ControlMessage.NavState(
+                        maneuver = detail?.let { mapNextEvent(it.nextturn) },
+                        distanceMeters = if (event.hasDistance()) event.distance.toInt() else null,
+                        road = detail?.road,
+                        etaSeconds = if (event.hasTime()) event.time.toInt() else null,
+                    ))
+                } catch (e: Exception) {
+                    OalLog.e(TAG, "Nav distance parse error: ${e.message}")
+                }
+            }
+
+            else -> handleChannelControl(msg)
+        }
+    }
+
+    private fun mapNextEvent(event: com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent): String {
+        return when (event) {
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.DEPARTE -> "depart"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.NAME_CHANGE -> "name_change"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.SLIGHT_TURN -> "slight_turn"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.TURN -> "turn"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.SHARP_TURN -> "sharp_turn"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.UTURN -> "u_turn"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.ONRAMPE -> "on_ramp"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.OFFRAMP -> "off_ramp"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.FORME -> "fork"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.MERGE -> "merge"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.ROUNDABOUT_ENTER -> "roundabout_enter"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.ROUNDABOUT_EXIT -> "roundabout_exit"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.ROUNDABOUT_ENTER_AND_EXIT -> "roundabout_enter_exit"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.STRAIGHTE -> "straight"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.FERRY_BOAT -> "ferry_boat"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.FERRY_TRAINE -> "ferry_train"
+            com.openautolink.app.proto.NavigationStatus.NextTurnDetail.NextEvent.DESTINATION -> "destination"
+            else -> "unknown"
         }
     }
 
     private suspend fun handleMediaPlayback(msg: AaMessage) {
-        if (msg.type == AaMsgType.MEDIA_START || msg.type == AaMsgType.MEDIA_DATA) {
-            try {
-                val data = msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
-                // TODO: Parse MediaPlaybackStatus and emit as ControlMessage.MediaMetadata
-                OalLog.d(TAG, "Media playback data (${data.size}B)")
-            } catch (e: Exception) {
-                OalLog.e(TAG, "MediaPlayback parse error: ${e.message}")
+        // Media playback channel uses:
+        // 0x8001 = metadata, 0x8003 = metadata start (with status)
+        when (msg.type) {
+            0x8001, 0x8003 -> {
+                try {
+                    val data = msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
+                    val metadata = com.openautolink.app.proto.MediaPlayback.MediaMetaData.parseFrom(data)
+                    OalLog.d(TAG, "Media: ${metadata.song} - ${metadata.artist}")
+                    // TODO: emit ControlMessage.MediaMetadata
+                } catch (e: Exception) {
+                    OalLog.e(TAG, "MediaPlayback parse error: ${e.message}")
+                }
             }
-        } else {
-            handleChannelControl(msg)
+            else -> handleChannelControl(msg)
         }
     }
 
@@ -544,6 +603,14 @@ class DirectAaSession(
     }
 
     // â”€â”€ NSD (Network Service Discovery) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    /**
+     * Send mic audio PCM data to the phone on channel 7 (MIC).
+     */
+    suspend fun sendMicAudio(pcmData: ByteArray) {
+        if (!sslActive) return
+        sendMessage(AaMessage.raw(AaChannel.MIC, AaMsgType.MEDIA_DATA, pcmData))
+    }
 
     private fun registerNsd() {
         try {
