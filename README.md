@@ -368,9 +368,8 @@ Active development, but stable for daily use. Core features are implemented and 
 ## Known Issues
 
 - **Steering wheel controls on GM EVs:** the left-side rocker currently maps to skip forward and play/pause only. Previous-track is not exposed by GM. The steering-wheel voice button is consumed by the system before the app can intercept it.
-- **Audio playback on first boot:** when pressing play on Spotify or other media apps, it will take a few taps to get it to play, but after that it will work as expected. This is still under investigation.
-- **"Unsupported device" popup on GM EVs:** the USB Ethernet adapter can trigger a brief cosmetic warning even though networking still works.
-- **The Android Auto stream green or black** UI may start out blocky and green or black, but will self recover in 10-20 seconds. Still fighting this one...
+- **"Unsupported device" popup on GM EVs:** the USB Ethernet adapter will trigger a brief cosmetic warning even though networking still works.
+- **The Android Auto stream green or black** AA UI may start out blocky and green or black, but will self recover in 10-20 seconds. Still fighting this one...
 
 ## Compatibility
 
