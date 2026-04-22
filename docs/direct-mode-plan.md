@@ -130,33 +130,27 @@ protobuf (direct mode).
 New package: `app/src/main/java/com/openautolink/app/transport/direct/`
 
 #### 1a. AA Wire Protocol (~3 days)
-- [ ] `AaWireCodec` — message framing (channel, flags, length, type, payload)
-- [ ] `AaMessageRouter` — dispatch incoming messages to handlers by channel/type
-- [ ] `AaSslEngine` — Java SSLEngine wrapper with memory BIOs (from HURev's `AapSslContext`)
-- [ ] SSL cert generation — create `headunit.crt`/`headunit.key` in app private storage
+- [x] `AaWireCodec` — message framing (channel, flags, length, type, payload)
+- [x] `AaConstants` — channel IDs and message type constants
+- [x] `AaSslEngine` — Java SSLEngine wrapper with memory BIOs (from HURev's `AapSslContext`)
+- [x] SSL cert generation — AndroidKeyStore self-signed cert
 - [ ] Unit tests for framing, SSL handshake sequence
 
 #### 1b. Session Management (~2 days)
-- [ ] `DirectAaSession` — TCP server on 5288, version exchange, SSL, service discovery
-- [ ] `DirectServiceDiscovery` — build `ServiceDiscoveryResponse` with:
-  - All VHAL sensors we support (speed, gear, brake, compass, gyro, accel, night, location)
-  - VEM sensor type 23 (EV battery data for Maps)
-  - Video config (resolution, FPS, codec from settings)
-  - Audio channels (media, speech, system)
-  - Mic channel
-  - Input (touchscreen dimensions)
-  - Navigation (for cluster)
-- [ ] NSD registration (`_aawireless._tcp` on port 5288)
-- [ ] Session state machine (connecting → handshake → streaming → disconnected)
+- [x] `DirectAaSession` — TCP server on 5288, version exchange, SSL, service discovery
+- [x] `DirectServiceDiscovery` — build `ServiceDiscoveryResponse` with all VHAL sensors + VEM
+- [x] NSD registration (`_aawireless._tcp` on port 5288)
+- [x] Session state machine (connecting → handshake → streaming → disconnected)
 
 #### 1c. Channel Handlers (~3 days)
-- [ ] Video channel → parse fragments → reassemble → feed to existing `VideoDecoder`
-- [ ] Audio channels → parse PCM/AAC → feed to existing `AudioTrackManager`
-- [ ] Input channel → send touch events from projection surface
-- [ ] Sensor channel → send VHAL data, GNSS, IMU, VEM as `SensorBatch`
-- [ ] Navigation channel → parse turn events → forward to `ClusterService`
-- [ ] Control channel → ping/pong, audio focus, media metadata
-- [ ] Mic channel → capture from `AudioRecord` → send to phone
+- [x] `AaVideoAssembler` — parse fragments → reassemble → VideoFrame
+- [x] Video channel → codec config + media data → existing VideoDecoder
+- [x] Audio channels → PCM data → AudioFrame with correct AudioPurpose
+- [x] Input channel → touch events (structure ready, needs wiring)
+- [x] Sensor channel → send VHAL data, GNSS, IMU, VEM as SensorBatch (structure ready)
+- [x] Navigation channel → parse turn events (structure ready, needs proto parsing)
+- [x] Control channel → ping/pong, audio focus, channel open/close
+- [x] Mic channel → capture start signal (structure ready)
 
 #### 1d. Integration (~2 days)
 - [ ] `SessionManager` — add `DirectAaSession` as alternative to `BridgeSession`
