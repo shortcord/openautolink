@@ -127,6 +127,8 @@ protobuf (direct mode).
 
 ### Phase 1: Direct Transport in Our App (~10 days)
 
+**Status: IMPLEMENTATION COMPLETE** — 7 commits on `feature/direct-mode`
+
 New package: `app/src/main/java/com/openautolink/app/transport/direct/`
 
 #### 1a. AA Wire Protocol (~3 days)
