@@ -310,6 +310,8 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             val diagMinLevel = preferences.remoteDiagnosticsMinLevel.first()
             val scalingMode = preferences.videoScalingMode.first()
             val connectionMode = preferences.connectionMode.first()
+            val hotspotSsid = preferences.hotspotSsid.first()
+            val hotspotPassword = preferences.hotspotPassword.first()
             val network = resolveNetwork(ifaceName)
             val networkResolver = com.openautolink.app.transport.NetworkResolver {
                 resolveNetwork(ifaceName)
@@ -317,7 +319,8 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             sessionManager.start(host, port, codec, micSrc,
                 diagnosticsEnabled = diagEnabled, diagnosticsMinLevel = diagMinLevel,
                 network = network, networkResolver = networkResolver, scalingMode = scalingMode,
-                connectionMode = connectionMode)
+                connectionMode = connectionMode,
+                hotspotSsid = hotspotSsid, hotspotPassword = hotspotPassword)
         }
     }
 

@@ -488,6 +488,44 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // --- Hotspot Credentials (Direct mode) ---
+        if (uiState.connectionMode == "direct") {
+            SectionHeader("Phone Hotspot Credentials")
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "Enter your phone's hotspot SSID and password. These are sent to the phone during the Bluetooth handshake so it knows which WiFi network to use. Leave blank to test without credentials.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            var ssidInput by remember(uiState.hotspotSsid) { mutableStateOf(uiState.hotspotSsid) }
+            OutlinedTextField(
+                value = ssidInput,
+                onValueChange = { ssidInput = it; viewModel.updateHotspotSsid(it) },
+                label = { Text("Hotspot SSID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            var pskInput by remember(uiState.hotspotPassword) { mutableStateOf(uiState.hotspotPassword) }
+            OutlinedTextField(
+                value = pskInput,
+                onValueChange = { pskInput = it; viewModel.updateHotspotPassword(it) },
+                label = { Text("Hotspot Password") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         // --- Bridge Connection Section (only shown in bridge mode) ---
         if (uiState.connectionMode == "bridge") {
         SectionHeader("Bridge Connection")

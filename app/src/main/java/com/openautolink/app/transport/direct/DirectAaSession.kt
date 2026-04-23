@@ -89,8 +89,20 @@ class DirectAaSession(
     private var videoAssembler: AaVideoAssembler? = null
     private var unackedFrames = 0
 
+    // BT handshake for automatic phone connection
+    private val btHandshake = AaBtHandshakeManager(scope)
+
     // Video config from settings
     var videoConfig = DirectServiceDiscovery.VideoConfig()
+
+    /** Hotspot credentials for BT handshake. Set from settings before start(). */
+    var hotspotSsid: String
+        get() = btHandshake.hotspotSsid
+        set(value) { btHandshake.hotspotSsid = value }
+
+    var hotspotPassword: String
+        get() = btHandshake.hotspotPassword
+        set(value) { btHandshake.hotspotPassword = value }
 
     /**
      * Start listening for incoming phone connections.
@@ -98,6 +110,9 @@ class DirectAaSession(
     fun start() {
         if (serverJob?.isActive == true) return
         _connectionState.value = ConnectionState.DISCONNECTED
+
+        // Start BT RFCOMM handshake server for automatic phone discovery
+        btHandshake.start()
 
         serverJob = scope.launch(Dispatchers.IO) {
             try {
@@ -136,6 +151,7 @@ class DirectAaSession(
         readJob = null
         serverJob?.cancel()
         serverJob = null
+        btHandshake.stop()
         try { clientSocket?.close() } catch (_: Exception) {}
         try { serverSocket?.close() } catch (_: Exception) {}
         clientSocket = null

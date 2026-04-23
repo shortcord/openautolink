@@ -56,6 +56,8 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val AA_PIXEL_ASPECT = intPreferencesKey("aa_pixel_aspect")
         val VIDEO_SCALING_MODE = stringPreferencesKey("video_scaling_mode")
         val CONNECTION_MODE = stringPreferencesKey("connection_mode")
+        val HOTSPOT_SSID = stringPreferencesKey("hotspot_ssid")
+        val HOTSPOT_PASSWORD = stringPreferencesKey("hotspot_password")
         val PHONE_MODE = stringPreferencesKey("phone_mode")
         val WIFI_BAND = stringPreferencesKey("wifi_band")
         val WIFI_COUNTRY = stringPreferencesKey("wifi_country")
@@ -113,6 +115,8 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_AA_PIXEL_ASPECT = 0 // 0 = default (square pixels, 10000)
         const val DEFAULT_VIDEO_SCALING_MODE = "crop" // "letterbox" or "crop"
         const val DEFAULT_CONNECTION_MODE = "direct" // "bridge" or "direct"
+        const val DEFAULT_HOTSPOT_SSID = ""
+        const val DEFAULT_HOTSPOT_PASSWORD = ""
         const val DEFAULT_PHONE_MODE = "wireless"
         const val DEFAULT_WIFI_BAND = "5ghz"
         const val DEFAULT_WIFI_COUNTRY = "US"
@@ -234,6 +238,14 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[CONNECTION_MODE] ?: DEFAULT_CONNECTION_MODE
     }
 
+    val hotspotSsid: Flow<String> = dataStore.data.map { prefs ->
+        prefs[HOTSPOT_SSID] ?: DEFAULT_HOTSPOT_SSID
+    }
+
+    val hotspotPassword: Flow<String> = dataStore.data.map { prefs ->
+        prefs[HOTSPOT_PASSWORD] ?: DEFAULT_HOTSPOT_PASSWORD
+    }
+
     val phoneMode: Flow<String> = dataStore.data.map { prefs ->
         prefs[PHONE_MODE] ?: DEFAULT_PHONE_MODE
     }
@@ -348,6 +360,14 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun updateConnectionMode(mode: String) {
         dataStore.edit { it[CONNECTION_MODE] = mode }
+    }
+
+    suspend fun setHotspotSsid(ssid: String) {
+        dataStore.edit { it[HOTSPOT_SSID] = ssid }
+    }
+
+    suspend fun setHotspotPassword(password: String) {
+        dataStore.edit { it[HOTSPOT_PASSWORD] = password }
     }
 
     suspend fun setBridgePort(port: Int) {

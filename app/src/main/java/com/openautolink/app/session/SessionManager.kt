@@ -233,7 +233,8 @@ class SessionManager(
     fun start(host: String, port: Int = 5288, codecPreference: String = "h264", micSourcePreference: String = "car",
                diagnosticsEnabled: Boolean = false, diagnosticsMinLevel: String = "INFO",
                network: Network? = null, networkResolver: NetworkResolver? = null,
-               scalingMode: String = "letterbox", connectionMode: String = "bridge") {
+               scalingMode: String = "letterbox", connectionMode: String = "bridge",
+               hotspotSsid: String = "", hotspotPassword: String = "") {
         targetHost = host
         micSource = micSourcePreference
         observeJob?.cancel()
@@ -424,14 +425,14 @@ class SessionManager(
             // Start connection based on mode
             activeConnectionMode = connectionMode
             if (connectionMode == "direct") {
-                startDirectMode()
+                startDirectMode(hotspotSsid, hotspotPassword)
             } else {
                 connectionManager.connect(host, port, network = network, networkResolver = networkResolver)
             }
         }
     }
 
-    private fun startDirectMode() {
+    private fun startDirectMode(hotspotSsid: String, hotspotPassword: String) {
         directSession?.stop()
         val ctx = context ?: return
         val session = com.openautolink.app.transport.direct.DirectAaSession(scope, ctx)
@@ -439,6 +440,8 @@ class SessionManager(
             width = 1920, height = 1080, fps = 60, dpi = 160,
             codec = if (_videoDecoder is MediaCodecDecoder) "H.264" else "H.264",
         )
+        session.hotspotSsid = hotspotSsid
+        session.hotspotPassword = hotspotPassword
         directSession = session
 
         // Observe direct session flows — same pattern as bridge mode

@@ -21,6 +21,8 @@ import kotlinx.coroutines.launch
 
 data class SettingsUiState(
     val connectionMode: String = AppPreferences.DEFAULT_CONNECTION_MODE,
+    val hotspotSsid: String = AppPreferences.DEFAULT_HOTSPOT_SSID,
+    val hotspotPassword: String = AppPreferences.DEFAULT_HOTSPOT_PASSWORD,
     val bridgeHost: String = AppPreferences.DEFAULT_BRIDGE_HOST,
     val bridgePort: Int = AppPreferences.DEFAULT_BRIDGE_PORT,
     val videoAutoNegotiate: Boolean = AppPreferences.DEFAULT_VIDEO_AUTO_NEGOTIATE,
@@ -188,23 +190,30 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         SettingsUiState()
     )
     init {
-        // connectionMode can't fit in the main combine (44 flows already at limit).
-        // Observe separately and merge into uiState.
         viewModelScope.launch {
             preferences.connectionMode.collect { mode ->
                 _connectionModeOverride.value = mode
             }
         }
+        viewModelScope.launch {
+            preferences.hotspotSsid.collect { _hotspotSsidOverride.value = it }
+        }
+        viewModelScope.launch {
+            preferences.hotspotPassword.collect { _hotspotPasswordOverride.value = it }
+        }
     }
 
     private val _connectionModeOverride = MutableStateFlow(AppPreferences.DEFAULT_CONNECTION_MODE)
+    private val _hotspotSsidOverride = MutableStateFlow(AppPreferences.DEFAULT_HOTSPOT_SSID)
+    private val _hotspotPasswordOverride = MutableStateFlow(AppPreferences.DEFAULT_HOTSPOT_PASSWORD)
 
-    // Expose combined state with connectionMode
     val settingsState: StateFlow<SettingsUiState> = combine(
         uiState,
-        _connectionModeOverride
-    ) { state, mode ->
-        state.copy(connectionMode = mode)
+        _connectionModeOverride,
+        _hotspotSsidOverride,
+        _hotspotPasswordOverride,
+    ) { state, mode, ssid, psk ->
+        state.copy(connectionMode = mode, hotspotSsid = ssid, hotspotPassword = psk)
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5000),
@@ -213,6 +222,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun updateConnectionMode(mode: String) {
         viewModelScope.launch { preferences.updateConnectionMode(mode) }
+    }
+
+    fun updateHotspotSsid(ssid: String) {
+        viewModelScope.launch { preferences.setHotspotSsid(ssid) }
+    }
+
+    fun updateHotspotPassword(password: String) {
+        viewModelScope.launch { preferences.setHotspotPassword(password) }
     }
     fun updateBridgeHost(host: String) {
         viewModelScope.launch { preferences.setBridgeHost(host) }

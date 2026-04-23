@@ -73,8 +73,8 @@ try {
 
     Push-Location $huRoot
     & $gradlew bundleGithubRelease `
-        "-PoalVersionCode=1" `
-        "-PoalVersionName=1.0.0"
+        "-PoalVersionCode=2" `
+        "-PoalVersionName=1.0.1"
     Pop-Location
 
     $aabPath = Join-Path $huRoot 'app\build\outputs\bundle\githubRelease'
