@@ -158,6 +158,33 @@ class SessionManager(
     // WiFi frequency (from Nearby's underlying WiFi Direct)
     val wifiFrequencyMhz: StateFlow<Int> = AaNearbyManager.wifiFrequencyMhz
 
+    // Multi-phone
+    private val _phoneName = MutableStateFlow<String?>(null)
+    val phoneName: StateFlow<String?> = _phoneName.asStateFlow()
+    val connectedPhoneName: StateFlow<String?> = AaNearbyManager.connectedPhoneName
+    @Volatile private var _defaultPhoneName: String = ""
+
+    /** Set the default phone name from preferences (called at session start). */
+    fun setDefaultPhoneName(name: String) { _defaultPhoneName = name }
+
+    /** Clear the default phone — next connection will pick any phone. */
+    fun clearDefaultPhone() {
+        _defaultPhoneName = ""
+        scope.launch {
+            context?.let { AppPreferences.getInstance(it).setDefaultPhoneName("") }
+        }
+    }
+
+    /** Switch phone: disconnect, restart discovery in chooser mode. */
+    fun switchPhone() {
+        stop()
+    }
+
+    /** Connect to a specific discovered Nearby endpoint by ID. */
+    fun connectToNearbyEndpoint(endpointId: String) {
+        directSession?.nearbyManager?.connectToEndpoint(endpointId)
+    }
+
     // Media session
     private var _mediaSessionManager: OalMediaSessionManager? = null
 
@@ -378,6 +405,21 @@ class SessionManager(
 
         // AAC audio — reduces bandwidth ~10x vs PCM over WiFi
         session.useAacAudio = true
+
+        // Multi-phone: set default phone name for auto-connect
+        session.defaultPhoneName = _defaultPhoneName
+        session.onPhoneConnected = { phoneName ->
+            _phoneName.value = phoneName
+            // Persist as default if none set
+            if (_defaultPhoneName.isEmpty()) {
+                _defaultPhoneName = phoneName
+                scope.launch {
+                    val ctx = context ?: return@launch
+                    AppPreferences.getInstance(ctx).setDefaultPhoneName(phoneName)
+                    Log.i(TAG, "Default phone saved: $phoneName")
+                }
+            }
+        }
 
         session.hotspotSsid = hotspotSsid
         session.hotspotPassword = hotspotPassword

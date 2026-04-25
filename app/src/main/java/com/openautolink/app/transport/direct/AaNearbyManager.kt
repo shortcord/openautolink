@@ -59,6 +59,10 @@ class AaNearbyManager(
         private val _wifiFrequencyMhz = MutableStateFlow(0)
         /** WiFi Direct frequency in MHz (0 = unknown). >4000 = 5GHz, >0 = 2.4GHz. */
         val wifiFrequencyMhz: StateFlow<Int> = _wifiFrequencyMhz
+
+        /** Currently connected phone name — set on connection, cleared on disconnect. */
+        private val _connectedPhoneName = MutableStateFlow<String?>(null)
+        val connectedPhoneName: StateFlow<String?> = _connectedPhoneName
     }
 
     data class DiscoveredEndpoint(val id: String, val name: String)
@@ -70,11 +74,14 @@ class AaNearbyManager(
     private var activeSocket: NearbySocket? = null
     private var activePipes: Array<android.os.ParcelFileDescriptor>? = null
 
-    /** Auto-connect to first discovered endpoint. Set false for manual selection. */
+    /** Auto-connect to matching phone. Set false for manual/chooser mode. */
     var autoConnect = true
 
-    /** Last connected device name for auto-reconnect matching. */
-    var lastDeviceName: String = ""
+    /** Default phone name to auto-connect to. Empty = connect to first found. */
+    var defaultPhoneName: String = ""
+
+    /** Callback when a phone is connected — used to persist the default phone name. */
+    var onPhoneConnected: ((name: String) -> Unit)? = null
 
     fun start() {
         if (isRunning) return
@@ -139,6 +146,7 @@ class AaNearbyManager(
         OalLog.i(TAG, "Stopping")
         isRunning = false
         _wifiFrequencyMhz.value = 0
+        _connectedPhoneName.value = null
         isConnecting = false
         connectionsClient.stopDiscovery()
         activeEndpointId?.let {
@@ -174,11 +182,18 @@ class AaNearbyManager(
                 _discoveredEndpoints.value = current
             }
 
-            // Auto-connect
+            // Auto-connect: only if autoConnect enabled and no active connection
             if (autoConnect && !isConnecting && activeEndpointId == null) {
-                if (lastDeviceName.isEmpty() || lastDeviceName == info.endpointName) {
-                    OalLog.i(TAG, "Auto-connecting to ${info.endpointName}")
+                if (defaultPhoneName.isEmpty()) {
+                    // No default set — connect to first found
+                    OalLog.i(TAG, "Auto-connecting to ${info.endpointName} (no default set)")
                     connectToEndpoint(endpointId)
+                } else if (defaultPhoneName == info.endpointName) {
+                    // Default phone found — connect
+                    OalLog.i(TAG, "Auto-connecting to default phone: ${info.endpointName}")
+                    connectToEndpoint(endpointId)
+                } else {
+                    OalLog.d(TAG, "Ignoring ${info.endpointName} (waiting for default: $defaultPhoneName)")
                 }
             }
         }
@@ -194,7 +209,8 @@ class AaNearbyManager(
     private val connectionCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
             OalLog.i(TAG, "Connection initiated with ${info.endpointName}, accepting")
-            lastDeviceName = info.endpointName
+            _connectedPhoneName.value = info.endpointName
+            onPhoneConnected?.invoke(info.endpointName)
             isRunning = false
             connectionsClient.stopDiscovery()
             connectionsClient.acceptConnection(endpointId, payloadCallback)

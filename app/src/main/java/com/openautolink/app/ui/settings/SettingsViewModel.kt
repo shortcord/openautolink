@@ -54,6 +54,8 @@ data class SettingsUiState(
     val volumeOffsetMedia: Int = AppPreferences.DEFAULT_VOLUME_OFFSET_MEDIA,
     val volumeOffsetNavigation: Int = AppPreferences.DEFAULT_VOLUME_OFFSET_NAVIGATION,
     val volumeOffsetAssistant: Int = AppPreferences.DEFAULT_VOLUME_OFFSET_ASSISTANT,
+    // Multi-phone
+    val defaultPhoneName: String = AppPreferences.DEFAULT_DEFAULT_PHONE_NAME,
 )
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
@@ -94,6 +96,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         preferences.volumeOffsetMedia,
         preferences.volumeOffsetNavigation,
         preferences.volumeOffsetAssistant,
+        preferences.defaultPhoneName,
     ) { values: Array<Any> ->
         SettingsUiState(
             videoAutoNegotiate = values[0] as Boolean,
@@ -126,6 +129,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             volumeOffsetMedia = values[27] as Int,
             volumeOffsetNavigation = values[28] as Int,
             volumeOffsetAssistant = values[29] as Int,
+            defaultPhoneName = values[30] as String,
         )
     }.stateIn(
         viewModelScope,
@@ -292,6 +296,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun updateVolumeOffsetAssistant(offset: Int) {
         viewModelScope.launch { preferences.setVolumeOffsetAssistant(offset) }
+    }
+
+    fun clearDefaultPhone() {
+        viewModelScope.launch {
+            preferences.setDefaultPhoneName("")
+            com.openautolink.app.session.SessionManager.instanceOrNull()?.clearDefaultPhone()
+        }
     }
 
     override fun onCleared() {

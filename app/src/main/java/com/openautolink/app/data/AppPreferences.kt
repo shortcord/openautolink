@@ -79,6 +79,9 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val VOLUME_OFFSET_NAVIGATION = intPreferencesKey("volume_offset_navigation")
         val VOLUME_OFFSET_ASSISTANT = intPreferencesKey("volume_offset_assistant")
 
+        // Multi-phone: default phone to auto-connect to
+        val DEFAULT_PHONE_NAME = stringPreferencesKey("default_phone_name")
+
         const val DEFAULT_VIDEO_AUTO_NEGOTIATE = true
         const val DEFAULT_VIDEO_CODEC = "h264"
         const val DEFAULT_VIDEO_FPS = 60
@@ -115,6 +118,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_VOLUME_OFFSET_MEDIA = 0
         const val DEFAULT_VOLUME_OFFSET_NAVIGATION = 0
         const val DEFAULT_VOLUME_OFFSET_ASSISTANT = 0
+        const val DEFAULT_DEFAULT_PHONE_NAME = "" // empty = connect to first found
     }
 
     val videoAutoNegotiate: Flow<Boolean> = dataStore.data.map { prefs ->
@@ -401,5 +405,14 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
     }
     suspend fun setVolumeOffsetAssistant(offset: Int) {
         dataStore.edit { it[VOLUME_OFFSET_ASSISTANT] = offset.coerceIn(-100, 100) }
+    }
+
+    // Default phone name for auto-connect
+    val defaultPhoneName: Flow<String> = dataStore.data.map { prefs ->
+        prefs[DEFAULT_PHONE_NAME] ?: DEFAULT_DEFAULT_PHONE_NAME
+    }
+
+    suspend fun setDefaultPhoneName(name: String) {
+        dataStore.edit { it[DEFAULT_PHONE_NAME] = name }
     }
 }

@@ -10,6 +10,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,8 +26,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -242,6 +246,17 @@ fun ProjectionScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // Switch Phone button
+            DraggableOverlayButton(
+                icon = Icons.Default.PhoneAndroid,
+                contentDescription = "Switch Phone",
+                onClick = { viewModel.showPhoneChooser() },
+                positionKey = "overlay_switch_phone",
+                modifier = Modifier.testTag("switchPhoneButton"),
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             // Stats button — draggable
             DraggableOverlayButton(
                 icon = Icons.Default.Info,
@@ -295,6 +310,105 @@ fun ProjectionScreen(
             }
         }
 
+        // Phone chooser overlay — slides in from right
+        val showChooser by viewModel.showPhoneChooser.collectAsStateWithLifecycle()
+        val endpoints by viewModel.discoveredEndpoints.collectAsStateWithLifecycle()
+        AnimatedVisibility(
+            visible = showChooser,
+            enter = slideInHorizontally { it }, // slide in from right
+            exit = slideOutHorizontally { it },  // slide out to right
+        ) {
+            PhoneChooserOverlay(
+                endpoints = endpoints,
+                onSelect = { id, name -> viewModel.selectPhone(id, name) },
+                onDismiss = { viewModel.dismissPhoneChooser() },
+            )
+        }
+
+    }
+}
+
+@Composable
+private fun PhoneChooserOverlay(
+    endpoints: List<com.openautolink.app.transport.direct.AaNearbyManager.DiscoveredEndpoint>,
+    onSelect: (id: String, name: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.85f))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(24.dp)
+                .clickable(enabled = false) {} // prevent click-through
+                .width(360.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "Select Phone",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (endpoints.isEmpty()) {
+                Spacer(modifier = Modifier.height(24.dp))
+                CircularProgressIndicator(
+                    modifier = Modifier.size(32.dp),
+                    strokeWidth = 3.dp,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "Searching for phones...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Make sure the companion app is running on your phone",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+            } else {
+                Spacer(modifier = Modifier.height(12.dp))
+                endpoints.forEach { endpoint ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onSelect(endpoint.id, endpoint.name) }
+                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Default.PhoneAndroid,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            endpoint.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
     }
 }
 

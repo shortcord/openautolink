@@ -97,7 +97,8 @@ class DirectAaSession(
     private val btHandshake = AaBtHandshakeManager(scope)
 
     // Nearby Connections for peer-to-peer transport (no WiFi needed)
-    private var nearbyManager: AaNearbyManager? = null
+    private var _nearbyManager: AaNearbyManager? = null
+    val nearbyManager: AaNearbyManager? get() = _nearbyManager
 
     // WiFi Direct for native mode
     private var wifiDirectManager: AaWifiDirectManager? = null
@@ -118,7 +119,9 @@ class DirectAaSession(
 
     // Bluetooth MAC — set before start() for BT service announcement
     var btMacAddress = ""
-
+    // Multi-phone: default phone name and callback
+    var defaultPhoneName = ""
+    var onPhoneConnected: ((name: String) -> Unit)? = null
     /** Hotspot credentials for BT handshake. Set from settings before start(). */
     var hotspotSsid: String
         get() = btHandshake.hotspotSsid
@@ -148,14 +151,17 @@ class DirectAaSession(
 
         // Start Nearby Connections discovery for nearby mode
         if (directTransport == "nearby") {
-            nearbyManager?.stop()
-            nearbyManager = AaNearbyManager(context, scope) { nearbySocket ->
+            _nearbyManager?.stop()
+            _nearbyManager = AaNearbyManager(context, scope) { nearbySocket ->
                 scope.launch(Dispatchers.IO) {
-                    OalLog.i(TAG, "Nearby socket ready — starting AA session")
+                    OalLog.i(TAG, "Nearby socket ready \u2014 starting AA session")
                     handleConnection(nearbySocket)
                 }
+            }.also { mgr ->
+                mgr.defaultPhoneName = defaultPhoneName
+                mgr.onPhoneConnected = onPhoneConnected
             }
-            nearbyManager?.start()
+            _nearbyManager?.start()
         }
 
         // Start WiFi Direct group for native mode — creates P2P AP,
@@ -206,8 +212,8 @@ class DirectAaSession(
         serverJob?.cancel()
         serverJob = null
         btHandshake.stop()
-        nearbyManager?.stop()
-        nearbyManager = null
+        _nearbyManager?.stop()
+        _nearbyManager = null
         wifiDirectManager?.stop()
         wifiDirectManager = null
         try { clientSocket?.close() } catch (_: Exception) {}

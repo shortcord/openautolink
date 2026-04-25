@@ -304,6 +304,48 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // --- Default Phone (Nearby transport only) ---
+        if (uiState.directTransport == "nearby") {
+            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.5f))
+            Spacer(modifier = Modifier.height(16.dp))
+            SectionHeader("Default Phone")
+            Spacer(modifier = Modifier.height(4.dp))
+
+            val defaultPhone = uiState.defaultPhoneName
+            if (defaultPhone.isNotBlank()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        defaultPhone,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    FilledTonalButton(
+                        onClick = { viewModel.clearDefaultPhone() },
+                    ) {
+                        Text("Clear")
+                    }
+                }
+                Text(
+                    "Auto-connects to this phone when discovered. Use the Switch Phone button on the projection screen to change.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            } else {
+                Text(
+                    "No default phone set. Will connect to the first phone found.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         // --- Hotspot Credentials (hotspot transport only) ---
         if (uiState.directTransport == "hotspot") {
             SectionHeader("Phone Hotspot Credentials")

@@ -23,10 +23,12 @@ import com.openautolink.app.input.TouchForwarderImpl
 import com.openautolink.app.navigation.ManeuverState
 import com.openautolink.app.session.SessionManager
 import com.openautolink.app.session.SessionState
+import com.openautolink.app.transport.direct.AaNearbyManager
 import com.openautolink.app.video.VideoStats
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
@@ -92,6 +94,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _videoStats = MutableStateFlow(VideoStats())
     private val _audioStats = MutableStateFlow(AudioStats())
     private val _showStats = MutableStateFlow(false)
+    private val _showPhoneChooser = MutableStateFlow(false)
 
     // Pending surface — stored when surfaceCreated fires before decoder exists.
     // Attached to decoder on session start or when decoder becomes available.
@@ -172,6 +175,13 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     init {
         registerTransportNetworkCallback()
 
+        // Collect connected phone name from Nearby
+        viewModelScope.launch {
+            AaNearbyManager.connectedPhoneName.collect { name ->
+                _phoneName.value = name
+            }
+        }
+
         // Collect video and audio stats when streaming
         viewModelScope.launch {
             sessionManager.sessionState.collect { state ->
@@ -251,6 +261,10 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             val volNav = preferences.volumeOffsetNavigation.first()
             val volAssistant = preferences.volumeOffsetAssistant.first()
 
+            // Load default phone name for auto-connect
+            val defaultPhone = preferences.defaultPhoneName.first()
+            sessionManager.setDefaultPhoneName(defaultPhone)
+
             sessionManager.start(
                 codecPreference = codec,
                 micSourcePreference = micSrc,
@@ -284,6 +298,43 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
 
     fun disconnect() {
         sessionManager.stop()
+    }
+
+    // --- Multi-phone: Phone Chooser ---
+
+    /** Discovered endpoints for the phone chooser overlay. */
+    val discoveredEndpoints = AaNearbyManager.discoveredEndpoints
+
+    /** Whether the phone chooser overlay is showing. */
+    val showPhoneChooser: StateFlow<Boolean> = _showPhoneChooser.asStateFlow()
+
+    /** Show the phone chooser: disconnect, restart discovery without auto-connect. */
+    fun showPhoneChooser() {
+        _showPhoneChooser.value = true
+        sessionManager.stop()
+        hasConnected = false
+        // Restart with empty default so all phones are shown
+        viewModelScope.launch {
+            sessionManager.setDefaultPhoneName("")
+            connect() // will discover but not auto-connect since chooser is showing
+        }
+    }
+
+    /** User selected a phone from the chooser. */
+    fun selectPhone(endpointId: String, phoneName: String) {
+        _showPhoneChooser.value = false
+        // Save as default and connect
+        viewModelScope.launch {
+            preferences.setDefaultPhoneName(phoneName)
+            sessionManager.setDefaultPhoneName(phoneName)
+        }
+        // Connect to the selected endpoint
+        sessionManager.connectToNearbyEndpoint(endpointId)
+    }
+
+    /** Close the phone chooser without selecting. */
+    fun dismissPhoneChooser() {
+        _showPhoneChooser.value = false
     }
 
     /**
