@@ -4,12 +4,12 @@
 
 # OpenAutoLink
 
-> **Active Development Notice**
-> This project has been under heavy development, but as of April 21, 2026 I think I have everything pretty stable and fully featured (but I am sure I will keep tweaking/hacking/adding regularly). Having said that...I only have one car, a 2024 Chevrolet Blazer EV RS AWD. So, I am only testing on that. I am primarily using a Khadas VIM4 SBC running Armbian Minimal. This is overkill, but I had one and it has fast EMMC which helps boot times a lot. Your boot times will very depending on your SBC choice and OS setup. I also use an OrangePi Zero2 to test with (Armbian Minimal as well) and it works great too, but takes a bit longer to boot. Feeback, conversation and submitting issues are invited!
+> **Direct Mode — No Bridge Required**
+> As of v0.1.177, OpenAutoLink runs Android Auto directly on the AAOS head unit — no SBC, no bridge hardware, no Ethernet cable. The phone connects wirelessly via Google Nearby Connections through the OpenAutoLink Companion app on the phone. The old bridge architecture has been fully removed.
 
 [![CI](https://github.com/mossyhub/openautolink/actions/workflows/ci.yml/badge.svg)](https://github.com/mossyhub/openautolink/actions/workflows/ci.yml)
 
-OpenAutoLink is an open-source wireless Android Auto bridge for AAOS head units. An SBC handles the phone's Android Auto session over WiFi, then streams video, audio, and control data to an app on the car's display over Ethernet. The goal is to restore a native-feeling Android Auto experience on vehicles that ship with AAOS but without built-in Android Auto support.
+OpenAutoLink is an open-source wireless Android Auto solution for AAOS head units. The car app speaks the Android Auto protocol directly to the phone over WiFi — no SBC bridge, no USB adapter, no extra hardware. A companion app on the phone handles discovery and connection.
 
 <p align="center">
   <img src="docs/screenshots/AA-Streaming-Screenshot.jpg" alt="Android Auto streaming on a 2024 Blazer EV via OpenAutoLink" width="720">
@@ -20,22 +20,21 @@ OpenAutoLink is an open-source wireless Android Auto bridge for AAOS head units.
 <p align="center">
   <img src="docs/screenshots/AA-EV-Battery-Maps.jpg" alt="Google Maps showing EV battery percentage via OpenAutoLink" width="720">
   <br>
-  <em>Google Maps displaying the car's EV battery level (92%) — real vehicle data forwarded through OpenAutoLink into Android Auto</em>
+  <em>Google Maps displaying the car's EV battery level — real vehicle data forwarded through OpenAutoLink into Android Auto</em>
 </p>
 
-> **First-of-its-kind EV integration:** OpenAutoLink forwards real EV battery percentage, range, fuel type, and charge port data from the car into Android Auto. Google Maps uses this to show battery level alongside navigation — something no other aftermarket solution provides, including OEM Android Auto implementations.
+> **First-of-its-kind EV integration:** OpenAutoLink forwards real EV battery percentage, range, fuel type, and charge port data from the car into Android Auto. Google Maps uses this to show battery level alongside navigation — something no other aftermarket solution provides.
 
-> **Discuss on XDA:** [OpenAutoLink — Wireless Android Auto bridge for AAOS (GM EVs)](https://xdaforums.com/t/open-source-openautolink-wireless-android-auto-bridge-for-aaos-gm-evs.4785192/) — questions, feedback, and build reports welcome.
+> **Discuss on XDA:** [OpenAutoLink — Wireless Android Auto for AAOS (GM EVs)](https://xdaforums.com/t/open-source-openautolink-wireless-android-auto-bridge-for-aaos-gm-evs.4785192/)
 
 ## Contents
 
 - [Why This Exists](#why-this-exists)
-- [What It Does](#what-it-does)
 - [How It Works](#how-it-works)
-- [Why Not a USB Adapter?](#why-not-a-usb-adapter)
-- [Video, Resolution, and Display Behavior](#video-resolution-and-display-behavior)
+- [Features](#features)
 - [What You Need](#what-you-need)
 - [Quick Start](#quick-start)
+- [Video and Display](#video-and-display)
 - [Repository Layout](#repository-layout)
 - [Documentation](#documentation)
 - [Status](#status)
@@ -46,356 +45,188 @@ OpenAutoLink is an open-source wireless Android Auto bridge for AAOS head units.
 
 ## Why This Exists
 
-Starting with the 2024 model year, GM dropped Apple CarPlay and Android Auto from its electric vehicles in favor of Google built-in infotainment. OpenAutoLink exists to bring Android Auto back by bridging a phone's Android Auto session to the car's AAOS head unit over the network, without relying on proprietary USB adapter hardware.
-
-The current design is purpose-built for this setup:
-
-- The phone connects wirelessly to the SBC over Bluetooth and WiFi.
-- The SBC runs the Android Auto session and relays it over TCP.
-- The AAOS app renders video and audio, forwards touch and car data, and manages reconnection.
-
-## What It Does
-
-- Wireless Android Auto over Bluetooth + WiFi, no phone cable required
-- **EV battery and energy data in Android Auto** — battery percentage, range, fuel type, and charge port forwarded from the car's VHAL into Android Auto, where Google Maps displays it natively alongside navigation. No other aftermarket bridge or OEM wireless Android Auto implementation does this
-- Up to 1080p60 by default, with 1440p and 4K available through AA Developer Mode and supported codecs
-- Automatic display adaptation for wide and irregular AAOS displays
-- Audio forwarding for media, navigation, phone calls, and voice assistant
-- Touch input, steering wheel controls, and microphone forwarding
-- Instrument-cluster integration for turn-by-turn and media metadata
-- Multi-phone pairing and one-tap switching
-- Automatic reconnect after car sleep / power loss
-- Bridge auto-update from GitHub Releases
-- Fully open-source app, bridge, protocol, and deployment scripts
-
-<details>
-<summary>📱 App Screenshots</summary>
-<br>
-<p>
-  <a href="docs/screenshots/01-projection-screen-idle.png"><img src="docs/screenshots/01-projection-screen-idle.png" alt="Projection screen (idle)" width="400"></a>
-  <a href="docs/screenshots/02-settings-connection-tab-top.png"><img src="docs/screenshots/02-settings-connection-tab-top.png" alt="Settings — Connection" width="400"></a>
-</p>
-<p>
-  <a href="docs/screenshots/03-settings-phones-tab.png"><img src="docs/screenshots/03-settings-phones-tab.png" alt="Settings — Phones" width="400"></a>
-  <a href="docs/screenshots/04-settings-bridge-tab-top.png"><img src="docs/screenshots/04-settings-bridge-tab-top.png" alt="Settings — Bridge" width="400"></a>
-</p>
-<p>
-  <a href="docs/screenshots/05-settings-display-tab-top.png"><img src="docs/screenshots/05-settings-display-tab-top.png" alt="Settings — Display" width="400"></a>
-  <a href="docs/screenshots/06-settings-video-tab-top.png"><img src="docs/screenshots/06-settings-video-tab-top.png" alt="Settings — Video" width="400"></a>
-</p>
-<p>
-  <a href="docs/screenshots/07-settings-audio-tab-top.png"><img src="docs/screenshots/07-settings-audio-tab-top.png" alt="Settings — Audio" width="400"></a>
-  <a href="docs/screenshots/09-diagnostics-system-tab-top.png"><img src="docs/screenshots/09-diagnostics-system-tab-top.png" alt="Diagnostics — System" width="400"></a>
-</p>
-</details>
+Starting with the 2024 model year, GM dropped Apple CarPlay and Android Auto from its electric vehicles in favor of Google built-in infotainment. OpenAutoLink brings Android Auto back — the car app runs the AA protocol directly, connecting to the phone over WiFi with no intermediate hardware.
 
 ## How It Works
 
-An SBC bridges the phone's Android Auto session to the car over WiFi + Ethernet. The car runs the OpenAutoLink app and the SBC runs the bridge. [DietPi](https://dietpi.com/) is the recommended OS — it is lightweight, boots quickly from eMMC, and supports a wide range of ARM64 boards out of the box.
+The OpenAutoLink AAOS app runs the full Android Auto protocol stack natively. A companion app on the phone advertises via Google Nearby Connections. The car discovers the phone, upgrades to WiFi Direct, and starts an AA session — all wirelessly, no cables.
 
 ```
-Android Phone ──WiFi TCP:5277──▶                    ┌── Control :5288 (JSON lines)
-                  BT pairing    ▶ SBC Bridge ──Eth──▶├── Video   :5290 (binary frames)
-                                                    └── Audio   :5289 (binary frames)
-                                                          ▼
-                                                  Car Head Unit App (AAOS)
-                                                    Renders video/audio
-                                                    Forwards touch/GNSS/VHAL
+┌─────────────────┐                              ┌─────────────────────────┐
+│   Android Phone  │   Google Nearby Connections  │   Car Head Unit (AAOS)  │
+│                  │◀──── BT discovery ──────────▶│                         │
+│  OAL Companion   │◀──── WiFi Direct upgrade ──▶│   OpenAutoLink App      │
+│  app advertises   │◀──── AA protocol (TCP) ───▶│   renders video/audio   │
+│                  │                              │   forwards touch/GNSS   │
+└─────────────────┘                              └─────────────────────────┘
 ```
 
-The short version is simple: the phone talks Android Auto to the SBC, and the SBC talks OpenAutoLink's TCP protocol to the AAOS app.
+No SBC. No Ethernet. No bridge binary. The phone and car talk directly.
 
-## Why Not a USB Adapter?
+## Features
 
-The CPC200-CCPA and similar USB adapters proved that Android Auto on AAOS was possible, but they are closed-source dongles with fixed assumptions about resolution, capabilities, and car integration. OpenAutoLink replaces that model with a software-defined bridge that can adapt to the vehicle and evolve over time.
-
-| | CPC200 / USB Adapter | OpenAutoLink (SBC Bridge) |
-|---|---|---|
-| **USB permission prompt** | Every startup on some GM vehicles | Never, because the car sees a network device instead of a USB accessory session |
-| **Resolution** | Usually fixed at 800×480 or sometimes 720p | Up to 1080p60 by default, with 1440p and 4K available through AA Developer Mode and supported codecs |
-| **Codec** | H.264 only | H.264, H.265, and VP9 protocol support, with auto-negotiation |
-| **Display adaptation** | Fixed output, often stretched or letterboxed | Reads AAOS display dimensions and cutout insets to compute safe areas and aspect handling |
-| **Vehicle data to AA** | None or minimal | Full forwarding pipeline from VHAL and sensors; AA and Maps appear to use only a small subset today, but the broader data path is already there for future support |
-| **EV support** | None | Sends EV-related data such as battery percentage, range, fuel type, and connector type |
-| **Navigation cluster** | Not available | Turn-by-turn on the instrument cluster |
-| **Media cluster** | Not available | Album art and track info on cluster-capable vehicles |
-| **Multi-phone** | Not available | Pair multiple phones, choose a default, switch in app |
-| **Microphone** | Typically phone-side only | Car mic or phone mic, configurable |
-| **Steering wheel buttons** | Limited | Media and voice-related forwarding where AAOS allows it |
-| **Updates** | Replace or reflash hardware | Bridge updates via GitHub Releases, app updates via Play Console |
-| **Wide display / ultra-wide** | Usually poor | Native adaptation for very wide AAOS displays |
-| **Customization** | None | Insets, display mode, video scaling, DPI, and related settings |
-| **Source code** | Closed | Fully open-source |
-| **Cost** | Adapter hardware | Commodity SBC + USB Ethernet adapter |
-
-## Video, Resolution, and Display Behavior
-
-### Video Modes
-
-By default, OpenAutoLink uses auto-negotiation. The bridge offers supported codec and resolution tiers in the Android Auto service discovery response, and the phone picks the best combination it supports.
-
-| Resolution | Codec | Notes |
-|-----------|-------|-------|
-| 480p (800×480) | H.264 | Always available |
-| 720p (1280×720) | H.264 | Always available |
-| 1080p (1920×1080) | H.264, H.265, VP9 | Main tier |
-| 1440p (2560×1440) | H.265, VP9 | Requires AA Developer Mode on the phone |
-| 4K (3840×2160) | H.265, VP9 | Requires AA Developer Mode on the phone |
-
-H.264 generally tops out at 1080p for practical phone encoder support. H.265 and VP9 are the paths to 1440p and 4K.
-
-<details>
-<summary>🎬 Video Settings Screenshots</summary>
-<br>
-<p>
-  <a href="docs/screenshots/06-settings-video-tab-top.png"><img src="docs/screenshots/06-settings-video-tab-top.png" alt="Video — Auto Negotiate" width="400"></a>
-  <a href="docs/screenshots/14-settings-video-manual-top.png"><img src="docs/screenshots/14-settings-video-manual-top.png" alt="Video — Manual Mode" width="400"></a>
-</p>
-<p>
-  <a href="docs/screenshots/14-settings-video-manual-scrolled1.png"><img src="docs/screenshots/14-settings-video-manual-scrolled1.png" alt="Video — Resolution Tiers" width="400"></a>
-  <a href="docs/screenshots/06-settings-video-tab-scrolled1.png"><img src="docs/screenshots/06-settings-video-tab-scrolled1.png" alt="Video — Scaling & Margins" width="400"></a>
-</p>
-</details>
-
-### Enabling Higher Resolutions
-
-1. On the phone, enable [Android Auto Developer Mode](https://developer.android.com/training/cars/testing#developer-mode).
-2. Open Android Auto settings, tap the version entry 10 times, then open Developer settings.
-3. Set Video resolution to the highest available tier.
-4. In the OpenAutoLink app, go to Settings → Video.
-5. Leave Auto enabled to let the phone pick the best supported mode, or manually choose a codec and resolution.
-
-> **Blazer EV note:** On a 2024 Chevrolet Blazer EV, 1440p at 230 DPI is a great combination — text and UI elements are sharp and well-proportioned for the wide display.
-
-### Display Adaptation
-
-OpenAutoLink is designed for AAOS displays that are not simple 16:9 rectangles. The "pixel aspect" is auto-calcualted so that the AA 16:9 video stream is perfectly displayed even on ultra-wide screens. The app includes a content inset editor that lets you push Android Auto's UI inward from any edge of the screen, so buttons and controls stay away from curved bezels or clipped areas. I reccomend pulling the top down about 50-55 pixels for the Blazer EV screen.
-
-<details>
-<summary>🖥️ Display & Layout Screenshots</summary>
-<br>
-<p>
-  <a href="docs/screenshots/05-settings-display-tab-top.png"><img src="docs/screenshots/05-settings-display-tab-top.png" alt="Display Mode & Safe Area" width="400"></a>
-  <a href="docs/screenshots/15-safe-area-editor.png"><img src="docs/screenshots/15-safe-area-editor.png" alt="Safe Area Editor" width="400"></a>
-</p>
-<p>
-  <a href="docs/screenshots/16-content-inset-editor.png"><img src="docs/screenshots/16-content-inset-editor.png" alt="Content Inset Editor" width="400"></a>
-  <a href="docs/screenshots/05-settings-display-tab-scrolled1.png"><img src="docs/screenshots/05-settings-display-tab-scrolled1.png" alt="Display — Features & Toggles" width="400"></a>
-</p>
-</details>
+- **Zero hardware** — no SBC, no USB adapter, no cables. Phone to car, wirelessly
+- **EV battery data in Android Auto** — battery %, range, fuel type, charge port forwarded from VHAL into AA. Google Maps shows battery level alongside navigation
+- **H.264, H.265, and VP9** video with auto-negotiation. Up to 4K with AA Developer Mode
+- **AAC-LC audio** — compressed audio reduces WiFi bandwidth ~10× vs PCM
+- **Multi-phone support** — set a default phone, switch between phones with an overlay chooser
+- **Pixel-perfect display adaptation** for wide and ultra-wide AAOS screens
+- **Per-purpose audio volume** — separate sliders for media, navigation, and assistant
+- **Custom key remapping** — map any physical button to any AA action
+- **Microphone enhancement** — NoiseSuppressor, AGC, AcousticEchoCanceler
+- **Instrument cluster** — turn-by-turn navigation and media metadata on supported vehicles
+- **WiFi band detection** — shows 2.4 GHz vs 5 GHz in the stats overlay
+- **Bluetooth service announcement** — phone can discover the car's BT for HFP/A2DP
+- **Phone status** — signal strength and call state parsed from the AA protocol
+- **Full sensor suite** — GPS, accelerometer, gyroscope, compass, EV energy model (21 sensor types)
+- **Steering wheel controls** — media, voice, and DPAD forwarded to AA
+- **Configurable display** — fullscreen/windowed, safe area insets, DPI, margins, scaling mode
+- **Stats overlay** — codec, resolution, FPS, bitrate, WiFi band, decoder info
+- **Automatic reconnect** — car sleep → wake → projection resumes
 
 ## What You Need
 
-### Hardware
-
 | Item | Notes |
 |------|-------|
-| **Single-board computer (SBC)** | ARM64 with onboard Ethernet, 5 GHz WiFi, and Bluetooth 4.0+ |
-| **USB Ethernet adapter** | USB-C strongly recommended so it plugs directly into the car |
-| **Short Ethernet cable** | Connects the SBC's onboard Ethernet to the USB adapter |
-| **Power for the SBC** | USB-C power supply or in-car USB-C power source |
-| **Storage** | eMMC preferred for faster boot; microSD works but is slower |
+| **AAOS vehicle** | Tested on 2024 Chevrolet Blazer EV. Other GM EVs likely work |
+| **Android phone** | Running the OpenAutoLink Companion app |
+| **Google Play Console account** | To publish the AAOS app to your car |
 
-### Choosing an SBC
+That's it. No SBC, no Ethernet adapter, no extra hardware.
 
-The bridge relays already-encoded video and audio, so raw CPU performance matters less than boot time, WiFi quality, and reliable networking.
+### Phone Setup
 
-| Priority | Why |
-|----------|-----|
-| **Onboard Ethernet NIC** | Required for the car-side network link |
-| **5 GHz WiFi (onboard)** | Required for stable wireless Android Auto streaming |
-| **Bluetooth 4.0+** | Required for pairing and WiFi credential exchange |
-| **eMMC storage** | Faster and more reliable than microSD; meaningfully reduces boot time |
-| **CPU / RAM** | Mostly affects boot time; modest ARM64 hardware is enough |
-| **Size** | Smaller is easier to hide in the console |
+Install the **OpenAutoLink Companion** app on your phone. It handles:
+- Nearby Connections advertising (phone discovery)
+- Android Auto Service auto-start detection
+- Custom device name for multi-phone identification
 
-**Recommended OS: [DietPi](https://dietpi.com/) or [Armbian Minimal](https://www.armbian.com/)** — both are lightweight Debian-based distributions that boot quickly and support a wide range of ARM64 boards. Use the headless/minimal server image.
-
-#### Development / tested boards
-
-The primary development board is a **Khadas VIM4** (Amlogic A311D2, 8 GB RAM, 32 GB eMMC, Wi-Fi 6, GigE). The **Raspberry Pi 5** is also tested and works well. Both are overkill for this workload — the bridge does not benefit from their CPU headroom — but they are convenient for development.
-
-The current daily-driver board is an **Orange Pi Zero2** (Allwinner H616, 1 GB RAM, Wi-Fi 5, GigE) running Armbian Minimal. It boots and connects in about 30–40 seconds and is compact enough to hide easily in the center console.
-
-#### Recommended boards (DietPi, all criteria met)
-
-These boards hit the right balance of cost, boot speed, and wireless performance — all have onboard GigE, onboard 5 GHz WiFi + Bluetooth, and eMMC:
-
-| Board | Approx. Price | SoC | RAM | WiFi | Notes |
-|-------|--------------|-----|-----|------|-------|
-| **Orange Pi 5B** | ~$65–$80 | RK3588S | 8 GB | Wi-Fi 6 (onboard) | Best value sweet spot; 16–128 GB eMMC onboard |
-| **Radxa ROCK 5B** | ~$90–$130 | RK3588 | 4–16 GB | Wi-Fi 6E (M.2 module) | Dual 2.5 GbE; eMMC slot |
-| **Orange Pi 3B** | ~$35–$45 | RK3566 | 1–8 GB | Wi-Fi 5 (onboard) | Good lower-cost option; eMMC slot |
-
-#### Validated budget board
-
-| Board | Approx. Price | SoC | RAM | WiFi | Notes |
-|-------|--------------|-----|-----|------|-------|
-| **Orange Pi Zero2** | ~$20–$30 | Allwinner H616 | 1 GB | Wi-Fi 5 (onboard) | Currently in daily use with Armbian Minimal; compact, boots fast, very affordable |
-
-#### Other budget boards (pending validation)
-
-These meet the spec on paper and are cheap enough to be worth trying:
-
-| Board | Approx. Price | Notes |
-|-------|--------------|-------|
-| **Orange Pi Zero 3** | ~$20–$30 | Allwinner H618; onboard GigE + Wi-Fi 5 + BT 5.0; up to 4 GB RAM; compact |
-| **Radxa ROCK 3A / 3C** | ~$35–$50 | RK3566; eMMC slot; onboard WiFi on some variants |
-
-### Physical Connection
-
-```
-┌─────────────┐    Ethernet     ┌─────────────────┐         ┌──────────────┐
-│     SBC     │───── cable ────▶│  USB Ethernet   │──USB-C─▶│  Car USB     │
-│  (bridge)   │                 │    adapter      │         │    port      │
-│             │                 └─────────────────┘         │ (head unit)  │
-│  WiFi AP ◀──── phone connects via BT + WiFi               └──────────────┘
-│  Power ◀────── USB-C from 12V adapter or spare USB port
-└─────────────┘
-```
-
-1. Connect the SBC's onboard Ethernet port to the USB Ethernet adapter.
-2. Plug the USB Ethernet adapter into the car's USB port.
-3. Power the SBC from a 12 V USB-C adapter or a spare USB power source.
-4. Pair the phone over Bluetooth and let it join the SBC's 5 GHz WiFi AP.
-
-Blazer EV note: the USB-C port inside the center console armrest compartment is the one known to enumerate USB network devices to the head unit.
-
-### Placement
-
-The SBC, adapter, and cable can usually live entirely inside the center console compartment. If the SBC needs more airflow, use a slightly longer Ethernet cable and move it to a better-ventilated spot while keeping the USB NIC on the working car port.
+The companion app is in the `companion/` directory of this repo.
 
 ## Quick Start
 
-> There is no public Play Store listing today. Each user must publish the AAOS app through their own Google Play Console account.
+### 1. Build and Install the Companion App (Phone)
 
-### Bridge Setup
-
-No local build is required. The SBC install script downloads the latest prebuilt bridge binary from GitHub Releases.
-
-1. Flash [DietPi](https://dietpi.com/) or Armbian Minimal (or any ARM64 Linux server image) onto your SBC.
-2. Connect the SBC's onboard Ethernet to your router or laptop to get a DHCP address.
-3. SSH in and run:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/mossyhub/openautolink/main/bridge/sbc/install.sh | sudo bash
+```powershell
+cd companion
+..\gradlew assembleDebug
+# Install on your phone via ADB
+adb install -r app/build/outputs/apk/debug/*.apk
 ```
 
-The installer downloads packages, deploys the bridge, and applies the network configuration. When it finishes, it prints a summary showing that the onboard Ethernet is now a static car connection and the WiFi radio is a phone hotspot — **the SBC no longer has internet or general SSH access through those adapters.**
+### 2. Build and Publish the Car App (AAOS)
 
-After a reboot, all services start automatically and the bridge is ready for the car. If you need further ssh access, you can use the in-app "Bridge" settings to set a static Wifi password (in normal operation the Wifi password is randomly geenrated), then connect your laptop to it.
-
-### App Setup
-
-Because this is an AAOS app rather than a normal phone app, installation on the car goes through your own Google Play Console account and an AAOS release track.
+Because this is an AAOS app, installation on the car goes through your own Google Play Console account:
 
 1. Create a [Google Play Console](https://play.google.com/console/) developer account.
 2. Create a new app and configure an AAOS release track.
 3. Change the package name in `app/build.gradle.kts` from `com.openautolink.app` to your own unique ID.
 4. Generate an upload keystore:
-
    ```powershell
    .\scripts\create-upload-keystore.ps1
    ```
-
 5. Build and sign the release AAB:
-
    ```powershell
    .\scripts\bundle-release.ps1
    ```
+6. Upload the AAB to Play Console, publish, and install on the car via Play Store.
+7. Grant the **Car Information** permission: Settings → Apps → OpenAutoLink → Permissions.
 
-6. Add testers to the AAOS track in Play Console.
-7. Upload the AAB and publish the release.
-8. Accept the tester opt-in invitation for each Google account used on the car.
-9. Install the app from the Play Store on the head unit.
-10. Manually grant the **Car Information** permission in Settings → Apps → OpenAutoLink → Permissions.
+### 3. Connect
+
+1. Open the Companion app on the phone and tap **Start**.
+2. Open OpenAutoLink on the car — it discovers the phone automatically.
+3. Android Auto projection starts within seconds.
+
+## Video and Display
+
+### Resolution Tiers
+
+| Resolution | Codec | Notes |
+|-----------|-------|-------|
+| 480p (800×480) | H.264 | Always available |
+| 720p (1280×720) | H.264 | Always available |
+| 1080p (1920×1080) | H.264, H.265, VP9 | Default tier |
+| 1440p (2560×1440) | H.265, VP9 | Requires AA Developer Mode |
+| 4K (3840×2160) | H.265, VP9 | Requires AA Developer Mode |
+
+By default, the app uses auto-negotiation — the phone picks the best codec and resolution it supports.
+
+### Display Adaptation
+
+OpenAutoLink auto-computes pixel aspect ratio for wide AAOS displays so the 16:9 AA stream renders correctly. A safe area editor lets you push UI inward from screen edges to avoid curved bezels.
+
+> **Blazer EV tip:** 1440p at 230 DPI works well. Pull the top safe area inset down ~50px.
 
 ## Repository Layout
 
 | Component | Language | Location |
 |-----------|----------|----------|
 | **Car App** | Kotlin / Compose | `app/` |
-| **Bridge** | C++20 | `bridge/openautolink/headless/` |
-| **BT/WiFi Services** | Python | `bridge/openautolink/scripts/` |
-| **SBC Deployment** | Bash / systemd | `bridge/sbc/` |
-| **aasdk fork** | C++ | `external/opencardev-aasdk/` |
+| **Companion App** | Kotlin / Compose | `companion/` |
+| **Documentation** | Markdown | `docs/` |
+| **Build Scripts** | PowerShell / Bash | `scripts/` |
+
+### Historical (removed)
+
+The bridge architecture (SBC + C++ binary + Python BT scripts) was removed in the `feature/direct-mode` branch. The app now runs the AA protocol directly. Bridge code remains in the `main` branch history for reference.
 
 ## Documentation
 
 | Doc | Purpose |
 |-----|---------|
 | [Architecture](docs/architecture.md) | Component islands and system structure |
-| [Wire Protocol](docs/protocol.md) | Control, video, and audio protocol details |
-| [Embedded Knowledge](docs/embedded-knowledge.md) | Lessons learned from real-car testing |
-| [Networking](docs/networking.md) | Phone, car, and SSH network model |
-| [Local Testing](docs/testing.md) | Emulator and SBC testing workflow |
-| [Bridge OTA Updates](docs/bridge-update.md) | Update flow and security model |
-| [Work Plan](docs/work-plan.md) | Remaining work and future ideas |
-| [Bridge Build Guide](bridge/sbc/BUILD.md) | Build and deployment details for the SBC |
+| [Wire Protocol](docs/protocol.md) | AA wire protocol details |
+| [Embedded Knowledge](docs/embedded-knowledge.md) | Lessons from real-car testing |
+| [Multi-Phone Plan](docs/multi-phone-nearby.md) | Multi-phone Nearby Connections design |
+| [HUR Feature Comparison](docs/headunit-revived-feature-comparison.md) | Feature parity tracking vs HUR |
+| [Local Testing](docs/testing.md) | Emulator and device testing workflow |
 
 ## Status
 
-Active development, but stable for daily use. Core features are implemented and working on real hardware on a 2024 Chevrolet Blazer EV:
+Active development, stable for daily use on a 2024 Chevrolet Blazer EV.
 
-- Video
-- Audio
+**Working:**
+- Video (H.264/H.265/VP9, up to 4K)
+- Audio (PCM and AAC-LC)
 - Touch input
-- Vehicle and sensor data forwarding
-- **EV energy model data** (battery %, range, fuel type, charge port) visible in Google Maps
-- Cluster navigation
-- Media metadata
-- Microphone support
-- Steering wheel control forwarding
+- Microphone (with NS + AGC + AEC)
+- Vehicle data forwarding (VHAL → AA)
+- EV energy model (battery %, range, fuel type, charge port)
+- Cluster navigation (turn-by-turn)
+- Media metadata (cluster + MediaSession)
+- Steering wheel controls
+- Multi-phone (default + chooser)
 - Automatic reconnect
-
-<details>
-<summary>🔍 Diagnostics & Vehicle Data Screenshots</summary>
-<br>
-<p>
-  <a href="docs/screenshots/09-diagnostics-system-tab-top.png"><img src="docs/screenshots/09-diagnostics-system-tab-top.png" alt="Diagnostics — System" width="400"></a>
-  <a href="docs/screenshots/10-diagnostics-network-tab.png"><img src="docs/screenshots/10-diagnostics-network-tab.png" alt="Diagnostics — Network" width="400"></a>
-</p>
-<p>
-  <a href="docs/screenshots/11-diagnostics-bridge-tab.png"><img src="docs/screenshots/11-diagnostics-bridge-tab.png" alt="Diagnostics — Bridge" width="400"></a>
-  <a href="docs/screenshots/12-diagnostics-car-tab-top.png"><img src="docs/screenshots/12-diagnostics-car-tab-top.png" alt="Diagnostics — Car / VHAL" width="400"></a>
-</p>
-<p>
-  <a href="docs/screenshots/12-diagnostics-car-tab-scrolled1.png"><img src="docs/screenshots/12-diagnostics-car-tab-scrolled1.png" alt="Diagnostics — VHAL Property Status" width="400"></a>
-  <a href="docs/screenshots/13-diagnostics-logs-tab.png"><img src="docs/screenshots/13-diagnostics-logs-tab.png" alt="Diagnostics — Logs" width="400"></a>
-</p>
-</details>
+- WiFi band detection
 
 ## Known Issues
 
-- **Steering wheel controls on GM EVs:** the left-side rocker currently maps to skip forward and play/pause only. Previous-track is not exposed by GM. The steering-wheel voice button is consumed by the system before the app can intercept it.
-- **"Unsupported device" popup on GM EVs:** the USB Ethernet adapter will trigger a brief cosmetic warning even though networking still works.
-- **The Android Auto stream green or black** AA UI may start out blocky and green or black, but will self recover in 10-20 seconds. Still fighting this one...
+- **Steering wheel controls on GM EVs:** the left-side rocker maps to skip forward and play/pause only. Previous-track is not exposed by GM. The voice button is consumed by the system before the app can intercept it.
+- **"Unsupported device" popup:** if using a USB Ethernet adapter for the legacy bridge mode, GM shows a brief cosmetic warning.
 
 ## Compatibility
 
-OpenAutoLink is not yet known to work across all AAOS vehicles. It is currently validated on a 2024 Chevrolet Blazer EV. Other GM vehicles on similar AAOS platforms may work, but that has not been verified broadly, and non-GM AAOS vehicles may impose different restrictions around USB networking or app access. Currently it is known that my GM vhicle automatically sets a USB NIC to a static 192.168.222.108 ip address, so this repo takes advatage of that. The app settings include UI to change the IP the bridge connects to if you see different behavior in your vehicle.
+Validated on a **2024 Chevrolet Blazer EV** running AAOS 12L. Other GM EVs on similar AAOS platforms likely work but have not been broadly tested. Non-GM AAOS vehicles may have different restrictions.
+
+The companion app runs on any Android phone with Google Play Services (Nearby Connections requires it).
 
 ## Acknowledgments
 
-OpenAutoLink is built from scratch, but it draws heavily on prior open-source Android Auto research and implementation work.
-
 ### Where It Started
 
-- **[metheos/carlink_native](https://github.com/metheos/carlink_native)** / **[lvalen91/carlink_native](https://github.com/lvalen91/carlink_native)** and the **[XDA CarLink thread](https://xdaforums.com/t/carlink.4774308)** inspired the original proof of concept and helped demonstrate that AAOS-side Android Auto bridging was feasible.
-
-### Core Dependency
-
-- **[opencardev/aasdk](https://github.com/opencardev/aasdk)** by [Michal Szwaj (f1x)](https://github.com/nickel110) is the Android Auto protocol library underneath the bridge. OpenAutoLink maintains a [fork](https://github.com/mossyhub/aasdk) with NavigationStatus extensions.
+- **[metheos/carlink_native](https://github.com/metheos/carlink_native)** / **[lvalen91/carlink_native](https://github.com/lvalen91/carlink_native)** and the **[XDA CarLink thread](https://xdaforums.com/t/carlink.4774308)** inspired the original proof of concept.
 
 ### Projects I Learned From
 
-- **[opencardev/openauto](https://github.com/opencardev/openauto)** for head unit emulator architecture and session patterns.
-- **[Crankshaft](https://github.com/nickel110/crankshaft-ng)** for the embedded Android Auto distribution model and deployment ideas.
-- **[nickel110/WirelessAndroidAutoDongle](https://github.com/nickel110/WirelessAndroidAutoDongle)** for Bluetooth pairing and WiFi credential exchange reference points.
+- **[opencardev/aasdk](https://github.com/opencardev/aasdk)** — Android Auto protocol library (used in the now-removed bridge).
+- **[opencardev/openauto](https://github.com/opencardev/openauto)** — head unit emulator architecture.
+- **[nickel110/WirelessAndroidAutoDongle](https://github.com/nickel110/WirelessAndroidAutoDongle)** — BT pairing and WiFi credential exchange reference.
+- **[andrerinas/headunit-revived](https://github.com/nickel110/headunit-revived)** — AA receiver app reference for protocol implementation and feature ideas.
 
 ### On AI Assistance
 
-This project is heavily AI-assisted, but it is grounded in extensive real hardware testing. The code moves faster with Copilot; the driveway testing, log analysis, and protocol debugging are still what determine whether the result is actually good.
+This project is heavily AI-assisted, but grounded in extensive real hardware testing. The code moves faster with Copilot; the driveway testing, log analysis, and protocol debugging are what determine whether the result is actually good.
 
 ## License
 
