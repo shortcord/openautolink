@@ -40,55 +40,21 @@ The most valuable gaps fall into three buckets:
 
 ---
 
-### 4. AAC-LC Audio Codec Support
+### ~~4. AAC-LC Audio Codec Support~~ ✅ DONE
 
-**What HUR has**: Option to announce and receive AAC-LC (or AAC-LC-ADTS) compressed audio instead of PCM. Uses async `MediaCodec` for decoding, auto-generates CSD for decoder init.
-
-**What OAL has**: PCM only. `DirectServiceDiscovery` announces `MEDIA_CODEC_AUDIO_PCM` exclusively.
-
-**Why port**: In direct mode, the phone→car WiFi link carries **all** audio. AAC-LC reduces audio bandwidth by ~10× (128kbps AAC vs ~1.5Mbps PCM for 48kHz stereo). This matters because:
-- WiFi Direct bandwidth can be variable (especially 2.4GHz)
-- Less bandwidth for audio = more headroom for high-bitrate video
-- Lower CPU on the phone side (less data to encrypt+send)
-
-**Effort**: Medium-high. Announce AAC codec type in `DirectServiceDiscovery` audio services. Add AAC `MediaCodec` decoder in audio pipeline (before `AudioTrack`). Handle CSD (codec-specific data) injection on `MEDIA_CODEC_CONFIG` messages.
-
-**Priority**: **High** — direct mode makes this significantly more valuable than it was with the bridge (where audio went over wired Ethernet).
+> **Completed.** `DirectServiceDiscovery.buildAudioService()` now accepts a `MediaCodecType` parameter. When `useAacAudio=true`, announces `MEDIA_CODEC_AUDIO_AAC_LC` on all 3 audio channels. `AacDecoder.kt` provides synchronous MediaCodec AAC-LC decoding with auto-generated CSD-0 (AudioSpecificConfig). `AudioPurposeSlot.feedAac()` lazily initializes the decoder on first AAC frame. Also fixed: 8-byte timestamp prefix was not being stripped from audio MEDIA_DATA payloads (was always a bug, masked in PCM mode because AudioTrack tolerates garbage prefix bytes). Requires phone AA developer setting "Audio codec" set to "auto negotiate" (not "PCM only").
 
 ---
 
-### 5. Bluetooth Service in ServiceDiscovery
+### ~~5. Bluetooth Service in ServiceDiscovery~~ ✅ DONE
 
-**What HUR has**: Announces `BluetoothService` with the car's BT MAC address and pairing methods (A2DP, HFP). This enables the phone to pair BT audio profiles with the car for phone calls routed via BT HFP.
-
-**What OAL direct mode has**: No `BluetoothService` announced. Channel 8 (BLUETOOTH) is defined but not handled.
-
-**Why port**: Without the Bluetooth service, the phone can't pair its BT audio profiles with the head unit during the AA session. This means:
-- Phone calls may not route audio correctly (no HFP)
-- Media may not hand off to BT A2DP when AA disconnects
-- The phone can't discover the car's BT for future connections
-
-The bridge handled this via the SBC's BlueZ stack. In direct mode, the AAOS head unit IS the Bluetooth device — it already has BT hardware and a MAC address. We just need to announce it.
-
-**Effort**: Medium. Read the head unit's BT MAC via `BluetoothAdapter.getAddress()`, add `BluetoothService` to `DirectServiceDiscovery`, handle channel 8 pairing messages in `DirectAaSession`.
-
-**Priority**: **High** — phone call audio routing depends on this.
+> **Completed.** `DirectServiceDiscovery.build()` now accepts `btMacAddress` and adds a `BluetoothService` with A2DP + HFP pairing methods when a valid MAC is provided. `SessionManager` reads the car's BT MAC via `BluetoothAdapter.getAddress()`. On AAOS system installs this returns the real MAC; on non-system apps (Android 12+) it returns `02:00:00:00:00:00` which is filtered out. No channel 8 data handler needed — the service announcement is sufficient for the phone to discover the car's BT and pair independently.
 
 ---
 
-### 6. Phone Status Service (Signal + Calls)
+### ~~6. Phone Status Service (Signal + Calls)~~ ✅ DONE
 
-**What HUR has**: Defines channel 12 for `PhoneStatusService` but doesn't announce it or handle it.
-
-**What OAL direct mode has**: Channel 12 defined, partial handling (logs raw bytes), TODO comment to parse.
-
-**Gap**: Both apps are incomplete here. However, OAL's bridge mode DID handle this — it forwarded phone status (signal strength, call state) to the app via OAL protocol. In direct mode, the app receives the raw AA protobuf but doesn't parse it.
-
-**Why port**: Call state is needed for the audio pipeline's call state machine (IDLE → RINGING → IN_CALL), which controls ducking behavior and mic routing. Signal strength could be shown in the UI.
-
-**Effort**: Low. Parse the `PhoneStatus` proto in `DirectAaSession.handleChannelMessage()` for channel 12, emit as `ControlMessage.PhoneStatus`.
-
-**Priority**: **Medium-High** — call state machine depends on this for correct audio behavior.
+> **Completed.** `DirectAaSession.handlePhoneStatus()` now correctly parses channel 12 data using `Control.Service.PhoneStatusService.parseFrom()` (was incorrectly using `ServiceDiscoveryResponse`). Extracts signal strength and call state (state, duration, caller number/ID), emits as `ControlMessage.PhoneStatus`. `SessionManager` updates `phoneSignalStrength` StateFlow which is already wired to the UI.
 
 ---
 
@@ -207,20 +173,9 @@ The AA protocol is identical over USB and WiFi — same version exchange, SSL ha
 
 ---
 
-### 13. WiFi Direct Frequency Detection (2.4 vs 5 GHz)
+### ~~13. WiFi Direct Frequency Detection (2.4 vs 5 GHz)~~ ✅ DONE
 
-**What HUR has**: Reflection-based access to `WifiP2pGroup.frequency`/`mFrequency` to detect WiFi Direct band.
-
-**What OAL has**: `AaWifiDirectManager` creates P2P groups but doesn't check the band.
-
-**Why port**: 5GHz WiFi Direct has much higher bandwidth and lower latency than 2.4GHz. Knowing the band helps:
-- Log/diagnose performance issues ("video stuttering" → "you're on 2.4GHz")
-- Potentially retry group creation to force 5GHz on supported hardware
-- Show band info in diagnostics UI
-
-**Effort**: Trivial. Copy the reflection code (~10 lines) into `AaWifiDirectManager`.
-
-**Priority**: **Medium** — useful diagnostics, trivial to add.
+> **Completed.** `AaNearbyManager.detectWifiFrequency()` queries `WifiP2pGroup.getFrequency()` (API 30+) with reflection fallback for older OEMs, 2s after Nearby connection (allows BT→WiFi Direct transport upgrade). Exposed via `AaNearbyManager.wifiFrequencyMhz` StateFlow → `SessionManager` → `ProjectionUiState` → stats overlay. Shows band (5 GHz / 2.4 GHz) with color coding (green/yellow) and exact MHz value. Confirmed working: 5785 MHz (5 GHz) on Samsung S21 FE.
 
 ---
 
@@ -349,9 +304,9 @@ Having fallback strategies is useful. The light sensor strategy with hysteresis 
 | 1 | Multi-codec ServiceDiscovery (H.264+H.265+VP9) | Low | High | **✅ DONE** |
 | 2 | Multiple resolution tiers in ServiceDiscovery | Low | High | **✅ DONE** |
 | 3 | Mic audio enhancement (NS + AGC + AEC) | Low | High | **✅ DONE** |
-| 4 | AAC-LC audio codec | Med-High | High | Port soon |
-| 5 | Bluetooth service announcement + channel 8 | Medium | High | Port soon |
-| 6 | Phone status parsing (channel 12) | Low | Med-High | Port soon |
+| 4 | AAC-LC audio codec | Med-High | High | **✅ DONE** |
+| 5 | Bluetooth service announcement + channel 8 | Medium | High | **✅ DONE** |
+| 6 | Phone status parsing (channel 12) | Low | Med-High | **✅ DONE** |
 | 7 | Dynamic vehicle identity from VHAL | Low | Medium | **✅ DONE** |
 | 8 | `maxUnacked` flow control tuning | Trivial | Medium | **✅ DONE** |
 | 9 | **USB Host Connection (AOA)** | **Medium** | **High** | **Port now** |
@@ -359,7 +314,7 @@ Having fallback strategies is useful. The light sensor strategy with hysteresis 
 | 11 | Per-purpose volume offsets | Low | Medium | Port soon |
 | 12 | Rotary controller input | Medium | Medium | Port soon |
 | 13 | Auto-optimization wizard (codec/res detection) | Medium | Medium | Port soon |
-| 14 | WiFi Direct frequency detection | Trivial | Medium | Port soon |
+| 14 | WiFi Direct frequency detection | Trivial | Medium | **✅ DONE** |
 | 15 | Configurable audio buffer/latency | Medium | Medium | Port soon |
 | 16 | Automation intents / deep links | Low | Medium | Port soon |
 | 17 | Night mode strategies | Low-Med | Low-Med | Consider |
@@ -403,6 +358,10 @@ These HUR features already exist in OpenAutoLink's direct mode:
 - ✅ Ping/pong keepalive
 - ✅ Graceful ByeBye disconnect
 - ✅ Drive side configuration (left/right → DriverPosition)
+- ✅ AAC-LC audio codec support (MediaCodec decode, auto CSD generation)
+- ✅ Bluetooth service announcement (A2DP + HFP pairing methods)
+- ✅ Phone status parsing (signal strength + call state from channel 12)
+- ✅ WiFi Direct frequency detection (5 GHz / 2.4 GHz in stats overlay)
 
 ---
 
