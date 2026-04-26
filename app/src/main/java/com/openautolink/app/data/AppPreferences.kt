@@ -101,7 +101,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_AA_DPI = 160
         const val DEFAULT_AA_WIDTH_MARGIN = 0
         const val DEFAULT_AA_HEIGHT_MARGIN = 0
-        const val DEFAULT_AA_PIXEL_ASPECT = 0  // 0 = auto-compute from display/video AR
+        const val DEFAULT_AA_PIXEL_ASPECT = -1  // -1 = auto-compute from display/video AR in crop mode
         const val DEFAULT_DRIVE_SIDE = "left"
         const val DEFAULT_GPS_FORWARDING = true
         const val DEFAULT_CLUSTER_NAVIGATION = true

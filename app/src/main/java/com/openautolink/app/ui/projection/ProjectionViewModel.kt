@@ -54,7 +54,7 @@ data class ProjectionUiState(
     val safeAreaLeft: Int = AppPreferences.DEFAULT_SAFE_AREA_LEFT,
     val safeAreaRight: Int = AppPreferences.DEFAULT_SAFE_AREA_RIGHT,
     val videoScalingMode: String = AppPreferences.DEFAULT_VIDEO_SCALING_MODE,
-    val aaPixelAspect: Int = 10000,
+    val aaPixelAspect: Int = -1,
     val aaDpi: Int = 160,
 )
 
