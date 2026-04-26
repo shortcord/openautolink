@@ -48,6 +48,9 @@
 
 #include <aasdk/Channel/Promise.hpp>
 #include <aasdk/Messenger/ChannelId.hpp>
+#include <aasdk/Messenger/Message.hpp>
+#include <aasdk/Messenger/MessageId.hpp>
+#include <aap_protobuf/service/control/ControlMessageType.pb.h>
 
 #define LOG_TAG "OAL-JniSession"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -260,12 +263,28 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
                 *strand_, messenger_);
         }
 
-        // 5. Initiate version exchange
-        LOGI("Sending version request...");
-        auto promise = aasdk::channel::SendPromise::defer(*strand_);
-        promise->then([]() {},
-            [this](const auto& e) { this->onChannelError(e); });
-        controlChannel_->sendVersionRequest(std::move(promise));
+        // 5. Initiate version exchange (request v1.7 — DHU uses 1.7, aasdk defaults to 1.6)
+        LOGI("Sending version request (v1.7)...");
+        {
+            auto message = std::make_shared<aasdk::messenger::Message>(
+                aasdk::messenger::ChannelId::CONTROL,
+                aasdk::messenger::EncryptionType::PLAIN,
+                aasdk::messenger::MessageType::SPECIFIC);
+            message->insertPayload(
+                aasdk::messenger::MessageId(
+                    aap_protobuf::service::control::message::ControlMessageType::MESSAGE_VERSION_REQUEST).getData());
+            aasdk::common::Data versionBuffer(4, 0);
+            uint16_t major = 1, minor = 7;
+            versionBuffer[0] = (major >> 8) & 0xFF;
+            versionBuffer[1] = major & 0xFF;
+            versionBuffer[2] = (minor >> 8) & 0xFF;
+            versionBuffer[3] = minor & 0xFF;
+            message->insertPayload(versionBuffer);
+            auto promise = aasdk::channel::SendPromise::defer(*strand_);
+            promise->then([]() {},
+                [this](const auto& e) { this->onChannelError(e); });
+            controlChannel_->send(std::move(message), std::move(promise));
+        }
         controlChannel_->receive(shared_from_this());
     });
 }
@@ -806,9 +825,6 @@ void JniSession::buildServiceDiscoveryResponse(
       auto* ms = svc->mutable_media_sink_service();
       ms->set_available_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
       ms->set_available_while_in_call(true);
-      // Workaround: newer AA versions check audio_type on ALL MediaSinkService entries
-      // including video. Without this, audio_type defaults to 0 which crashes the phone.
-      ms->set_audio_type(aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA);
 
       using VRes = aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
       using VFps = aap_protobuf::service::media::sink::message::VideoFrameRateType;
