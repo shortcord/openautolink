@@ -1,10 +1,9 @@
 /*
- * jni_session.h — aasdk session + event handler for JNI.
+ * jni_session.h — aasdk session coordinator + JNI callback dispatch.
  *
- * Implements all aasdk channel event handlers and dispatches
- * AA events to Kotlin via JNI callbacks. This is the equivalent
- * of the bridge's HeadlessAutoEntity + handler classes, but in
- * a single class since we dispatch everything through JNI.
+ * Implements IControlServiceChannelEventHandler + IVideoMediaSinkServiceEventHandler
+ * directly. All other channels use separate handler classes (see jni_channel_handlers.h)
+ * that delegate JNI callbacks through dispatch methods on this class.
  */
 #pragma once
 
@@ -55,22 +54,20 @@
 namespace openautolink::jni {
 
 class JniTransport;
+class JniAudioSinkHandler;
+class JniSensorHandler;
+class JniInputHandler;
+class JniNavStatusHandler;
+class JniMicHandler;
+class JniMediaStatusHandler;
+class JniPhoneStatusHandler;
+class JniBluetoothHandler;
 
 /**
- * Owns the aasdk session lifecycle and implements all channel event handlers.
- * Dispatches AA events to Kotlin via JNI callbacks.
- *
- * Implements:
- * - IControlServiceChannelEventHandler (version, handshake, SDR, ping, bye)
- * - IVideoMediaSinkServiceEventHandler (video frames)
- * - IAudioMediaSinkServiceEventHandler (audio frames — 3 instances)
- * - IMediaSourceServiceEventHandler (mic open/close)
- * - ISensorSourceServiceEventHandler (sensor requests)
- * - IInputSourceServiceEventHandler (key bindings)
- * - IBluetoothServiceEventHandler (BT pairing)
- * - INavigationStatusServiceEventHandler (nav state)
- * - IMediaPlaybackStatusServiceEventHandler (media metadata)
- * - IPhoneStatusServiceEventHandler (signal/call state)
+ * Owns the aasdk session lifecycle. Implements control + video handler
+ * interfaces directly. All other channels use separate handler classes
+ * (JniAudioSinkHandler, JniSensorHandler, etc.) that call dispatch
+ * methods on this class for JNI callbacks to Kotlin.
  *
  * Lifecycle:
  *   create() → start(transport_pipe) → [streaming] → stop() → destroy()
@@ -170,6 +167,19 @@ public:
     void onVideoFocusRequest(
         const aap_protobuf::service::media::video::message::VideoFocusRequestNotification& request) override;
 
+    // ---- Dispatch methods (called by handler classes → JNI) ----
+    void dispatchAudioFrame(const uint8_t* data, size_t size, int purpose, int sampleRate, int channels);
+    void dispatchMicRequest(bool open);
+    void dispatchNavStatus(int status);
+    void dispatchNavTurn(const std::string& maneuver, const std::string& road,
+                         const uint8_t* iconData, size_t iconSize);
+    void dispatchNavDistance(int distanceMeters, int etaSeconds,
+                            const std::string& displayDistance, const std::string& displayUnit);
+    void dispatchMediaMetadata(const std::string& title, const std::string& artist,
+                               const std::string& album, const uint8_t* artData, size_t artSize);
+    void dispatchMediaPlayback(int state, long long positionMs);
+    void dispatchPhoneStatus(int signalStrength, int callState);
+
 private:
     void ioServiceThreadFunc();
     void buildServiceDiscoveryResponse(
@@ -188,7 +198,7 @@ private:
     std::unique_ptr<boost::asio::io_service> ioService_;
     std::unique_ptr<boost::asio::io_service::work> ioWork_;
     std::thread ioThread_;
-    boost::asio::io_service::strand* strand_ = nullptr;
+    std::unique_ptr<boost::asio::io_service::strand> strand_;
 
     // aasdk pipeline
     std::shared_ptr<JniTransport> transport_;
@@ -206,6 +216,21 @@ private:
     std::shared_ptr<aasdk::channel::sensorsource::SensorSourceService> sensorChannel_;
     std::shared_ptr<aasdk::channel::navigationstatus::NavigationStatusService> navChannel_;
     std::shared_ptr<aasdk::channel::mediasource::MediaSourceService> micChannel_;
+    std::shared_ptr<aasdk::channel::mediaplaybackstatus::MediaPlaybackStatusService> mediaStatusChannel_;
+    std::shared_ptr<aasdk::channel::phonestatus::PhoneStatusService> phoneStatusChannel_;
+    std::shared_ptr<aasdk::channel::bluetooth::BluetoothService> bluetoothChannel_;
+
+    // Separate handler instances (one per channel type)
+    std::shared_ptr<JniAudioSinkHandler> mediaAudioHandler_;
+    std::shared_ptr<JniAudioSinkHandler> guidanceAudioHandler_;
+    std::shared_ptr<JniAudioSinkHandler> systemAudioHandler_;
+    std::shared_ptr<JniSensorHandler> sensorHandler_;
+    std::shared_ptr<JniInputHandler> inputHandler_;
+    std::shared_ptr<JniNavStatusHandler> navHandler_;
+    std::shared_ptr<JniMicHandler> micHandler_;
+    std::shared_ptr<JniMediaStatusHandler> mediaStatusHandler_;
+    std::shared_ptr<JniPhoneStatusHandler> phoneStatusHandler_;
+    std::shared_ptr<JniBluetoothHandler> bluetoothHandler_;
 
     std::atomic<bool> stopped_{false};
     std::atomic<bool> streaming_{false};
@@ -225,6 +250,9 @@ private:
         std::string vehicleModel;
         std::string vehicleYear;
         int driverPosition = 0;
+        bool hideClock = false;
+        bool hideSignal = false;
+        bool hideBattery = false;
     };
     SdrConfig sdrConfig_;
 

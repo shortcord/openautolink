@@ -43,6 +43,23 @@ JniTransport::JniTransport(boost::asio::io_service& ioService, JavaVM* jvm, jobj
 JniTransport::~JniTransport()
 {
     stop();
+
+    // Release JNI global ref
+    if (javaTransport_) {
+        JNIEnv* env = nullptr;
+        bool attached = false;
+        jint result = jvm_->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+        if (result == JNI_EDETACHED) {
+            jvm_->AttachCurrentThread(&env, nullptr);
+            attached = true;
+        }
+        if (env) {
+            env->DeleteGlobalRef(javaTransport_);
+            javaTransport_ = nullptr;
+        }
+        if (attached) jvm_->DetachCurrentThread();
+    }
+
     LOGI("JniTransport destroyed");
 }
 
@@ -54,16 +71,26 @@ void JniTransport::receive(size_t size, ReceivePromise::Pointer promise)
             return;
         }
 
-        std::lock_guard<std::mutex> lock(receiveMutex_);
+        aasdk::common::Data resolveData;
+        bool canResolve = false;
 
-        // If we already have enough buffered data, resolve immediately
-        if (receiveBuffer_.size() >= size) {
-            aasdk::common::Data data(receiveBuffer_.begin(), receiveBuffer_.begin() + size);
-            receiveBuffer_.erase(receiveBuffer_.begin(), receiveBuffer_.begin() + size);
-            promise->resolve(std::move(data));
-        } else {
-            // Queue the promise for later fulfillment
-            receiveQueue_.push({size, std::move(promise)});
+        {
+            std::lock_guard<std::mutex> lock(receiveMutex_);
+
+            // If we already have enough buffered data, resolve immediately
+            if (receiveBuffer_.size() >= size) {
+                resolveData.assign(receiveBuffer_.begin(), receiveBuffer_.begin() + size);
+                receiveBuffer_.erase(receiveBuffer_.begin(), receiveBuffer_.begin() + size);
+                canResolve = true;
+            } else {
+                // Queue the promise for later fulfillment
+                receiveQueue_.push({size, std::move(promise)});
+            }
+        }
+
+        // Resolve outside the lock to avoid re-entrancy deadlock
+        if (canResolve) {
+            promise->resolve(std::move(resolveData));
         }
     });
 }
@@ -217,22 +244,31 @@ void JniTransport::readThreadFunc()
 void JniTransport::processReceiveQueue()
 {
     strand_.dispatch([this]() {
-        std::lock_guard<std::mutex> lock(receiveMutex_);
+        // Collect resolved promises outside the lock to avoid re-entrancy deadlock
+        std::vector<std::pair<ReceivePromise::Pointer, aasdk::common::Data>> resolved;
 
-        while (!receiveQueue_.empty()) {
-            auto& [needed, promise] = receiveQueue_.front();
+        {
+            std::lock_guard<std::mutex> lock(receiveMutex_);
 
-            if (receiveBuffer_.size() >= needed) {
-                aasdk::common::Data data(receiveBuffer_.begin(),
+            while (!receiveQueue_.empty()) {
+                auto& [needed, promise] = receiveQueue_.front();
+
+                if (receiveBuffer_.size() >= needed) {
+                    aasdk::common::Data data(receiveBuffer_.begin(),
+                                             receiveBuffer_.begin() + needed);
+                    receiveBuffer_.erase(receiveBuffer_.begin(),
                                          receiveBuffer_.begin() + needed);
-                receiveBuffer_.erase(receiveBuffer_.begin(),
-                                     receiveBuffer_.begin() + needed);
-                auto p = std::move(promise);
-                receiveQueue_.pop();
-                p->resolve(std::move(data));
-            } else {
-                break; // Not enough data yet
+                    resolved.emplace_back(std::move(promise), std::move(data));
+                    receiveQueue_.pop();
+                } else {
+                    break; // Not enough data yet
+                }
             }
+        }
+
+        // Resolve outside the lock
+        for (auto& [p, data] : resolved) {
+            p->resolve(std::move(data));
         }
     });
 }

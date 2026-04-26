@@ -3,7 +3,7 @@
 import android.content.Context
 import android.media.AudioManager
 import android.os.SystemClock
-import android.util.Log
+import com.openautolink.app.diagnostics.OalLog
 import com.openautolink.app.audio.AudioPlayer
 import com.openautolink.app.audio.AudioPlayerImpl
 import com.openautolink.app.audio.AudioStats
@@ -401,7 +401,7 @@ class SessionManager(
                 scope.launch {
                     val c = context ?: return@launch
                     AppPreferences.getInstance(c).setDefaultPhoneName(phoneName)
-                    Log.i(TAG, "Default phone saved: $phoneName")
+                    OalLog.i(TAG, "Default phone saved: $phoneName")
                 }
             }
         }
@@ -460,7 +460,7 @@ class SessionManager(
         }
 
         session.start()
-        Log.i(TAG, "aasdk JNI session started (Nearby transport)")
+        OalLog.i(TAG, "aasdk JNI session started (Nearby transport)")
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -469,7 +469,7 @@ class SessionManager(
         val ctx = context ?: return
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager ?: return
         if (!lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)) {
-            Log.w(TAG, "GPS provider not enabled")
+            OalLog.w(TAG, "GPS provider not enabled")
             return
         }
 
@@ -485,9 +485,9 @@ class SessionManager(
                 500L, 0f, listener, android.os.Looper.getMainLooper(),
             )
             _directLocationListener = listener
-            Log.i(TAG, "GPS forwarding started")
+            OalLog.i(TAG, "GPS forwarding started")
         } catch (e: SecurityException) {
-            Log.w(TAG, "GPS permission denied: ${e.message}")
+            OalLog.w(TAG, "GPS permission denied: ${e.message}")
         }
     }
 
@@ -553,7 +553,7 @@ class SessionManager(
         val state = _sessionState.value
         if (state == SessionState.IDLE) return
 
-        Log.i(TAG, "System wake detected (${elapsed / 1000}s gap, state=$state)")
+        OalLog.i(TAG, "System wake detected (${elapsed / 1000}s gap, state=$state)")
         DiagnosticLog.i("transport", "System wake detected (${elapsed / 1000}s gap)")
         // aasdk mode: the Nearby manager handles reconnection
         // No explicit force-reconnect needed
@@ -569,7 +569,7 @@ class SessionManager(
             val prefs = AppPreferences.getInstance(ctx)
             ClusterNavigationState.distanceUnits = prefs.distanceUnits.first()
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to sync local preferences: ${e.message}")
+            OalLog.w(TAG, "Failed to sync local preferences: ${e.message}")
         }
     }
 
@@ -608,7 +608,7 @@ class SessionManager(
         while (_videoDecoder == null) { delay(500) }
         _videoDecoder?.decoderState?.collect { state ->
             if (state == DecoderState.ERROR) {
-                Log.w(TAG, "Decoder error â€” initiating recovery")
+                OalLog.w(TAG, "Decoder error â€" initiating recovery")
                 _remoteDiagnostics?.log(DiagnosticLevel.ERROR, "video", "Decoder error â€” recovery")
                 _statusMessage.value = "Video error â€” recovering..."
                 recoverDecoder()
@@ -621,7 +621,7 @@ class SessionManager(
         _videoDecoder?.let { decoder ->
             decoder.resume()
             requestKeyframe()
-            Log.i(TAG, "Decoder recovery: resumed codec, requested keyframe")
+            OalLog.i(TAG, "Decoder recovery: resumed codec, requested keyframe")
         }
     }
 
@@ -635,9 +635,9 @@ class SessionManager(
                     attempt++
                     requestKeyframe()
                     if (attempt == 1) {
-                        Log.i(TAG, "Keyframe re-request #$attempt")
+                        OalLog.i(TAG, "Keyframe re-request #$attempt")
                     } else {
-                        Log.w(TAG, "Keyframe re-request #$attempt (still waiting)")
+                        OalLog.w(TAG, "Keyframe re-request #$attempt (still waiting)")
                         _remoteDiagnostics?.log(DiagnosticLevel.WARN, "video",
                             "Keyframe re-request #$attempt")
                     }
@@ -655,7 +655,7 @@ class SessionManager(
                 else -> AudioPurpose.ASSISTANT
             }
             _micCaptureManager?.setMicPurpose(purpose)
-            Log.d(TAG, "Call state: $state â€” mic purpose: $purpose")
+            OalLog.d(TAG, "Call state: $state â€" mic purpose: $purpose")
         }
     }
 
@@ -717,7 +717,7 @@ class SessionManager(
                 _micCaptureManager?.stop()
             }
             is ControlMessage.Error -> {
-                Log.e(TAG, "Error ${message.code}: ${message.message}")
+                OalLog.e(TAG, "Error ${message.code}: ${message.message}")
                 _statusMessage.value = "Error: ${message.message}"
             }
             is ControlMessage.PhoneBattery -> {

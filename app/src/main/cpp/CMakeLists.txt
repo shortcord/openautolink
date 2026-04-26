@@ -90,6 +90,7 @@ add_library(openautolink-jni SHARED
     aasdk_jni.cpp
     jni_transport.cpp
     jni_session.cpp
+    jni_channel_handlers.cpp
     jni_service_catalog.cpp
 )
 

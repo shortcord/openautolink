@@ -9,6 +9,7 @@
  */
 #include "jni_session.h"
 #include "jni_transport.h"
+#include "jni_channel_handlers.h"
 
 #include <android/log.h>
 
@@ -63,7 +64,7 @@ JniSession::JniSession(JavaVM* jvm)
 {
     ioService_ = std::make_unique<boost::asio::io_service>();
     ioWork_ = std::make_unique<boost::asio::io_service::work>(*ioService_);
-    strand_ = new boost::asio::io_service::strand(*ioService_);
+    strand_ = std::make_unique<boost::asio::io_service::strand>(*ioService_);
     ioThread_ = std::thread(&JniSession::ioServiceThreadFunc, this);
     LOGI("JniSession created");
 }
@@ -71,8 +72,7 @@ JniSession::JniSession(JavaVM* jvm)
 JniSession::~JniSession()
 {
     stop();
-    delete strand_;
-    strand_ = nullptr;
+    strand_.reset();
     LOGI("JniSession destroyed");
 }
 
@@ -132,7 +132,7 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     jclass cbClass = env->GetObjectClass(callback);
     cbMethods_.onSessionStarted = env->GetMethodID(cbClass, "onSessionStarted", "()V");
     cbMethods_.onSessionStopped = env->GetMethodID(cbClass, "onSessionStopped", "(Ljava/lang/String;)V");
-    cbMethods_.onVideoFrame = env->GetMethodID(cbClass, "onVideoFrame", "([BJII)V");
+    cbMethods_.onVideoFrame = env->GetMethodID(cbClass, "onVideoFrame", "([BJIIZ)V");
     cbMethods_.onAudioFrame = env->GetMethodID(cbClass, "onAudioFrame", "([BIII)V");
     cbMethods_.onMicRequest = env->GetMethodID(cbClass, "onMicRequest", "(Z)V");
     cbMethods_.onNavigationStatus = env->GetMethodID(cbClass, "onNavigationStatus", "(I)V");
@@ -176,6 +176,9 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     sdrConfig_.vehicleMake = readString("vehicleMake");
     sdrConfig_.vehicleModel = readString("vehicleModel");
     sdrConfig_.vehicleYear = readString("vehicleYear");
+    sdrConfig_.hideClock = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "hideClock", "Z"));
+    sdrConfig_.hideSignal = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "hideSignal", "Z"));
+    sdrConfig_.hideBattery = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "hideBattery", "Z"));
     env->DeleteLocalRef(sdrClass);
 
     LOGI("Starting session: video=%dx%d@%dfps dpi=%d",
@@ -197,7 +200,16 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
             LOGI("Cryptor initialized OK (connect mode)");
         } catch (const std::exception& e) {
             LOGE("Cryptor init FAILED: %s", e.what());
-            callVoidCallback(cbMethods_.onError);
+            if (cbMethods_.onError && callbackRef_) {
+                bool attached;
+                JNIEnv* env = getEnv(attached);
+                if (env) {
+                    jstring msg = env->NewStringUTF(e.what());
+                    env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
+                    env->DeleteLocalRef(msg);
+                }
+                releaseEnv(attached);
+            }
             return;
         }
 
@@ -230,6 +242,20 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
 
         micChannel_ = std::make_shared<aasdk::channel::mediasource::MediaSourceService>(
             *strand_, messenger_, aasdk::messenger::ChannelId::MEDIA_SOURCE_MICROPHONE);
+
+        // Nav/media/phone status channels
+        navChannel_ = std::make_shared<aasdk::channel::navigationstatus::NavigationStatusService>(
+            *strand_, messenger_);
+        mediaStatusChannel_ = std::make_shared<aasdk::channel::mediaplaybackstatus::MediaPlaybackStatusService>(
+            *strand_, messenger_);
+        phoneStatusChannel_ = std::make_shared<aasdk::channel::phonestatus::PhoneStatusService>(
+            *strand_, messenger_);
+
+        // Bluetooth channel (only if BT MAC configured)
+        if (!sdrConfig_.btMac.empty()) {
+            bluetoothChannel_ = std::make_shared<aasdk::channel::bluetooth::BluetoothService>(
+                *strand_, messenger_);
+        }
 
         // 5. Initiate version exchange
         LOGI("Sending version request...");
@@ -538,6 +564,27 @@ void JniSession::onMediaWithTimestampIndication(
     promise->then([]() {}, [](const auto&) {});
     videoChannel_->sendMediaAckIndication(ack, std::move(promise));
 
+    // Detect IDR (keyframe) from H.264/H.265 NAL headers
+    bool isKeyFrame = false;
+    if (buffer.size >= 5) {
+        const uint8_t* d = buffer.cdata;
+        // Find start code (0x00 0x00 0x00 0x01 or 0x00 0x00 0x01)
+        size_t offset = 0;
+        if (d[0] == 0 && d[1] == 0 && d[2] == 0 && d[3] == 1) offset = 4;
+        else if (d[0] == 0 && d[1] == 0 && d[2] == 1) offset = 3;
+        if (offset > 0 && offset < buffer.size) {
+            uint8_t nalType = d[offset] & 0x1F; // H.264 NAL type
+            if (nalType == 5 || nalType == 7) { // IDR slice or SPS
+                isKeyFrame = true;
+            }
+            // H.265: NAL type is bits 1-6 of first byte
+            uint8_t hevcNalType = (d[offset] >> 1) & 0x3F;
+            if (hevcNalType >= 16 && hevcNalType <= 21) { // IRAP NAL types
+                isKeyFrame = true;
+            }
+        }
+    }
+
     // Dispatch to Kotlin
     if (cbMethods_.onVideoFrame && callbackRef_) {
         bool attached;
@@ -549,7 +596,8 @@ void JniSession::onMediaWithTimestampIndication(
             env->CallVoidMethod(callbackRef_, cbMethods_.onVideoFrame,
                                 jdata, static_cast<jlong>(timestamp),
                                 static_cast<jint>(sdrConfig_.videoWidth),
-                                static_cast<jint>(sdrConfig_.videoHeight));
+                                static_cast<jint>(sdrConfig_.videoHeight),
+                                static_cast<jboolean>(isKeyFrame));
             env->DeleteLocalRef(jdata);
         }
         releaseEnv(attached);
@@ -577,14 +625,58 @@ void JniSession::onVideoFocusRequest(
 void JniSession::startAllHandlers()
 {
     LOGI("Starting all service handlers");
-    // Video is already receiving from onChannelOpenRequest path.
-    // Start the remaining channels so they can receive when the phone opens them.
-    // Note: Audio sink handlers need separate event handler classes because
-    // JniSession already implements IVideoMediaSinkServiceEventHandler and
-    // the audio interface has the same method names. For now, audio channels
-    // are declared in the SDR and the phone will open them — they just need
-    // their onChannelOpenRequest/onMediaWithTimestamp handlers.
-    // This is handled via the channel's receive() mechanism.
+
+    // Audio handlers (3 instances — same class, different channel types)
+    mediaAudioHandler_ = std::make_shared<JniAudioSinkHandler>(
+        *strand_, mediaAudioChannel_, *this, JniAudioSinkHandler::AudioType::Media);
+    mediaAudioHandler_->start();
+
+    guidanceAudioHandler_ = std::make_shared<JniAudioSinkHandler>(
+        *strand_, guidanceAudioChannel_, *this, JniAudioSinkHandler::AudioType::Guidance);
+    guidanceAudioHandler_->start();
+
+    systemAudioHandler_ = std::make_shared<JniAudioSinkHandler>(
+        *strand_, systemAudioChannel_, *this, JniAudioSinkHandler::AudioType::System);
+    systemAudioHandler_->start();
+
+    // Sensor handler
+    sensorHandler_ = std::make_shared<JniSensorHandler>(*strand_, sensorChannel_, *this);
+    sensorHandler_->start();
+
+    // Input handler
+    inputHandler_ = std::make_shared<JniInputHandler>(*strand_, inputChannel_, *this);
+    inputHandler_->start();
+
+    // Mic handler
+    micHandler_ = std::make_shared<JniMicHandler>(*strand_, micChannel_, *this);
+    micHandler_->start();
+
+    // Navigation status handler
+    navHandler_ = std::make_shared<JniNavStatusHandler>(*strand_, navChannel_, *this);
+    navHandler_->start();
+
+    // Media playback status handler
+    if (mediaStatusChannel_) {
+        mediaStatusHandler_ = std::make_shared<JniMediaStatusHandler>(
+            *strand_, mediaStatusChannel_, *this);
+        mediaStatusHandler_->start();
+    }
+
+    // Phone status handler
+    if (phoneStatusChannel_) {
+        phoneStatusHandler_ = std::make_shared<JniPhoneStatusHandler>(
+            *strand_, phoneStatusChannel_, *this);
+        phoneStatusHandler_->start();
+    }
+
+    // Bluetooth handler
+    if (bluetoothChannel_) {
+        bluetoothHandler_ = std::make_shared<JniBluetoothHandler>(
+            *strand_, bluetoothChannel_, *this);
+        bluetoothHandler_->start();
+    }
+
+    LOGI("All %d handlers started", 9);
 }
 
 // ============================================================================
@@ -607,7 +699,7 @@ void JniSession::buildServiceDiscoveryResponse(
     response.set_sw_build("1");
     response.set_sw_version("1.0");
     response.set_can_play_native_media_during_vr(false);
-    response.set_hide_clock(false);
+    response.set_hide_clock(sdrConfig_.hideClock);
 
     // ---- Video channel ----
     auto* videoDesc = response.add_channels();
@@ -629,6 +721,7 @@ void JniSession::buildServiceDiscoveryResponse(
     videoConfig->set_density(sdrConfig_.videoDpi);
     if (sdrConfig_.marginWidth > 0) videoConfig->set_margin_width(sdrConfig_.marginWidth);
     if (sdrConfig_.marginHeight > 0) videoConfig->set_margin_height(sdrConfig_.marginHeight);
+    if (sdrConfig_.pixelAspectE4 > 0) videoConfig->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
 
     auto* touchConfig = videoConfig->mutable_touch_config();
     touchConfig->set_width(sdrConfig_.videoWidth);
@@ -819,17 +912,10 @@ void JniSession::sendVehicleSensor(int sensorType, const uint8_t* data, size_t l
 
 void JniSession::sendMicAudio(const uint8_t* data, size_t length)
 {
-    if (!streaming_ || !micOpen_ || !micChannel_) return;
+    if (!streaming_ || !micHandler_ || !micHandler_->isOpen()) return;
     std::vector<uint8_t> dataCopy(data, data + length);
     ioService_->post([this, dataCopy = std::move(dataCopy)]() {
-        aasdk::common::Data audioData(dataCopy.begin(), dataCopy.end());
-        auto ts = static_cast<aasdk::messenger::Timestamp::ValueType>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-
-        auto promise = aasdk::channel::SendPromise::defer(*strand_);
-        promise->then([]() {}, [](const auto&) {});
-        micChannel_->sendMediaSourceWithTimestampIndication(ts, audioData, std::move(promise));
+        micHandler_->feedAudio(dataCopy.data(), dataCopy.size());
     });
 }
 
@@ -988,6 +1074,150 @@ void JniSession::sendRpmSensor(int rpmE3)
         promise->then([]() {}, [](const auto&) {});
         sensorChannel_->sendSensorEventIndication(batch, std::move(promise));
     });
+}
+
+// ============================================================================
+// Dispatch methods — called by handler classes to fire JNI callbacks
+// ============================================================================
+
+void JniSession::dispatchAudioFrame(const uint8_t* data, size_t size,
+                                     int purpose, int sampleRate, int channels)
+{
+    if (!cbMethods_.onAudioFrame || !callbackRef_) return;
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        jbyteArray jdata = env->NewByteArray(static_cast<jsize>(size));
+        env->SetByteArrayRegion(jdata, 0, static_cast<jsize>(size),
+                                reinterpret_cast<const jbyte*>(data));
+        env->CallVoidMethod(callbackRef_, cbMethods_.onAudioFrame,
+                            jdata, static_cast<jint>(purpose),
+                            static_cast<jint>(sampleRate),
+                            static_cast<jint>(channels));
+        env->DeleteLocalRef(jdata);
+    }
+    releaseEnv(attached);
+}
+
+void JniSession::dispatchMicRequest(bool open)
+{
+    if (!cbMethods_.onMicRequest || !callbackRef_) return;
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        env->CallVoidMethod(callbackRef_, cbMethods_.onMicRequest,
+                            static_cast<jboolean>(open));
+    }
+    releaseEnv(attached);
+}
+
+void JniSession::dispatchNavStatus(int status)
+{
+    if (!cbMethods_.onNavigationStatus || !callbackRef_) return;
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        env->CallVoidMethod(callbackRef_, cbMethods_.onNavigationStatus,
+                            static_cast<jint>(status));
+    }
+    releaseEnv(attached);
+}
+
+void JniSession::dispatchNavTurn(const std::string& maneuver, const std::string& road,
+                                  const uint8_t* iconData, size_t iconSize)
+{
+    if (!cbMethods_.onNavigationTurn || !callbackRef_) return;
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        jstring jmaneuver = env->NewStringUTF(maneuver.c_str());
+        jstring jroad = env->NewStringUTF(road.c_str());
+        jbyteArray jicon = nullptr;
+        if (iconData && iconSize > 0) {
+            jicon = env->NewByteArray(static_cast<jsize>(iconSize));
+            env->SetByteArrayRegion(jicon, 0, static_cast<jsize>(iconSize),
+                                    reinterpret_cast<const jbyte*>(iconData));
+        }
+        env->CallVoidMethod(callbackRef_, cbMethods_.onNavigationTurn,
+                            jmaneuver, jroad, jicon);
+        env->DeleteLocalRef(jmaneuver);
+        env->DeleteLocalRef(jroad);
+        if (jicon) env->DeleteLocalRef(jicon);
+    }
+    releaseEnv(attached);
+}
+
+void JniSession::dispatchNavDistance(int distanceMeters, int etaSeconds,
+                                     const std::string& displayDistance,
+                                     const std::string& displayUnit)
+{
+    if (!cbMethods_.onNavigationDistance || !callbackRef_) return;
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        jstring jdist = displayDistance.empty() ? nullptr : env->NewStringUTF(displayDistance.c_str());
+        jstring junit = displayUnit.empty() ? nullptr : env->NewStringUTF(displayUnit.c_str());
+        env->CallVoidMethod(callbackRef_, cbMethods_.onNavigationDistance,
+                            static_cast<jint>(distanceMeters),
+                            static_cast<jint>(etaSeconds),
+                            jdist, junit);
+        if (jdist) env->DeleteLocalRef(jdist);
+        if (junit) env->DeleteLocalRef(junit);
+    }
+    releaseEnv(attached);
+}
+
+void JniSession::dispatchMediaMetadata(const std::string& title, const std::string& artist,
+                                        const std::string& album,
+                                        const uint8_t* artData, size_t artSize)
+{
+    if (!cbMethods_.onMediaMetadata || !callbackRef_) return;
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        jstring jtitle = env->NewStringUTF(title.c_str());
+        jstring jartist = env->NewStringUTF(artist.c_str());
+        jstring jalbum = env->NewStringUTF(album.c_str());
+        jbyteArray jart = nullptr;
+        if (artData && artSize > 0) {
+            jart = env->NewByteArray(static_cast<jsize>(artSize));
+            env->SetByteArrayRegion(jart, 0, static_cast<jsize>(artSize),
+                                    reinterpret_cast<const jbyte*>(artData));
+        }
+        env->CallVoidMethod(callbackRef_, cbMethods_.onMediaMetadata,
+                            jtitle, jartist, jalbum, jart);
+        env->DeleteLocalRef(jtitle);
+        env->DeleteLocalRef(jartist);
+        env->DeleteLocalRef(jalbum);
+        if (jart) env->DeleteLocalRef(jart);
+    }
+    releaseEnv(attached);
+}
+
+void JniSession::dispatchMediaPlayback(int state, long long positionMs)
+{
+    if (!cbMethods_.onMediaPlayback || !callbackRef_) return;
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        env->CallVoidMethod(callbackRef_, cbMethods_.onMediaPlayback,
+                            static_cast<jint>(state),
+                            static_cast<jlong>(positionMs));
+    }
+    releaseEnv(attached);
+}
+
+void JniSession::dispatchPhoneStatus(int signalStrength, int callState)
+{
+    if (!cbMethods_.onPhoneStatus || !callbackRef_) return;
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        env->CallVoidMethod(callbackRef_, cbMethods_.onPhoneStatus,
+                            static_cast<jint>(signalStrength),
+                            static_cast<jint>(callState));
+    }
+    releaseEnv(attached);
 }
 
 } // namespace openautolink::jni

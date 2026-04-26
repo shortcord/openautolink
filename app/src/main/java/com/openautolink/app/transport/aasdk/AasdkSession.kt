@@ -102,8 +102,15 @@ class AasdkSession(
 
         transportPipe = AasdkTransportPipe(input, output)
 
-        AasdkNative.nativeCreateSession()
-        AasdkNative.nativeStartSession(transportPipe!!, this, sdrConfig)
+        try {
+            AasdkNative.nativeCreateSession()
+            AasdkNative.nativeStartSession(transportPipe!!, this, sdrConfig)
+        } catch (e: Exception) {
+            OalLog.e(TAG, "Native session start failed: ${e.message}")
+            transportPipe?.close()
+            transportPipe = null
+            _connectionState.value = ConnectionState.DISCONNECTED
+        }
     }
 
     fun stop() {
@@ -172,13 +179,13 @@ class AasdkSession(
         }
     }
 
-    override fun onVideoFrame(data: ByteArray, timestampUs: Long, width: Int, height: Int) {
+    override fun onVideoFrame(data: ByteArray, timestampUs: Long, width: Int, height: Int, isKeyFrame: Boolean) {
         val frame = VideoFrame(
             data = data,
             timestampUs = timestampUs,
             width = width,
             height = height,
-            isKeyFrame = false
+            isKeyFrame = isKeyFrame
         )
         _videoFrames.tryEmit(frame)
     }
@@ -290,88 +297,5 @@ class AasdkSession(
         scope.launch {
             _controlMessages.emit(ControlMessage.Error(code = -1, message = message))
         }
-    }
-}
-        Log.i(TAG, "AA session started")
-        scope.launch { _connectionState.value = ConnectionState.CONNECTED }
-    }
-
-    override fun onSessionStopped(reason: String) {
-        Log.i(TAG, "AA session stopped: $reason")
-        scope.launch { _connectionState.value = ConnectionState.DISCONNECTED }
-    }
-
-    override fun onVideoFrame(data: ByteArray, timestampUs: Long, width: Int, height: Int) {
-        val frame = VideoFrame(
-            data = data,
-            timestampUs = timestampUs,
-            width = width,
-            height = height,
-            isKeyFrame = false // Native side should set FLAG_KEYFRAME; detect from NAL
-        )
-        _videoFrames.tryEmit(frame)
-    }
-
-    override fun onAudioFrame(data: ByteArray, purpose: Int, sampleRate: Int, channels: Int) {
-        val audioPurpose = when (purpose) {
-            0 -> AudioPurpose.MEDIA
-            1 -> AudioPurpose.NAVIGATION
-            2 -> AudioPurpose.ALERT
-            3 -> AudioPurpose.ASSISTANT
-            4 -> AudioPurpose.CALL
-            else -> AudioPurpose.MEDIA
-        }
-        val frame = AudioFrame(
-            data = data,
-            purpose = audioPurpose,
-            sampleRate = sampleRate,
-            channels = channels
-        )
-        _audioFrames.tryEmit(frame)
-    }
-
-    override fun onMicRequest(open: Boolean) {
-        onMicOpenRequested?.invoke(open)
-    }
-
-    override fun onNavigationStatus(protoData: ByteArray) {
-        onNavigationStatusUpdate?.invoke(protoData)
-    }
-
-    override fun onNavigationTurn(protoData: ByteArray) {
-        onNavigationTurnUpdate?.invoke(protoData)
-    }
-
-    override fun onNavigationDistance(protoData: ByteArray) {
-        onNavigationDistanceUpdate?.invoke(protoData)
-    }
-
-    override fun onMediaMetadata(title: String, artist: String, album: String, albumArt: ByteArray?) {
-        onMediaMetadataUpdate?.invoke(title, artist, album, albumArt)
-    }
-
-    override fun onMediaPlayback(state: Int, positionMs: Long) {
-        onMediaPlaybackUpdate?.invoke(state, positionMs)
-    }
-
-    override fun onPhoneStatus(signalStrength: Int, callState: Int) {
-        onPhoneStatusUpdate?.invoke(signalStrength, callState)
-    }
-
-    override fun onPhoneBattery(level: Int, charging: Boolean) {
-        onPhoneBatteryUpdate?.invoke(level, charging)
-    }
-
-    override fun onVoiceSession(active: Boolean) {
-        onVoiceSessionUpdate?.invoke(active)
-    }
-
-    override fun onAudioFocusRequest(focusType: Int) {
-        onAudioFocusUpdate?.invoke(focusType)
-    }
-
-    override fun onError(message: String) {
-        Log.e(TAG, "Native error: $message")
-        onErrorCallback?.invoke(message)
     }
 }

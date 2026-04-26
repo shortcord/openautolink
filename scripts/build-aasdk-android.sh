@@ -54,12 +54,16 @@ if [ ! -f "$BOOST_DIR/boost/asio.hpp" ]; then
 fi
 
 # Copy aasdk source to native fs (avoid NTFS during build)
-echo "Staging aasdk source on native fs..."
 AASDK_NATIVE="$WORK_DIR/aasdk-src"
-rm -rf "$AASDK_NATIVE"
-mkdir -p "$AASDK_NATIVE"
-# Use tar to avoid the slow per-file NTFS reads
-(cd "$AASDK_SOURCE" && tar cf - --exclude='.git' .) | (cd "$AASDK_NATIVE" && tar xf -)
+if [ ! -f "$AASDK_NATIVE/CMakeLists.txt" ]; then
+    echo "Staging aasdk source on native fs..."
+    rm -rf "$AASDK_NATIVE"
+    mkdir -p "$AASDK_NATIVE"
+    # Use tar to avoid the slow per-file NTFS reads
+    (cd "$AASDK_SOURCE" && tar cf - --exclude='.git' .) | (cd "$AASDK_NATIVE" && tar xf -)
+else
+    echo "aasdk source already staged"
+fi
 
 # Also copy Boost + OpenSSL to native fs for the build
 BOOST_NATIVE="$WORK_DIR/boost-include"

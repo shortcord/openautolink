@@ -24,7 +24,7 @@ interface AasdkSessionCallback {
      * @param width Video width (from setup)
      * @param height Video height (from setup)
      */
-    fun onVideoFrame(data: ByteArray, timestampUs: Long, width: Int, height: Int)
+    fun onVideoFrame(data: ByteArray, timestampUs: Long, width: Int, height: Int, isKeyFrame: Boolean)
 
     /**
      * Audio frame received from phone.
