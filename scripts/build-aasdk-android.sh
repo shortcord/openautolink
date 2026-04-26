@@ -237,9 +237,19 @@ find "$BUILD_DIR/_deps/protobuf-build" -name "libprotobuf.a" -exec cp {} "$PACK_
 # abseil libs
 find "$BUILD_DIR/_deps/abseil-build" -name "libabsl_*.a" -exec cp {} "$PACK_DIR/lib/" \; 2>/dev/null || true
 
-# Generated protobuf headers
+# Generated protobuf headers (aap_protobuf .pb.h files)
 if [ -d "$BUILD_DIR/protobuf" ]; then
     cp -r "$BUILD_DIR/protobuf" "$PACK_DIR/include/"
+fi
+
+# Protobuf runtime headers (google/protobuf/*.h — needed to compile against aasdk)
+if [ -d "$BUILD_DIR/_deps/protobuf-src/src/google" ]; then
+    cp -r "$BUILD_DIR/_deps/protobuf-src/src/google" "$PACK_DIR/include/"
+fi
+
+# Abseil headers (absl/*.h — needed by protobuf headers)
+if [ -d "$BUILD_DIR/_deps/abseil-src/absl" ]; then
+    cp -r "$BUILD_DIR/_deps/abseil-src/absl" "$PACK_DIR/include/"
 fi
 
 # Generated Version.hpp
