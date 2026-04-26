@@ -202,17 +202,12 @@ cmake "$AASDK_NATIVE" \
 # the host-built protoc. Also create a wrapper script that protobuf_generate
 # can find by the target name.
 echo "Injecting host protoc into cross-compile build..."
-CROSS_PROTOC_DIR="$BUILD_DIR/bin"
-mkdir -p "$CROSS_PROTOC_DIR"
-cp "$HOST_PROTOC" "$CROSS_PROTOC_DIR/protoc"
-# Also overwrite the ARM64 protoc in the FetchContent build dir
-find "$BUILD_DIR/_deps/protobuf-build" -name "protoc" -type f -exec cp "$HOST_PROTOC" {} \; 2>/dev/null
-# Create a symlink/script so "protobuf::protoc" resolves to the host binary
-# The Makefile uses the literal string "protobuf::protoc" as a command — create a wrapper
+# The shim must use an absolute path to the HOST protoc,
+# not $BUILD_DIR/bin/protoc which gets overwritten by the ARM64 build.
 mkdir -p "$BUILD_DIR/.protoc_shim"
-cat > "$BUILD_DIR/.protoc_shim/protobuf::protoc" << 'SHIMEOF'
+cat > "$BUILD_DIR/.protoc_shim/protobuf::protoc" << SHIMEOF
 #!/bin/bash
-exec "$(dirname "$0")/../bin/protoc" "$@"
+exec "$HOST_PROTOC" "\$@"
 SHIMEOF
 chmod +x "$BUILD_DIR/.protoc_shim/protobuf::protoc"
 export PATH="$BUILD_DIR/.protoc_shim:$PATH"
