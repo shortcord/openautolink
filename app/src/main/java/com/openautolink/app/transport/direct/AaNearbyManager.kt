@@ -93,6 +93,7 @@ class AaNearbyManager(
 
         val options = DiscoveryOptions.Builder()
             .setStrategy(STRATEGY)
+            .setLowPower(true) // Prevent BT→WiFi Direct upgrade that kills stream payloads
             .build()
 
         OalLog.i(TAG, "Starting Nearby discovery (service=$LEGACY_SERVICE_ID)")

@@ -75,6 +75,7 @@ class NearbyAdvertiser(
     private fun startAdvertising() {
         val options = AdvertisingOptions.Builder()
             .setStrategy(Strategy.P2P_POINT_TO_POINT)
+            .setDisruptiveUpgrade(false) // Prevent BT→WiFi Direct upgrade that kills stream payloads
             .build()
 
         val endpointName = resolveEndpointName()

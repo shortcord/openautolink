@@ -240,8 +240,8 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
             *strand_, messenger_);
         systemAudioChannel_ = std::make_shared<aasdk::channel::mediasink::audio::channel::SystemAudioChannel>(
             *strand_, messenger_);
-        telephonyAudioChannel_ = std::make_shared<aasdk::channel::mediasink::audio::channel::TelephonyAudioChannel>(
-            *strand_, messenger_);
+        // Telephony audio disabled — crashes AA v16.7 without BT HFP
+        // telephonyAudioChannel_ = ...
         inputChannel_ = std::make_shared<aasdk::channel::inputsource::InputSourceService>(
             *strand_, messenger_);
         sensorChannel_ = std::make_shared<aasdk::channel::sensorsource::SensorSourceService>(
@@ -702,6 +702,9 @@ void JniSession::startAllHandlers()
 {
     LOGI("Starting all service handlers");
 
+    // Video channel — must start receiving before phone sends channel open request
+    videoChannel_->receive(shared_from_this());
+
     // Audio handlers (3 instances Ã¢â‚¬â€ same class, different channel types)
     mediaAudioHandler_ = std::make_shared<JniAudioSinkHandler>(
         *strand_, mediaAudioChannel_, *this, JniAudioSinkHandler::AudioType::Media);
@@ -715,9 +718,9 @@ void JniSession::startAllHandlers()
         *strand_, systemAudioChannel_, *this, JniAudioSinkHandler::AudioType::System);
     systemAudioHandler_->start();
 
-    telephonyAudioHandler_ = std::make_shared<JniAudioSinkHandler>(
-        *strand_, telephonyAudioChannel_, *this, JniAudioSinkHandler::AudioType::Telephony);
-    telephonyAudioHandler_->start();
+    // Telephony audio disabled — crashes AA v16.7 without BT HFP
+    // telephonyAudioHandler_ = ...
+    // telephonyAudioHandler_->start();
 
     // Sensor handler
     sensorHandler_ = std::make_shared<JniSensorHandler>(*strand_, sensorChannel_, *this);

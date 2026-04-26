@@ -371,13 +371,22 @@ class SessionManager(
             else -> 1920 to 1080 // "1080p" default
         }
 
-        // Get BT MAC
+        // Get BT MAC — BluetoothAdapter.getAddress() returns 02:00:00:00:00:00
+        // on Android 8+ due to privacy. Try Settings.Secure first, then adapter.
         var btMac = ""
         try {
-            @Suppress("MissingPermission")
-            val btAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
-            btMac = btAdapter?.address ?: ""
+            btMac = android.provider.Settings.Secure.getString(
+                ctx.contentResolver, "bluetooth_address") ?: ""
         } catch (_: Exception) {}
+        if (btMac.isEmpty() || btMac == "02:00:00:00:00:00") {
+            try {
+                @Suppress("MissingPermission")
+                val btAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+                val addr = btAdapter?.address ?: ""
+                if (addr != "02:00:00:00:00:00") btMac = addr
+            } catch (_: Exception) {}
+        }
+        OalLog.i(TAG, "BT MAC for SDR: ${if (btMac.isNotEmpty()) btMac else "(none)"}")
 
         // Vehicle identity from VHAL
         val vd = _vehicleDataForwarder?.latestVehicleData?.value

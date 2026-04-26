@@ -27,13 +27,12 @@
 #include <aasdk/Channel/Control/IControlServiceChannelEventHandler.hpp>
 #include <aasdk/Channel/MediaSink/Video/VideoMediaSinkService.hpp>
 #include <aasdk/Channel/MediaSink/Video/IVideoMediaSinkServiceEventHandler.hpp>
-#include <aasdk/Channel/MediaSink/Video/VideoMediaSinkService.hpp>
+#include <aasdk/Channel/MediaSink/Video/Channel/VideoChannel.hpp>
 #include <aasdk/Channel/MediaSink/Audio/AudioMediaSinkService.hpp>
 #include <aasdk/Channel/MediaSink/Audio/IAudioMediaSinkServiceEventHandler.hpp>
 #include <aasdk/Channel/MediaSink/Audio/Channel/MediaAudioChannel.hpp>
 #include <aasdk/Channel/MediaSink/Audio/Channel/GuidanceAudioChannel.hpp>
 #include <aasdk/Channel/MediaSink/Audio/Channel/SystemAudioChannel.hpp>
-#include <aasdk/Channel/MediaSink/Audio/Channel/TelephonyAudioChannel.hpp>
 #include <aasdk/Channel/MediaSource/MediaSourceService.hpp>
 #include <aasdk/Channel/MediaSource/IMediaSourceServiceEventHandler.hpp>
 #include <aasdk/Channel/SensorSource/SensorSourceService.hpp>
@@ -128,6 +127,9 @@ public:
     /** Is session actively streaming? */
     bool isStreaming() const { return streaming_; }
 
+    /** Send unsolicited AUDIO_FOCUS_STATE_GAIN to phone (called from audio handlers). */
+    void sendUnsolicitedAudioFocusGain();
+
     // ---- IControlServiceChannelEventHandler ----
     void onVersionResponse(uint16_t majorCode, uint16_t minorCode,
                            aap_protobuf::shared::MessageStatus status) override;
@@ -170,9 +172,6 @@ public:
 
     // ---- Dispatch methods (called by handler classes → JNI) ----
     void dispatchAudioFrame(const uint8_t* data, size_t size, int purpose, int sampleRate, int channels);
-    void sendUnsolicitedAudioFocusGain(); // called by audio handlers after setup
-    void sendPing();      // proactive HU→phone ping (bridge does this)
-    void schedulePing();  // periodic ping timer
     void dispatchMicRequest(bool open);
     void dispatchNavStatus(int status);
     void dispatchNavTurn(const std::string& maneuver, const std::string& road,
@@ -209,7 +208,6 @@ private:
     aasdk::messenger::ICryptor::Pointer cryptor_;
     aasdk::transport::ITransport::Pointer rawTransport_;
     aasdk::messenger::IMessenger::Pointer messenger_;
-    std::atomic<bool> pingOutstanding_{false};
 
     // Channels
     std::shared_ptr<aasdk::channel::control::ControlServiceChannel> controlChannel_;
@@ -242,6 +240,10 @@ private:
     std::atomic<bool> stopped_{false};
     std::atomic<bool> streaming_{false};
     std::atomic<bool> micOpen_{false};
+    std::atomic<bool> pingOutstanding_{false};
+
+    void sendPing();
+    void schedulePing();
 
     // SDR config (from Kotlin)
     struct SdrConfig {
