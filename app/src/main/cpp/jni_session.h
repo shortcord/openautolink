@@ -267,6 +267,7 @@ private:
         bool hideClock = false;
         bool hideSignal = false;
         bool hideBattery = false;
+        bool autoNegotiate = true;
     };
     SdrConfig sdrConfig_;
 

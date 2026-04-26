@@ -184,6 +184,7 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     sdrConfig_.hideClock = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "hideClock", "Z"));
     sdrConfig_.hideSignal = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "hideSignal", "Z"));
     sdrConfig_.hideBattery = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "hideBattery", "Z"));
+    sdrConfig_.autoNegotiate = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "autoNegotiate", "Z"));
     env->DeleteLocalRef(sdrClass);
 
     LOGI("Starting session: video=%dx%d@%dfps dpi=%d",
@@ -612,10 +613,15 @@ void JniSession::onMediaChannelSetupRequest(
     aap_protobuf::service::media::shared::message::Config config;
     config.set_status(aap_protobuf::service::media::shared::message::Config::STATUS_READY);
     config.set_max_unacked(30);
-    // Send ALL configuration indices — let the phone pick what it supports.
-    // The SDR has 5 H.265 configs (tiers 5-1) + 3 H.264 configs (tiers 3-1) = 8 total.
-    for (int i = 0; i < 8; i++) {
-        config.add_configuration_indices(i);
+    if (sdrConfig_.autoNegotiate) {
+        // Auto mode: accept all configurations
+        // SDR has 5 H.265 + 3 H.264 = 8 total
+        for (int i = 0; i < 8; i++) {
+            config.add_configuration_indices(i);
+        }
+    } else {
+        // Manual mode: only accept the single configured resolution
+        config.add_configuration_indices(0);
     }
     auto promise = aasdk::channel::SendPromise::defer(*strand_);
     promise->then([]() {}, [this](const auto& e) { this->onChannelError(e); });
@@ -874,24 +880,36 @@ void JniSession::buildServiceDiscoveryResponse(
       else res = VRes::VIDEO_3840x2160;
       auto fps = sdrConfig_.videoFps >= 60 ? VFps::VIDEO_FPS_60 : VFps::VIDEO_FPS_30;
 
-      // H.265 at all tiers, then H.264 fallback (matches bridge auto-negotiate)
-      int tiers[] = {5, 4, 3, 2, 1};
-      for (int t : tiers) {
+      if (sdrConfig_.autoNegotiate) {
+          // Auto mode: H.265 at all tiers, then H.264 fallback
+          int tiers[] = {5, 4, 3, 2, 1};
+          for (int t : tiers) {
+              auto* vc = ms->add_video_configs();
+              vc->set_codec_resolution(static_cast<VRes>(t));
+              vc->set_frame_rate(fps);
+              vc->set_density(sdrConfig_.videoDpi);
+              vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265);
+              if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
+              if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
+              if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
+          }
+          for (int t : {3, 2, 1}) {
+              auto* vc = ms->add_video_configs();
+              vc->set_codec_resolution(static_cast<VRes>(t));
+              vc->set_frame_rate(fps);
+              vc->set_density(sdrConfig_.videoDpi);
+              vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
+              if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
+              if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
+              if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
+          }
+      } else {
+          // Manual mode: single config at the selected resolution/codec only
           auto* vc = ms->add_video_configs();
-          vc->set_codec_resolution(static_cast<VRes>(t));
+          vc->set_codec_resolution(res);
           vc->set_frame_rate(fps);
           vc->set_density(sdrConfig_.videoDpi);
           vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265);
-          if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
-          if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
-          if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
-      }
-      for (int t : {3, 2, 1}) { // H.264 fallback at ≤1080p
-          auto* vc = ms->add_video_configs();
-          vc->set_codec_resolution(static_cast<VRes>(t));
-          vc->set_frame_rate(fps);
-          vc->set_density(sdrConfig_.videoDpi);
-          vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
           if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
           if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
           if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
@@ -1064,6 +1082,11 @@ void JniSession::buildServiceDiscoveryResponse(
 void JniSession::sendTouchEvent(int action, int pointerId, float x, float y, int pointerCount)
 {
     if (!streaming_ || !inputChannel_) return;
+    // Log touch events (only DOWN/UP to avoid spam)
+    if (action == 0 || action == 1) {
+        LOGI("Touch: action=%d x=%.1f y=%.1f ptr=%d (touchscreen=%dx%d)",
+             action, x, y, pointerId, sdrConfig_.videoWidth, sdrConfig_.videoHeight);
+    }
     ioService_->post([this, action, pointerId, x, y, pointerCount]() {
         aap_protobuf::service::inputsource::message::InputReport report;
 

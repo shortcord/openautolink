@@ -460,6 +460,7 @@ class SessionManager(
             hideClock = hideClock,
             hideSignal = hideSignal,
             hideBattery = hideBattery,
+            autoNegotiate = videoAutoNegotiate,
         )
         _touchWidth.value = resW
         _touchHeight.value = resH

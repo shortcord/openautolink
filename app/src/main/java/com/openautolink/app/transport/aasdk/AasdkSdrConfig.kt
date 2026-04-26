@@ -53,4 +53,7 @@ class AasdkSdrConfig(
 
     /** Hide battery indicator in AA status bar. */
     @JvmField val hideBattery: Boolean = false,
+
+    /** Auto-negotiate video: true = send all resolutions/codecs, false = send only the configured one. */
+    @JvmField val autoNegotiate: Boolean = true,
 )

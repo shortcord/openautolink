@@ -638,8 +638,15 @@ class MediaCodecDecoder(
                             val format = mc.outputFormat
                             Log.i(TAG, "Output format changed: $format")
                             outputFormatReceived = true
-                            val w = format.getInteger(MediaFormat.KEY_WIDTH, 0)
-                            val h = format.getInteger(MediaFormat.KEY_HEIGHT, 0)
+                            // Use crop rect for actual video dimensions (KEY_WIDTH includes padding)
+                            val cropLeft = format.getInteger("crop-left", 0)
+                            val cropRight = format.getInteger("crop-right", -1)
+                            val cropTop = format.getInteger("crop-top", 0)
+                            val cropBottom = format.getInteger("crop-bottom", -1)
+                            val w = if (cropRight >= 0) cropRight - cropLeft + 1
+                                    else format.getInteger(MediaFormat.KEY_WIDTH, 0)
+                            val h = if (cropBottom >= 0) cropBottom - cropTop + 1
+                                    else format.getInteger(MediaFormat.KEY_HEIGHT, 0)
                             if (w > 0 && h > 0) {
                                 _stats.value = _stats.value.copy(width = w, height = h)
                             }
