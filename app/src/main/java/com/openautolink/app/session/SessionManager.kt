@@ -657,12 +657,22 @@ class SessionManager(
         val session = aasdkSession ?: return
         when (message) {
             is ControlMessage.Touch -> {
-                val x = message.x ?: return
-                val y = message.y ?: return
-                session.sendTouchEvent(
-                    message.action, message.pointerId ?: 0, x, y,
-                    message.pointers?.size ?: 1
-                )
+                if (message.pointers != null && message.pointers.isNotEmpty()) {
+                    // Multi-touch: send all pointers via native multi-touch API
+                    val ids = message.pointers.map { it.id }.toIntArray()
+                    val xs = message.pointers.map { it.x }.toFloatArray()
+                    val ys = message.pointers.map { it.y }.toFloatArray()
+                    session.sendMultiTouchEvent(
+                        message.action, message.actionIndex ?: 0,
+                        ids, xs, ys
+                    )
+                } else {
+                    val x = message.x ?: return
+                    val y = message.y ?: return
+                    session.sendTouchEvent(
+                        message.action, message.pointerId ?: 0, x, y, 1
+                    )
+                }
             }
             is ControlMessage.Button -> session.sendKeyEvent(message.keycode, message.down)
             is ControlMessage.KeyframeRequest -> session.requestKeyframe()

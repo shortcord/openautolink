@@ -47,6 +47,11 @@ object AasdkNative {
     )
 
     @JvmStatic
+    external fun nativeSendMultiTouchEvent(
+        action: Int, actionIndex: Int, ids: IntArray, xs: FloatArray, ys: FloatArray
+    )
+
+    @JvmStatic
     external fun nativeSendKeyEvent(keyCode: Int, isDown: Boolean)
 
     @JvmStatic

@@ -160,6 +160,10 @@ class AasdkSession(
         AasdkNative.nativeSendTouchEvent(action, pointerId, x, y, pointerCount)
     }
 
+    fun sendMultiTouchEvent(action: Int, actionIndex: Int, ids: IntArray, xs: FloatArray, ys: FloatArray) {
+        AasdkNative.nativeSendMultiTouchEvent(action, actionIndex, ids, xs, ys)
+    }
+
     fun sendKeyEvent(keyCode: Int, isDown: Boolean) {
         AasdkNative.nativeSendKeyEvent(keyCode, isDown)
     }
