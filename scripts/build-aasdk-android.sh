@@ -148,7 +148,6 @@ if [ ! -f "$HOST_PROTOC" ]; then
         -DBUILD_AASDK_STATIC=ON \
         -DSKIP_BUILD_PROTOBUF=OFF \
         -DSKIP_BUILD_ABSL=OFF \
-        -DDISABLE_MODERN_LOGGING=ON \
         -DTARGET_ARCH="" \
         -DLIBUSB_1_LIBRARIES="$STUB_DIR/libusb_stub.c" \
         -DLIBUSB_1_INCLUDE_DIRS="$STUB_DIR" \
@@ -168,7 +167,6 @@ if [ ! -f "$HOST_PROTOC" ]; then
 fi
 
 # Step 2: Cross-compile aasdk for Android ARM64.
-# Use SKIP_BUILD_PROTOBUF=ON and point to the host-built protobuf + pre-generated headers.
 echo ""
 echo "=== Configuring aasdk for Android ARM64 (cross-compile) ==="
 echo ""
@@ -177,15 +175,6 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# Copy the pre-generated protobuf .pb.h/.pb.cc from host build
-# so we don't need to run protoc during cross-compile
-echo "Copying pre-generated protobuf sources from host build..."
-mkdir -p "$BUILD_DIR/protobuf"
-cp -r "$HOST_BUILD_DIR/protobuf/"* "$BUILD_DIR/protobuf/" 2>/dev/null || true
-
-# For cross-compile: use system protoc path (host-built) and skip protobuf build
-# We link against the cross-compiled libprotobuf from the host's FetchContent sources
-# rebuilt with the NDK toolchain
 cmake "$AASDK_NATIVE" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
     -DANDROID_ABI=arm64-v8a \
@@ -195,7 +184,6 @@ cmake "$AASDK_NATIVE" \
     -DBUILD_AASDK_STATIC=ON \
     -DSKIP_BUILD_PROTOBUF=OFF \
     -DSKIP_BUILD_ABSL=OFF \
-    -DDISABLE_MODERN_LOGGING=ON \
     -DTARGET_ARCH="" \
     -DLIBUSB_1_LIBRARIES="$STUB_DIR/libusb_stub.c" \
     -DLIBUSB_1_INCLUDE_DIRS="$STUB_DIR" \

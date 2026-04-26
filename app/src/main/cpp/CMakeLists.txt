@@ -118,7 +118,6 @@ target_link_libraries(openautolink-jni PRIVATE
 target_compile_definitions(openautolink-jni PRIVATE
     BOOST_ASIO_HAS_STD_INVOKE_RESULT=1
     BOOST_ALL_NO_LIB=1
-    DISABLE_MODERN_LOGGING=1
 )
 
 # Strip in release for smaller APK
