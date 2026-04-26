@@ -94,3 +94,53 @@ int libusb_kernel_driver_active(libusb_device_handle *handle, int iface) {
 int libusb_detach_kernel_driver(libusb_device_handle *handle, int iface) {
     (void)handle; (void)iface; return -1;
 }
+libusb_device *libusb_get_device(libusb_device_handle *handle) {
+    (void)handle; return NULL;
+}
+libusb_device_handle *libusb_open_device_with_vid_pid(libusb_context *ctx,
+    uint16_t vendor_id, uint16_t product_id) {
+    (void)ctx; (void)vendor_id; (void)product_id; return NULL;
+}
+void libusb_fill_interrupt_transfer(struct libusb_transfer *transfer,
+    libusb_device_handle *dev_handle, unsigned char endpoint,
+    unsigned char *buffer, int length, libusb_transfer_cb_fn callback,
+    void *user_data, unsigned int timeout) {
+    if (!transfer) return;
+    transfer->dev_handle = dev_handle;
+    transfer->endpoint = endpoint;
+    transfer->type = 3; /* LIBUSB_TRANSFER_TYPE_INTERRUPT */
+    transfer->buffer = buffer;
+    transfer->length = length;
+    transfer->callback = callback;
+    transfer->user_data = user_data;
+    transfer->timeout = timeout;
+}
+void libusb_fill_control_transfer(struct libusb_transfer *transfer,
+    libusb_device_handle *dev_handle, unsigned char *buffer,
+    libusb_transfer_cb_fn callback, void *user_data, unsigned int timeout) {
+    if (!transfer) return;
+    transfer->dev_handle = dev_handle;
+    transfer->type = 0; /* LIBUSB_TRANSFER_TYPE_CONTROL */
+    transfer->buffer = buffer;
+    transfer->callback = callback;
+    transfer->user_data = user_data;
+    transfer->timeout = timeout;
+}
+void libusb_fill_control_setup(unsigned char *buffer, uint8_t bmRequestType,
+    uint8_t bRequest, uint16_t wValue, uint16_t wIndex, uint16_t wLength) {
+    if (!buffer) return;
+    buffer[0] = bmRequestType;
+    buffer[1] = bRequest;
+    buffer[2] = (unsigned char)(wValue & 0xff);
+    buffer[3] = (unsigned char)(wValue >> 8);
+    buffer[4] = (unsigned char)(wIndex & 0xff);
+    buffer[5] = (unsigned char)(wIndex >> 8);
+    buffer[6] = (unsigned char)(wLength & 0xff);
+    buffer[7] = (unsigned char)(wLength >> 8);
+}
+const char *libusb_error_name(int errcode) {
+    (void)errcode; return "LIBUSB_STUB";
+}
+int libusb_set_configuration(libusb_device_handle *handle, int configuration) {
+    (void)handle; (void)configuration; return -1;
+}

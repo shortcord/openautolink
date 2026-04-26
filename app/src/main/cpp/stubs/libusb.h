@@ -190,6 +190,20 @@ void libusb_unref_device(libusb_device *dev);
 int libusb_reset_device(libusb_device_handle *handle);
 int libusb_kernel_driver_active(libusb_device_handle *handle, int iface);
 int libusb_detach_kernel_driver(libusb_device_handle *handle, int iface);
+libusb_device *libusb_get_device(libusb_device_handle *handle);
+libusb_device_handle *libusb_open_device_with_vid_pid(libusb_context *ctx,
+    uint16_t vendor_id, uint16_t product_id);
+void libusb_fill_interrupt_transfer(struct libusb_transfer *transfer,
+    libusb_device_handle *dev_handle, unsigned char endpoint,
+    unsigned char *buffer, int length, libusb_transfer_cb_fn callback,
+    void *user_data, unsigned int timeout);
+void libusb_fill_control_transfer(struct libusb_transfer *transfer,
+    libusb_device_handle *dev_handle, unsigned char *buffer,
+    libusb_transfer_cb_fn callback, void *user_data, unsigned int timeout);
+void libusb_fill_control_setup(unsigned char *buffer, uint8_t bmRequestType,
+    uint8_t bRequest, uint16_t wValue, uint16_t wIndex, uint16_t wLength);
+const char *libusb_error_name(int errcode);
+int libusb_set_configuration(libusb_device_handle *handle, int configuration);
 
 #ifdef __cplusplus
 }
