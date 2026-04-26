@@ -1,10 +1,12 @@
 package com.openautolink.companion.connection
 
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Socket wrapper that bridges Google Nearby Connections stream payloads
@@ -15,6 +17,8 @@ import java.util.concurrent.CountDownLatch
  */
 class NearbySocket : Socket() {
 
+    @Volatile
+    private var closed = false
     private var internalInput: InputStream? = null
     private var internalOutput: OutputStream? = null
     private val inputLatch = CountDownLatch(1)
@@ -34,29 +38,46 @@ class NearbySocket : Socket() {
             if (value != null) outputLatch.countDown()
         }
 
-    override fun isConnected() = true
+    override fun isConnected() = !closed
+    override fun isClosed() = closed
     override fun getInetAddress(): InetAddress = InetAddress.getLoopbackAddress()
+
+    override fun close() {
+        closed = true
+        // Release any threads blocked on await()
+        inputLatch.countDown()
+        outputLatch.countDown()
+        runCatching { internalInput?.close() }
+        runCatching { internalOutput?.close() }
+    }
+
+    private fun awaitOrThrow(latch: CountDownLatch, name: String) {
+        if (!latch.await(30, TimeUnit.SECONDS)) {
+            throw IOException("Timed out waiting for $name stream")
+        }
+        if (closed) throw IOException("NearbySocket closed")
+    }
 
     override fun getInputStream(): InputStream = object : InputStream() {
         private fun stream(): InputStream {
-            inputLatch.await()
-            return internalInput!!
+            awaitOrThrow(inputLatch, "input")
+            return internalInput ?: throw IOException("Input stream unavailable")
         }
 
         override fun read(): Int = stream().read()
         override fun read(b: ByteArray, off: Int, len: Int): Int = stream().read(b, off, len)
         override fun available(): Int =
-            if (inputLatch.count == 0L) internalInput!!.available() else 0
+            if (inputLatch.count == 0L) internalInput?.available() ?: 0 else 0
 
         override fun close() {
-            if (inputLatch.count == 0L) internalInput?.close()
+            runCatching { internalInput?.close() }
         }
     }
 
     override fun getOutputStream(): OutputStream = object : OutputStream() {
         private fun stream(): OutputStream {
-            outputLatch.await()
-            return internalOutput!!
+            awaitOrThrow(outputLatch, "output")
+            return internalOutput ?: throw IOException("Output stream unavailable")
         }
 
         override fun write(b: Int) {
@@ -65,7 +86,6 @@ class NearbySocket : Socket() {
 
         override fun write(b: ByteArray, off: Int, len: Int) {
             stream().write(b, off, len)
-            stream().flush()
         }
 
         override fun flush() {
@@ -73,7 +93,7 @@ class NearbySocket : Socket() {
         }
 
         override fun close() {
-            if (outputLatch.count == 0L) internalOutput?.close()
+            runCatching { internalOutput?.close() }
         }
     }
 }

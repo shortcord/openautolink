@@ -28,8 +28,13 @@ class WifiJobService : JobService() {
     override fun onStartJob(params: JobParameters?): Boolean {
         Log.i(TAG, "WiFi job triggered by OS")
         Thread {
-            checkWifiAndStart(this)
-            jobFinished(params, false)
+            try {
+                checkWifiAndStart(this)
+            } catch (e: Exception) {
+                Log.e(TAG, "WiFi check failed: ${e.message}")
+            } finally {
+                jobFinished(params, false)
+            }
         }.start()
         return true
     }
@@ -82,7 +87,7 @@ class WifiJobService : JobService() {
                 .build()
             val intent = Intent(context, WifiReceiver::class.java)
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-                if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
+                if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_IMMUTABLE else 0
             val pending = PendingIntent.getBroadcast(context, 0, intent, flags)
             try {
                 cm.registerNetworkCallback(request, pending)

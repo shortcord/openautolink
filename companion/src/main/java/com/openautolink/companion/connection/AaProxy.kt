@@ -19,6 +19,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * Local TCP proxy that relays Android Auto protocol data between the AA
  * app on this phone (connected via localhost) and the car (connected via
  * a pre-connected NearbySocket or remote TCP).
+ *
+ * Note: preConnectedSocket is used for exactly one bridge session.
+ * If AA reconnects, the proxy must be recreated with a new socket.
  */
 class AaProxy(
     private val preConnectedSocket: Socket? = null,
@@ -38,6 +41,7 @@ class AaProxy(
     @Volatile
     private var activeCarSocket: Socket? = null
     private val activeBridges = AtomicInteger(0)
+    private var bridgeUsed = false
 
     /** Returns true if at least one AA bridge is active (AA connected and streaming). */
     fun hasActiveBridge(): Boolean = activeBridges.get() > 0
@@ -72,6 +76,13 @@ class AaProxy(
         scope.launch {
             var carSocket: Socket? = null
             try {
+                if (bridgeUsed) {
+                    Log.w(TAG, "Car socket already used — rejecting second AA connection")
+                    runCatching { aaSocket.close() }
+                    return@launch
+                }
+                bridgeUsed = true
+
                 activeBridges.incrementAndGet()
                 listener?.onConnected()
 
@@ -95,7 +106,7 @@ class AaProxy(
                 Log.i(TAG, "Bridge closed")
                 activeCarSocket = null
                 runCatching { aaSocket.close() }
-                runCatching { carSocket?.close() }
+                // Don't close carSocket here — let the NearbyAdvertiser manage it via cleanup()
                 if (activeBridges.decrementAndGet() <= 0) {
                     listener?.onDisconnected()
                 }
@@ -119,11 +130,11 @@ class AaProxy(
         }
 
     fun stop() {
-        if (isRunning) {
-            sendDisconnectSignal()
-            Thread.sleep(150)
-        }
+        val wasRunning = isRunning
         isRunning = false
+        if (wasRunning) {
+            sendDisconnectSignal()
+        }
         runCatching { serverSocket?.close() }
         serverSocket = null
         scope.cancel()

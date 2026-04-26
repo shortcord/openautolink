@@ -78,7 +78,7 @@ class NearbyAdvertiser(
             .build()
 
         val endpointName = resolveEndpointName()
-        Log.i(TAG, "Advertising as \"$endpointName\" (service=$SERVICE_ID)")
+        Log.i(TAG, "Advertising as \"$endpointName\" (service=$LEGACY_SERVICE_ID)")
 
         connectionsClient.startAdvertising(endpointName, LEGACY_SERVICE_ID, connectionCallback, options)
             .addOnSuccessListener { Log.i(TAG, "Advertising started (service=$LEGACY_SERVICE_ID)") }
@@ -108,7 +108,8 @@ class NearbyAdvertiser(
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             if (result.status.statusCode != ConnectionsStatusCodes.STATUS_OK) {
-                Log.w(TAG, "Connection failed: ${result.status.statusMessage}")
+                Log.w(TAG, "Connection failed: ${result.status.statusMessage}, re-advertising")
+                startAdvertising()
                 return
             }
 
@@ -131,7 +132,11 @@ class NearbyAdvertiser(
                 Log.i(TAG, "Sending phone→car stream payload")
                 connectionsClient.sendPayload(endpointId, outPayload)
                     .addOnSuccessListener { Log.i(TAG, "Stream payload registered") }
-                    .addOnFailureListener { e -> Log.e(TAG, "Stream send failed: ${e.message}") }
+                    .addOnFailureListener { e ->
+                        Log.e(TAG, "Stream send failed: ${e.message}")
+                        cleanup()
+                        stateListener.onProxyDisconnected()
+                    }
 
                 // Start proxy + launch AA. NearbySocket.getInputStream() blocks
                 // until the car's stream arrives via onPayloadReceived.
@@ -141,6 +146,8 @@ class NearbyAdvertiser(
 
         override fun onDisconnected(endpointId: String) {
             Log.i(TAG, "Disconnected from $endpointId")
+            cleanup()
+            stateListener.onProxyDisconnected()
         }
     }
 

@@ -1,6 +1,5 @@
 package com.openautolink.companion.service
 
-import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -104,7 +103,9 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         updateNotification("Waiting for car...")
         serviceScope.launch {
             delay(2000)
-            startNearby()
+            if (_isRunning.value) {
+                startNearby()
+            }
         }
     }
 
@@ -116,45 +117,21 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         startNearby()
     }
 
-    // ── Bluetooth helpers ──────────────────────────────────────────────
-
-    @SuppressLint("MissingPermission")
-    private fun shouldAutoReconnect(): Boolean {
-        val prefs = getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
-        val targetMacs = prefs.getStringSet(CompanionPrefs.AUTO_START_BT_MACS, emptySet())
-            ?: emptySet()
-        if (targetMacs.isEmpty()) return true // No BT trigger configured — always reconnect
-
-        return try {
-            val bm = getSystemService(BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager
-            val adapter = bm.adapter ?: return false
-            targetMacs.any { mac ->
-                try {
-                    val device = adapter.getRemoteDevice(mac)
-                    val method = device.javaClass.getMethod("isConnected")
-                    method.invoke(device) as? Boolean ?: false
-                } catch (_: Exception) {
-                    false
-                }
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     // ── Wake lock ──────────────────────────────────────────────────────
 
     private fun acquireWakeLock() {
-        if (wakeLock?.isHeld == true) return
+        // Release existing lock before acquiring a new one to reset the timeout
+        releaseWakeLock()
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "OalCompanion:WakeLock")
-        wakeLock?.acquire(10 * 60 * 1000L)
+        wakeLock?.acquire(4 * 60 * 60 * 1000L) // 4 hours — covers long drives
     }
 
     private fun releaseWakeLock() {
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
+        wakeLock = null
     }
 
     // ── Notification ───────────────────────────────────────────────────
@@ -219,13 +196,13 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         const val ACTION_STOP = "ACTION_STOP"
 
         /** Observable service state for UI. */
-        val isRunning = MutableStateFlow(false)
-        private val _isRunning = isRunning
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: kotlinx.coroutines.flow.StateFlow<Boolean> = _isRunning
 
-        val isConnected = MutableStateFlow(false)
-        private val _isConnected = isConnected
+        private val _isConnected = MutableStateFlow(false)
+        val isConnected: kotlinx.coroutines.flow.StateFlow<Boolean> = _isConnected
 
-        val statusText = MutableStateFlow("Stopped")
-        private val _statusText = statusText
+        private val _statusText = MutableStateFlow("Stopped")
+        val statusText: kotlinx.coroutines.flow.StateFlow<String> = _statusText
     }
 }
