@@ -132,16 +132,45 @@ SHIMEOF
 BUILD_DIR="$WORK_DIR/build"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
+
+# Step 1: Build host-native protoc (x86_64) so it can run during cross-compile.
+# The cross-compiled protoc (ARM64) can't execute on the build host.
+HOST_BUILD_DIR="$WORK_DIR/host-protoc-build"
+HOST_PROTOC="$HOST_BUILD_DIR/bin/protoc"
+if [ ! -f "$HOST_PROTOC" ]; then
+    echo ""
+    echo "=== Building host protoc (x86_64) ==="
+    echo ""
+    rm -rf "$HOST_BUILD_DIR"
+    mkdir -p "$HOST_BUILD_DIR"
+    cd "$HOST_BUILD_DIR"
+
+    # Configure aasdk for host — only need protoc binary
+    cmake "$AASDK_NATIVE" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_AASDK_STATIC=ON \
+        -DSKIP_BUILD_PROTOBUF=OFF \
+        -DSKIP_BUILD_ABSL=OFF \
+        -DDISABLE_MODERN_LOGGING=ON \
+        -DTARGET_ARCH="" \
+        -DLIBUSB_1_LIBRARIES="$STUB_DIR/libusb_stub.c" \
+        -DLIBUSB_1_INCLUDE_DIRS="$STUB_DIR" \
+        -DCMAKE_MODULE_PATH="$SHIM_DIR" \
+        -DOAL_BOOST_INCLUDE_DIR="$BOOST_NATIVE" \
+        -DOAL_OPENSSL_DIR="$OPENSSL_NATIVE" \
+        -DCMAKE_SKIP_INSTALL_RULES=ON \
+        -DAASDK_TEST=OFF \
+        2>&1
+
+    cmake --build . --target protoc -j$(nproc) 2>&1
+    echo "Host protoc built: $(ls -la "$HOST_PROTOC" 2>&1)"
+fi
 
 echo ""
 echo "=== Configuring aasdk for Android ARM64 ==="
 echo ""
 
-# Build libusb stub
-cat > "$BUILD_DIR/stub_build.c" << 'EOF'
-// stub
-EOF
+cd "$BUILD_DIR"
 
 cmake "$AASDK_NATIVE" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
@@ -161,6 +190,15 @@ cmake "$AASDK_NATIVE" \
     -DCMAKE_SKIP_INSTALL_RULES=ON \
     -DAASDK_TEST=OFF \
     2>&1
+
+# Replace the ARM64 protoc with the host protoc so proto generation works
+echo "Replacing ARM64 protoc with host protoc..."
+cp "$HOST_PROTOC" "$BUILD_DIR/bin/protoc"
+# Also fix the protobuf::protoc target — symlink into the FetchContent build dir
+PROTO_BUILD="$BUILD_DIR/_deps/protobuf-build"
+if [ -d "$PROTO_BUILD" ]; then
+    cp "$HOST_PROTOC" "$PROTO_BUILD/protoc" 2>/dev/null || true
+fi
 
 echo ""
 echo "=== Building aasdk ==="

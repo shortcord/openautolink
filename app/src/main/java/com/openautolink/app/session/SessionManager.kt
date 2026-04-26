@@ -26,14 +26,12 @@ import com.openautolink.app.media.OalMediaSessionManager
 import com.openautolink.app.navigation.ManeuverState
 import com.openautolink.app.navigation.NavigationDisplay
 import com.openautolink.app.navigation.NavigationDisplayImpl
-import com.openautolink.app.proto.Control
 import com.openautolink.app.transport.AudioPurpose
 import com.openautolink.app.transport.ConnectionState
 import com.openautolink.app.transport.ControlMessage
-import com.openautolink.app.transport.direct.AaMessageConverter
+import com.openautolink.app.transport.aasdk.AasdkSession
+import com.openautolink.app.transport.aasdk.AasdkSdrConfig
 import com.openautolink.app.transport.direct.AaNearbyManager
-import com.openautolink.app.transport.direct.DirectAaSession
-import com.openautolink.app.transport.direct.DirectServiceDiscovery
 import com.openautolink.app.video.DecoderState
 import com.openautolink.app.video.MediaCodecDecoder
 import com.openautolink.app.video.VideoDecoder
@@ -51,7 +49,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Session orchestrator â€” connects component islands, manages lifecycle.
- * Direct mode only â€” speaks AA protocol directly to the phone.
+ * aasdk JNI mode â€" native aasdk C++ handles AA protocol via Nearby transport.
  */
 class SessionManager(
     externalScope: CoroutineScope,
@@ -76,8 +74,8 @@ class SessionManager(
 
     private val scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
 
-    // Direct mode session â€” speaks AA wire protocol directly to phone
-    private var directSession: DirectAaSession? = null
+    // aasdk JNI session â€" native C++ handles AA protocol
+    private var aasdkSession: AasdkSession? = null
 
     // Dedicated single-threaded dispatcher for video decode
     private val videoDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
@@ -185,7 +183,7 @@ class SessionManager(
 
     /** Connect to a specific discovered Nearby endpoint by ID. */
     fun connectToNearbyEndpoint(endpointId: String) {
-        directSession?.nearbyManager?.connectToEndpoint(endpointId)
+        aasdkSession?.nearbyManager?.connectToEndpoint(endpointId)
     }
 
     // Media session
@@ -242,10 +240,10 @@ class SessionManager(
             coord.volumeOffsetAssistant = volumeOffsetAssistant
         }
 
-        // Create mic capture â€” sends frames via DirectAaSession
+        // Create mic capture â€" sends frames via AasdkSession
         _micCaptureManager?.release()
         _micCaptureManager = MicCaptureManager { frame ->
-            directSession?.let { session ->
+            aasdkSession?.let { session ->
                 scope.launch { session.sendMicAudio(frame.data) }
             }
         }
@@ -257,32 +255,25 @@ class SessionManager(
             GnssForwarderImpl(ctx) { _ -> /* NMEA not used in direct mode */ }
         }
 
-        // Create vehicle data forwarder â€” sends via DirectAaSession
+        // Create vehicle data forwarder â€" sends via AasdkSession
         _vehicleDataForwarder?.stop()
         _vehicleDataForwarder = context?.let { ctx ->
             VehicleDataForwarderImpl(
                 ctx,
                 sendMessage = { vehicleData ->
-                    val session = directSession ?: return@VehicleDataForwarderImpl
-                    scope.launch {
-                        session.sendMessage(AaMessageConverter.vehicleDataToProto(vehicleData))
-                        AaMessageConverter.buildVemSensorBatch(vehicleData)?.let {
-                            session.sendMessage(it)
-                        }
-                    }
+                    val session = aasdkSession ?: return@VehicleDataForwarderImpl
+                    // TODO: Serialize vehicle data and send via session.sendVehicleSensor()
                 },
-                onIgnitionOn = { /* direct mode doesn't need ignition-based reconnect */ }
+                onIgnitionOn = { /* aasdk mode doesn't need ignition-based reconnect */ }
             )
         }
 
-        // Create IMU forwarder â€” sends via DirectAaSession
+        // Create IMU forwarder â€" sends via AasdkSession
         _imuForwarder?.stop()
         _imuForwarder = context?.let { ctx ->
             ImuForwarder(ctx) { imuData ->
-                val session = directSession ?: return@ImuForwarder
-                scope.launch {
-                    session.sendMessage(AaMessageConverter.vehicleDataToProto(imuData))
-                }
+                val session = aasdkSession ?: return@ImuForwarder
+                // TODO: Serialize IMU data and send via session.sendVehicleSensor()
             }
         }
 
@@ -338,23 +329,8 @@ class SessionManager(
         driveSide: String = "left",
         hideClock: Boolean = false, hideSignal: Boolean = false, hideBattery: Boolean = false,
     ) {
-        directSession?.stop()
+        aasdkSession?.stop()
         val ctx = context ?: return
-        val session = DirectAaSession(scope, ctx)
-
-        // Get the actual projection surface dimensions for pixel_aspect auto-computation.
-        // Use the full display bounds — in projection mode the app is always fullscreen
-        // (immersive mode hides system bars). The pixel_aspect tells AA about the
-        // physical display shape so it renders UI correctly on wide displays.
-        // DO NOT subtract system bar insets: getInsetsIgnoringVisibility() returns
-        // non-zero values even when bars are hidden, which would incorrectly shrink
-        // the display dimensions and produce wrong pixel_aspect values.
-        val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
-        val metrics = wm.currentWindowMetrics
-        val displayW = metrics.bounds.width()
-        val displayH = metrics.bounds.height()
-        val systemDpi = ctx.resources.displayMetrics.densityDpi
-        Log.i(TAG, "Display for pixel_aspect: ${displayW}x${displayH} systemDpi=$systemDpi userDpi=$aaDpi")
 
         // Map resolution string to pixel dimensions
         val (resW, resH) = when (aaResolution) {
@@ -365,70 +341,52 @@ class SessionManager(
             else -> 1920 to 1080 // "1080p" default
         }
 
-        // Map codec preference to ServiceDiscovery codec string
-        val sdCodec = if (videoAutoNegotiate) "auto" else when (codec) {
-            "h265" -> "H.265"
-            "vp9" -> "VP9"
-            else -> "H.264"
-        }
-
-        session.videoConfig = DirectServiceDiscovery.VideoConfig(
-            width = resW, height = resH, fps = videoFps, dpi = aaDpi,
-            codec = sdCodec,
-            marginWidth = aaWidthMargin, marginHeight = aaHeightMargin,
-            pixelAspectE4 = aaPixelAspect,
-            displayWidth = displayW, displayHeight = displayH,
-        )
-        // Set vehicle identity from VHAL data or defaults
-        val vd = _vehicleDataForwarder?.latestVehicleData?.value
-        val driverPos = if (driveSide == "right") Control.DriverPosition.DRIVER_POSITION_RIGHT
-            else Control.DriverPosition.DRIVER_POSITION_LEFT
-        session.vehicleIdentity = DirectServiceDiscovery.VehicleIdentity(
-            make = vd?.carMake ?: "OpenAutoLink",
-            model = vd?.carModel ?: "Direct",
-            year = vd?.carYear ?: "2024",
-            driverPosition = driverPos,
-        )
-        // Set AA UI hide flags
-        session.hideClock = hideClock
-        session.hideSignal = hideSignal
-        session.hideBattery = hideBattery
-
-        // Bluetooth service — get car's BT MAC for phone pairing
+        // Get BT MAC
+        var btMac = ""
         try {
             @Suppress("MissingPermission")
             val btAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
-            val btMac = btAdapter?.address ?: ""
-            session.btMacAddress = btMac
-            if (btMac.isNotEmpty() && btMac != "02:00:00:00:00:00") {
-                Log.i(TAG, "Bluetooth MAC for AA: $btMac")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not get BT MAC: ${e.message}")
-        }
+            btMac = btAdapter?.address ?: ""
+        } catch (_: Exception) {}
 
-        // AAC audio — reduces bandwidth ~10x vs PCM over WiFi
-        session.useAacAudio = true
+        // Vehicle identity from VHAL
+        val vd = _vehicleDataForwarder?.latestVehicleData?.value
+        val driverPos = if (driveSide == "right") 1 else 0
+
+        val session = AasdkSession(scope, ctx)
+        session.sdrConfig = AasdkSdrConfig(
+            videoWidth = resW,
+            videoHeight = resH,
+            videoFps = videoFps,
+            videoDpi = aaDpi,
+            marginWidth = aaWidthMargin,
+            marginHeight = aaHeightMargin,
+            pixelAspectE4 = aaPixelAspect,
+            btMacAddress = btMac,
+            vehicleMake = vd?.carMake ?: "OpenAutoLink",
+            vehicleModel = vd?.carModel ?: "Direct",
+            vehicleYear = vd?.carYear ?: "2024",
+            driverPosition = driverPos,
+            hideClock = hideClock,
+            hideSignal = hideSignal,
+            hideBattery = hideBattery,
+        )
 
         // Multi-phone: set default phone name for auto-connect
         session.defaultPhoneName = _defaultPhoneName
         session.onPhoneConnected = { phoneName ->
             _phoneName.value = phoneName
-            // Persist as default if none set
             if (_defaultPhoneName.isEmpty()) {
                 _defaultPhoneName = phoneName
                 scope.launch {
-                    val ctx = context ?: return@launch
-                    AppPreferences.getInstance(ctx).setDefaultPhoneName(phoneName)
+                    val c = context ?: return@launch
+                    AppPreferences.getInstance(c).setDefaultPhoneName(phoneName)
                     Log.i(TAG, "Default phone saved: $phoneName")
                 }
             }
         }
 
-        session.hotspotSsid = hotspotSsid
-        session.hotspotPassword = hotspotPassword
-        session.directTransport = directTransport
-        directSession = session
+        aasdkSession = session
 
         // Observe session state
         scope.launch {
@@ -436,21 +394,14 @@ class SessionManager(
                 val newState = connState.toSessionState()
                 _sessionState.value = newState
                 _statusMessage.value = when (newState) {
-                    SessionState.IDLE -> {
-                        when (directTransport) {
-                            "nearby" -> "Nearby: ${AaNearbyManager.status.value}"
-                            "native" -> "Native: BT+WiFi Direct | TCP:5288"
-                            "hotspot" -> "Hotspot: BT+TCP:5288"
-                            else -> "Waiting for phone..."
-                        }
-                    }
+                    SessionState.IDLE -> "Nearby: ${AaNearbyManager.status.value}"
                     SessionState.CONNECTING -> "Phone connecting..."
                     SessionState.CONNECTED -> "Handshake..."
                     SessionState.STREAMING -> "Streaming"
                     SessionState.ERROR -> "Error"
                 }
                 if (newState == SessionState.STREAMING) {
-                    startDirectLocationForwarding(session)
+                    startLocationForwarding(session)
                     _vehicleDataForwarder?.start()
                     _imuForwarder?.start()
                 }
@@ -489,11 +440,11 @@ class SessionManager(
         }
 
         session.start()
-        Log.i(TAG, "Direct mode started (transport=$directTransport)")
+        Log.i(TAG, "aasdk JNI session started (Nearby transport)")
     }
 
     @android.annotation.SuppressLint("MissingPermission")
-    private fun startDirectLocationForwarding(session: DirectAaSession) {
+    private fun startLocationForwarding(session: AasdkSession) {
         stopDirectLocationForwarding()
         val ctx = context ?: return
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager ?: return
@@ -503,9 +454,10 @@ class SessionManager(
         }
 
         val listener = android.location.LocationListener { location ->
-            scope.launch {
-                session.sendMessage(AaMessageConverter.locationToProto(location))
-            }
+            session.sendGpsLocation(
+                location.latitude, location.longitude, location.altitude,
+                location.speed, location.bearing, location.time
+            )
         }
         try {
             lm.requestLocationUpdates(
@@ -537,8 +489,8 @@ class SessionManager(
         keyframeWatchJob = null
         callStateJob?.cancel()
         callStateJob = null
-        directSession?.stop()
-        directSession = null
+        aasdkSession?.stop()
+        aasdkSession = null
         stopDirectLocationForwarding()
         _videoDecoder?.release()
         _videoDecoder = null
@@ -583,12 +535,12 @@ class SessionManager(
 
         Log.i(TAG, "System wake detected (${elapsed / 1000}s gap, state=$state)")
         DiagnosticLog.i("transport", "System wake detected (${elapsed / 1000}s gap)")
-        // Direct mode: the server socket is still listening, phone will reconnect
-        // No explicit force-reconnect needed â€” DirectAaSession accepts new connections
+        // aasdk mode: the Nearby manager handles reconnection
+        // No explicit force-reconnect needed
     }
 
     suspend fun requestKeyframe() {
-        directSession?.requestKeyframe()
+        aasdkSession?.requestKeyframe()
     }
 
     private suspend fun syncLocalPreferences() {
@@ -602,23 +554,18 @@ class SessionManager(
     }
 
     suspend fun sendControlMessage(message: ControlMessage) {
-        val session = directSession ?: return
+        val session = aasdkSession ?: return
         when (message) {
-            is ControlMessage.Touch -> session.sendMessage(
-                AaMessageConverter.touchToProto(message)
+            is ControlMessage.Touch -> session.sendTouchEvent(
+                message.action, 0, message.x, message.y, 1
             )
-            is ControlMessage.VehicleData -> {
-                session.sendMessage(AaMessageConverter.vehicleDataToProto(message))
-                AaMessageConverter.buildVemSensorBatch(message)?.let {
-                    session.sendMessage(it)
-                }
-            }
-            is ControlMessage.Button -> session.sendMessage(
-                AaMessageConverter.buttonToProto(message)
-            )
+            is ControlMessage.Button -> session.sendKeyEvent(message.keyCode, message.isDown)
             is ControlMessage.KeyframeRequest -> session.requestKeyframe()
+            is ControlMessage.VehicleData -> {
+                // TODO: Serialize and send via session.sendVehicleSensor()
+            }
             is ControlMessage.Gnss -> {
-                // Direct mode: phone has its own GPS via hotspot
+                // GPS forwarded via LocationListener, not control messages
             }
             else -> {}
         }
@@ -689,7 +636,7 @@ class SessionManager(
                 _remoteDiagnostics?.log(DiagnosticLevel.INFO, "session", "Phone connected: ${message.phoneName}")
                 _sessionState.value = SessionState.STREAMING
                 _statusMessage.value = "Streaming"
-                directSession?.let { startDirectLocationForwarding(it) }
+                aasdkSession?.let { startLocationForwarding(it) }
                 _vehicleDataForwarder?.start()
                 _imuForwarder?.start()
             }
