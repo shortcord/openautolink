@@ -1,5 +1,6 @@
 package com.openautolink.app.transport.direct
 
+import com.openautolink.app.proto.Common
 import com.openautolink.app.proto.Control
 import com.openautolink.app.proto.Media
 import com.openautolink.app.proto.Sensors
@@ -84,17 +85,17 @@ object DirectServiceDiscovery {
                 .build())
             .build())
 
-        // 8. Bluetooth service — enables phone to discover car's BT for HFP/A2DP
-        if (btMacAddress.isNotEmpty() && btMacAddress != "02:00:00:00:00:00") {
+        // 8. Bluetooth service (for HFP/A2DP pairing)
+        if (btMacAddress.isNotEmpty()) {
             services.add(Control.Service.newBuilder()
                 .setId(AaChannel.BLUETOOTH)
                 .setBluetoothService(Control.Service.BluetoothService.newBuilder()
                     .setCarAddress(btMacAddress)
-                    .addSupportedPairingMethods(Control.BluetoothPairingMethod.A2DP)
-                    .addSupportedPairingMethods(Control.BluetoothPairingMethod.HFP)
+                    .addAllSupportedPairingMethods(listOf(
+                        Control.BluetoothPairingMethod.A2DP,
+                        Control.BluetoothPairingMethod.HFP))
                     .build())
                 .build())
-            OalLog.i("DirectSD", "Bluetooth service: $btMacAddress (A2DP+HFP)")
         }
 
         // Build session config bitmask for hiding UI elements
@@ -103,22 +104,44 @@ object DirectServiceDiscovery {
         if (hideSignal) sessionConfig = sessionConfig or 2
         if (hideBattery) sessionConfig = sessionConfig or 4
 
-        return Control.ServiceDiscoveryResponse.newBuilder()
+        // Match bridge live_session.cpp SDR exactly
+        val builder = Control.ServiceDiscoveryResponse.newBuilder()
             .addAllServices(services)
-            .setMake(vehicle.make)
+            // Bridge only sets model/year/vehicleId, not make (field 2)
+            .setMake("")
             .setModel(vehicle.model)
             .setYear(vehicle.year)
             .setVehicleId(vehicle.vehicleId)
             .setDriverPosition(vehicle.driverPosition)
             .setHeadUnitMake("OpenAutoLink")
             .setHeadUnitModel("Direct")
-            .setHeadUnitSoftwareBuild("1.0")
+            .setHeadUnitSoftwareBuild("1")
             .setHeadUnitSoftwareVersion("1.0")
-            .setCanPlayNativeMediaDuringVr(true)
-            .setHideProjectedClock(hideClock)
-            .setSessionConfiguration(sessionConfig)
+            .setCanPlayNativeMediaDuringVr(false)
             .setDisplayName("OpenAutoLink")
-            .build()
+            .setProbeForSupport(false)
+            .setHeadunitInfo(Common.HeadUnitInfo.newBuilder()
+                .setHeadUnitMake("OpenAutoLink")
+                .setHeadUnitModel("Direct")
+                .setMake(vehicle.make)
+                .setModel(vehicle.model)
+                .setYear(vehicle.year)
+                .setVehicleId("oal-001")
+                .setHeadUnitSoftwareBuild("1")
+                .setHeadUnitSoftwareVersion("1.0")
+                .build())
+            .setConnectionConfiguration(Control.ConnectionConfiguration.newBuilder()
+                .setPingConfiguration(Control.PingConfiguration.newBuilder()
+                    .setTimeoutMs(5000)
+                    .setIntervalMs(1500)
+                    .setHighLatencyThresholdMs(500)
+                    .setTrackedPingCount(5)
+                    .build())
+                .build())
+        if (sessionConfig != 0) {
+            builder.setSessionConfiguration(sessionConfig)
+        }
+        return builder.build()
     }
 
     private fun buildSensorService(): Control.Service {
@@ -171,13 +194,8 @@ object DirectServiceDiscovery {
             val displayAr = config.displayWidth.toDouble() / config.displayHeight
             val videoAr = videoW.toDouble() / videoH
             if (videoAr <= 0) return 0
-            // Only compensate when display is WIDER than the video AR.
-            // Wide displays (e.g. 2914x1134 = 2.57:1 > 16:9 = 1.78:1) need
-            // pixel_aspect so AA pre-distorts layout for letterbox scaling.
-            // Portrait/narrow displays don't need it — video letterboxes normally.
-            if (displayAr <= videoAr) return 0
             val pa = (displayAr / videoAr * 10000).toInt()
-            return if (pa != 10000) pa else 0
+            return if (pa != 10000) pa else 0  // 10000 = 1:1, no compensation needed
         }
 
         // Map resolution tier to pixel dimensions for pixel_aspect computation
@@ -201,6 +219,7 @@ object DirectServiceDiscovery {
                 .setCodecResolution(tier)
                 .setFrameRate(frameRate)
                 .setDensity(config.dpi)
+                .setRealDensity(config.dpi)
                 .setMarginWidth(config.marginWidth)
                 .setMarginHeight(config.marginHeight)
                 .setVideoCodecType(codec)
@@ -222,8 +241,7 @@ object DirectServiceDiscovery {
             Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._800x480,
         )
 
-        // In manual mode (codec != "auto"), filter tiers to only include the selected
-        // resolution and below. This prevents the phone from picking a higher resolution.
+        // Map selected resolution to a tier
         val selectedTier = when {
             config.width >= 3840 -> Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._3840x2160
             config.width >= 2560 -> Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._2560x1440
@@ -231,7 +249,6 @@ object DirectServiceDiscovery {
             config.width >= 1280 -> Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1280x720
             else -> Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._800x480
         }
-        val manualTiers = tiers.filter { it.number <= selectedTier.number }
 
         when (config.codec) {
             "auto" -> {
@@ -244,24 +261,42 @@ object DirectServiceDiscovery {
                 }
             }
             "H.265" -> {
-                for (tier in manualTiers) {
-                    addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265)
+                // Match bridge: offer at configured + alternative tiers, plus H.264 fallback
+                addVideoConfig(selectedTier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265)
+                for (tier in listOf(
+                    Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._3840x2160,
+                    Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._2560x1440,
+                    Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1920x1080,
+                )) {
+                    if (tier != selectedTier) addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265)
                 }
-                for (tier in manualTiers.filter { it.number <= Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1920x1080.number }) {
+                for (tier in lowTiers) {
                     addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP)
                 }
             }
             "VP9" -> {
-                for (tier in manualTiers) {
-                    addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_VP9)
+                addVideoConfig(selectedTier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_VP9)
+                for (tier in listOf(
+                    Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._3840x2160,
+                    Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._2560x1440,
+                    Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1920x1080,
+                )) {
+                    if (tier != selectedTier) addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_VP9)
                 }
-                for (tier in manualTiers.filter { it.number <= Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1920x1080.number }) {
+                for (tier in lowTiers) {
                     addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP)
                 }
             }
             else -> { // "H.264"
-                for (tier in manualTiers.filter { it.number <= Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1920x1080.number }) {
-                    addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP)
+                val h264Tier = if (selectedTier.number > Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1920x1080.number) {
+                    Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1920x1080
+                } else {
+                    selectedTier
+                }
+                for (tier in lowTiers) {
+                    if (tier.number <= h264Tier.number) {
+                        addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP)
+                    }
                 }
             }
         }
@@ -299,12 +334,12 @@ object DirectServiceDiscovery {
         sampleRate: Int,
         bits: Int,
         channels: Int,
-        codecType: Media.MediaCodecType = Media.MediaCodecType.MEDIA_CODEC_AUDIO_PCM,
+        codec: Media.MediaCodecType = Media.MediaCodecType.MEDIA_CODEC_AUDIO_PCM,
     ): Control.Service {
         return Control.Service.newBuilder()
             .setId(channel)
             .setMediaSinkService(Control.Service.MediaSinkService.newBuilder()
-                .setAvailableType(codecType)
+                .setAvailableType(codec)
                 .setAudioType(streamType)
                 .addAudioConfigs(Media.AudioConfiguration.newBuilder()
                     .setSampleRate(sampleRate)

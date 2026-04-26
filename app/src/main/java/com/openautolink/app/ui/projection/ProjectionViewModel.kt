@@ -25,6 +25,7 @@ import com.openautolink.app.session.SessionManager
 import com.openautolink.app.session.SessionState
 import com.openautolink.app.transport.direct.AaNearbyManager
 import com.openautolink.app.video.VideoStats
+import com.openautolink.app.diagnostics.OalLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -145,6 +146,8 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         sessionManager.phoneSignalStrength,
         preferences.videoScalingMode,
         sessionManager.wifiFrequencyMhz,
+        preferences.aaDpi,
+        preferences.aaPixelAspect,
     ) { values ->
         ProjectionUiState(
             sessionState = values[0] as SessionState,
@@ -165,6 +168,8 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             phoneSignalStrength = values[15] as? Int,
             videoScalingMode = values[16] as String,
             wifiFrequencyMhz = values[17] as Int,
+            aaDpi = values[18] as Int,
+            aaPixelAspect = values[19] as Int,
         )
     }.stateIn(
         viewModelScope,
@@ -232,6 +237,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             val videoAutoNeg = preferences.videoAutoNegotiate.first()
             val aaRes = preferences.aaResolution.first()
             val aaDpi = preferences.aaDpi.first()
+            OalLog.i(TAG, "Connect with aaDpi=$aaDpi aaRes=$aaRes codec=$codec autoNeg=$videoAutoNeg")
             val aaWM = preferences.aaWidthMargin.first()
             val aaHM = preferences.aaHeightMargin.first()
             val aaPA = preferences.aaPixelAspect.first()

@@ -353,7 +353,8 @@ class SessionManager(
         val metrics = wm.currentWindowMetrics
         val displayW = metrics.bounds.width()
         val displayH = metrics.bounds.height()
-        Log.i(TAG, "Display for pixel_aspect: ${displayW}x${displayH}")
+        val systemDpi = ctx.resources.displayMetrics.densityDpi
+        Log.i(TAG, "Display for pixel_aspect: ${displayW}x${displayH} systemDpi=$systemDpi userDpi=$aaDpi")
 
         // Map resolution string to pixel dimensions
         val (resW, resH) = when (aaResolution) {

@@ -4,7 +4,6 @@ import com.openautolink.app.audio.AudioFrame
 import com.openautolink.app.diagnostics.OalLog
 import com.openautolink.app.proto.Control
 import com.openautolink.app.proto.Media
-import com.openautolink.app.proto.Sensors
 import com.openautolink.app.transport.AudioPurpose
 import com.openautolink.app.transport.ConnectionState
 import com.openautolink.app.transport.ControlMessage
@@ -89,9 +88,6 @@ class DirectAaSession(
 
     private var videoAssembler: AaVideoAssembler? = null
     private var unackedFrames = 0
-    // Per-channel session IDs from MediaStart — used in MediaAck responses.
-    // The phone assigns a session ID per channel; we must echo it back in acks.
-    private val channelSessionIds = java.util.concurrent.ConcurrentHashMap<Int, Int>()
 
     // BT handshake for automatic phone connection
     private val btHandshake = AaBtHandshakeManager(scope)
@@ -114,14 +110,6 @@ class DirectAaSession(
     var hideSignal = true
     var hideBattery = true
 
-    // Audio codec — true if we announced AAC-LC (phone will send AAC frames)
-    var useAacAudio = false
-
-    // Bluetooth MAC — set before start() for BT service announcement
-    var btMacAddress = ""
-    // Multi-phone: default phone name and callback
-    var defaultPhoneName = ""
-    var onPhoneConnected: ((name: String) -> Unit)? = null
     /** Hotspot credentials for BT handshake. Set from settings before start(). */
     var hotspotSsid: String
         get() = btHandshake.hotspotSsid
@@ -133,6 +121,18 @@ class DirectAaSession(
 
     /** Transport method: "native", "nearby", or "hotspot" */
     var directTransport: String = "native"
+
+    /** Bluetooth MAC address for AA BT service */
+    var btMacAddress: String = ""
+
+    /** Use AAC-LC audio codec instead of PCM */
+    var useAacAudio: Boolean = false
+
+    /** Default phone name for Nearby auto-connect */
+    var defaultPhoneName: String = ""
+
+    /** Callback when a phone connects via Nearby */
+    var onPhoneConnected: ((String) -> Unit)? = null
 
     /**
      * Start listening for incoming phone connections.
@@ -154,13 +154,12 @@ class DirectAaSession(
             _nearbyManager?.stop()
             _nearbyManager = AaNearbyManager(context, scope) { nearbySocket ->
                 scope.launch(Dispatchers.IO) {
-                    OalLog.i(TAG, "Nearby socket ready \u2014 starting AA session")
+                    OalLog.i(TAG, "Nearby socket ready — starting AA session")
                     handleConnection(nearbySocket)
                 }
-            }.also { mgr ->
-                mgr.defaultPhoneName = defaultPhoneName
-                mgr.onPhoneConnected = onPhoneConnected
             }
+            _nearbyManager?.defaultPhoneName = defaultPhoneName
+            _nearbyManager?.onPhoneConnected = onPhoneConnected
             _nearbyManager?.start()
         }
 
@@ -439,16 +438,17 @@ class DirectAaSession(
                     hideClock = hideClock, hideSignal = hideSignal, hideBattery = hideBattery,
                 )
                 sendMessage(AaMessage.fromProto(AaChannel.CONTROL, AaMsgType.SERVICE_DISCOVERY_RESPONSE, response))
-                OalLog.i(TAG, "ServiceDiscoveryResponse sent (${response.servicesCount} services)")
+                OalLog.i(TAG, "ServiceDiscoveryResponse sent (${response.servicesCount} services, ${response.serializedSize} bytes)")
+                // Log full SDR text for debugging layout issues
+                OalLog.d(TAG, "SDR: $response")
             }
 
             AaMsgType.PING_REQUEST -> {
-                // Respond with PingResponse protobuf
-                val response = Control.PingResponse.newBuilder()
-                    .setTimestamp(System.nanoTime())
-                    .build()
-                sendMessage(AaMessage.fromProto(AaChannel.CONTROL, AaMsgType.PING_RESPONSE, response))
-                OalLog.d(TAG, "Ping response sent")
+                // Respond silently — pings are frequent
+                val payload = if (msg.payloadLength > 0) {
+                    msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
+                } else ByteArray(0)
+                sendMessage(AaMessage.raw(AaChannel.CONTROL, AaMsgType.PING_RESPONSE, payload))
             }
 
             AaMsgType.BYEBYE_REQUEST -> {
@@ -491,10 +491,6 @@ class DirectAaSession(
                     OalLog.i(TAG, "Voice session notification (unparsed)")
                 }
             }
-
-            else -> {
-                OalLog.d(TAG, "Unhandled control msg type=${msg.type} (${msg.payloadLength}B)")
-            }
         }
     }
 
@@ -507,20 +503,6 @@ class DirectAaSession(
                     .setStatus(com.openautolink.app.proto.Common.MessageStatus.STATUS_SUCCESS)
                     .build()
                 sendMessage(AaMessage.fromProto(msg.channel, AaMsgType.CHANNEL_OPEN_RESPONSE, response))
-
-                // When SENSOR channel opens, immediately send DrivingStatus = UNRESTRICTED.
-                // The phone needs this to know the head unit is ready. Without it,
-                // the phone times out after ~2.5 minutes assuming the HU is unresponsive.
-                // This matches HUR's behavior (AapControl.channelOpenRequest).
-                if (msg.channel == AaChannel.SENSOR) {
-                    val drivingStatus = Sensors.SensorBatch.newBuilder()
-                        .addDrivingStatus(Sensors.SensorBatch.DrivingStatusData.newBuilder()
-                            .setStatus(1) // UNRESTRICTED
-                            .build())
-                        .build()
-                    sendMessage(AaMessage.fromProto(AaChannel.SENSOR, AaMsgType.MEDIA_DATA, drivingStatus))
-                    OalLog.i(TAG, "DrivingStatus UNRESTRICTED sent on SENSOR channel")
-                }
 
                 // Don't send VideoFocusNotification here — wait for MEDIA_SETUP.
                 // HUR sends VideoFocus only after responding to MEDIA_SETUP with Config.
@@ -559,15 +541,7 @@ class DirectAaSession(
             }
 
             AaMsgType.MEDIA_START -> {
-                // Parse session ID from MediaStart protobuf and store per-channel
-                try {
-                    val data = msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
-                    val start = Media.Start.parseFrom(data)
-                    channelSessionIds[msg.channel] = start.sessionId
-                    OalLog.i(TAG, "MediaStart on ${AaChannel.name(msg.channel)} (sessionId=${start.sessionId})")
-                } catch (e: Exception) {
-                    OalLog.i(TAG, "MediaStart on ${AaChannel.name(msg.channel)} (unparsed)")
-                }
+                OalLog.i(TAG, "MediaStart on ${AaChannel.name(msg.channel)}")
                 // Emit audio start for audio channels
                 if (AaChannel.isAudio(msg.channel)) {
                     val purpose = when (msg.channel) {
@@ -626,7 +600,7 @@ class DirectAaSession(
                     unackedFrames++
                     if (unackedFrames >= MAX_UNACKED / 2) {
                         val ack = Media.Ack.newBuilder()
-                            .setSessionId(channelSessionIds[AaChannel.VIDEO] ?: 1)
+                            .setSessionId(1)
                             .setAck(unackedFrames)
                             .build()
                         sendMessage(AaMessage.fromProto(AaChannel.VIDEO, AaMsgType.MEDIA_ACK, ack))
@@ -666,23 +640,21 @@ class DirectAaSession(
                 AaChannel.AUDIO_SYSTEM -> AudioPurpose.ALERT
                 else -> AudioPurpose.MEDIA
             }
-            // Audio MEDIA_DATA has an 8-byte timestamp prefix before the actual audio data
-            // (same as video). Skip it — the audio player doesn't need timestamps.
-            val audioOffset = msg.payloadOffset + 8
-            val audioLength = msg.payloadLength - 8
-            if (audioLength <= 0) return
-            val audioData = msg.payload.copyOfRange(audioOffset, audioOffset + audioLength)
+            val pcm = if (msg.payloadOffset == 0 && msg.payloadLength == msg.payload.size) {
+                msg.payload
+            } else {
+                msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
+            }
             _audioFrames.emit(AudioFrame(
                 direction = AudioFrame.DIRECTION_PLAYBACK,
                 purpose = purpose,
                 sampleRate = if (msg.channel == AaChannel.AUDIO_MEDIA) 48000 else 16000,
                 channels = if (msg.channel == AaChannel.AUDIO_MEDIA) 2 else 1,
-                data = audioData,
-                isAac = useAacAudio,
+                data = pcm,
             ))
 
             // Ack audio
-            val ack = Media.Ack.newBuilder().setSessionId(channelSessionIds[msg.channel] ?: 1).setAck(1).build()
+            val ack = Media.Ack.newBuilder().setSessionId(1).setAck(1).build()
             sendMessage(AaMessage.fromProto(msg.channel, AaMsgType.MEDIA_ACK, ack))
         } else {
             handleChannelControl(msg)
@@ -795,20 +767,13 @@ class DirectAaSession(
         if (msg.type == AaMsgType.MEDIA_DATA || msg.type == AaMsgType.MEDIA_START) {
             try {
                 val data = msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
-                val status = Control.Service.PhoneStatusService.parseFrom(data)
-                val calls = status.callsList.map { call ->
-                    ControlMessage.PhoneCall(
-                        state = call.state?.name ?: "UNKNOWN",
-                        durationSeconds = if (call.hasCallDurationSeconds()) call.callDurationSeconds.toInt() else 0,
-                        callerNumber = if (call.hasCallerNumber()) call.callerNumber else null,
-                        callerId = if (call.hasCallerId()) call.callerId else null,
-                    )
-                }
-                val signalStrength = if (status.hasSignalStrength()) status.signalStrength.toInt() else null
-                OalLog.d(TAG, "PhoneStatus: signal=$signalStrength calls=${calls.size}")
-                _controlMessages.emit(ControlMessage.PhoneStatus(signalStrength, calls))
-            } catch (e: Exception) {
-                OalLog.d(TAG, "PhoneStatus parse error (${msg.payloadLength}B): ${e.message}")
+                val status = Control.ServiceDiscoveryResponse.parseFrom(data)
+                // Phone status is embedded in the PhoneStatusService on the control proto
+                // For now, just log and try to extract signal/calls from the raw data
+                OalLog.d(TAG, "PhoneStatus received (${data.size}B)")
+                // TODO: parse PhoneStatus_Call and signal_strength when proto is available
+            } catch (_: Exception) {
+                OalLog.d(TAG, "PhoneStatus (${msg.payloadLength}B)")
             }
         } else {
             handleChannelControl(msg)

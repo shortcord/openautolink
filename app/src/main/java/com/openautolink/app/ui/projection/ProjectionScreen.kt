@@ -465,9 +465,11 @@ private fun VideoStatsOverlay(
                 if (stats.width > 0) {
                     StatLine("Resolution", "${stats.width}x${stats.height}")
                 }
-                StatLine("DPI", aaDpi.toString())
+                StatLine("DPI", "$aaDpi (real)")
                 if (aaPixelAspect > 0) {
                     StatLine("Pixel Aspect", "${"%.4f".format(aaPixelAspect / 10000f)} (${aaPixelAspect}e⁻⁴)")
+                } else {
+                    StatLine("Pixel Aspect", "auto")
                 }
                 StatLine("FPS", "${"%.1f".format(stats.fps)} fps",
                     valueColor = when {
