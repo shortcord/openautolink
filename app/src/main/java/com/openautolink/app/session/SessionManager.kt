@@ -556,10 +556,15 @@ class SessionManager(
     suspend fun sendControlMessage(message: ControlMessage) {
         val session = aasdkSession ?: return
         when (message) {
-            is ControlMessage.Touch -> session.sendTouchEvent(
-                message.action, 0, message.x, message.y, 1
-            )
-            is ControlMessage.Button -> session.sendKeyEvent(message.keyCode, message.isDown)
+            is ControlMessage.Touch -> {
+                val x = message.x ?: return
+                val y = message.y ?: return
+                session.sendTouchEvent(
+                    message.action, message.pointerId ?: 0, x, y,
+                    message.pointers?.size ?: 1
+                )
+            }
+            is ControlMessage.Button -> session.sendKeyEvent(message.keycode, message.down)
             is ControlMessage.KeyframeRequest -> session.requestKeyframe()
             is ControlMessage.VehicleData -> {
                 // TODO: Serialize and send via session.sendVehicleSensor()
