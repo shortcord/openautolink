@@ -427,11 +427,10 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
 
     /** Forward a touch event from the projection surface to the bridge. */
     fun onTouchEvent(event: MotionEvent, surfaceWidth: Int, surfaceHeight: Int) {
-        // Use video stats dimensions — the phone renders AA at whatever resolution
-        // it negotiated, and touch coordinates map to that render space.
-        val stats = _videoStats.value
-        val tw = if (stats.width > 0) stats.width else sessionManager.touchWidth.value
-        val th = if (stats.height > 0) stats.height else sessionManager.touchHeight.value
+        // Use SDR touchscreen dimensions — the phone expects touch in the coordinate
+        // space declared in the SDR input channel, NOT the video codec output resolution.
+        val tw = sessionManager.touchWidth.value
+        val th = sessionManager.touchHeight.value
         if (tw <= 0 || th <= 0) return
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             val sx = event.x * tw / surfaceWidth

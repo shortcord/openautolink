@@ -96,6 +96,10 @@ public:
     /** Send touch event to phone. */
     void sendTouchEvent(int action, int pointerId, float x, float y, int pointerCount);
 
+    /** Send multi-touch event to phone (all pointers in one InputReport). */
+    void sendMultiTouchEvent(int action, int actionIndex,
+        const int* ids, const float* xs, const float* ys, int count);
+
     /** Send key event to phone. */
     void sendKeyEvent(int keyCode, bool isDown);
 

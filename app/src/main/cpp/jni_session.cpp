@@ -1123,6 +1123,40 @@ void JniSession::sendTouchEvent(int action, int pointerId, float x, float y, int
     });
 }
 
+void JniSession::sendMultiTouchEvent(int action, int actionIndex,
+    const int* ids, const float* xs, const float* ys, int count)
+{
+    if (!streaming_ || !inputChannel_) return;
+
+    std::vector<int> vIds(ids, ids + count);
+    std::vector<float> vXs(xs, xs + count);
+    std::vector<float> vYs(ys, ys + count);
+
+    ioService_->post([this, action, actionIndex, vIds, vXs, vYs]() {
+        aap_protobuf::service::inputsource::message::InputReport report;
+
+        auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        report.set_timestamp(static_cast<uint64_t>(now));
+
+        auto* touch = report.mutable_touch_event();
+        touch->set_action(
+            static_cast<aap_protobuf::service::inputsource::message::PointerAction>(action));
+        touch->set_action_index(static_cast<uint32_t>(actionIndex));
+
+        for (size_t i = 0; i < vIds.size(); i++) {
+            auto* ptr = touch->add_pointer_data();
+            ptr->set_x(static_cast<uint32_t>(vXs[i]));
+            ptr->set_y(static_cast<uint32_t>(vYs[i]));
+            ptr->set_pointer_id(static_cast<uint32_t>(vIds[i]));
+        }
+
+        auto promise = aasdk::channel::SendPromise::defer(*strand_);
+        promise->then([]() {}, [](const auto&) {});
+        inputChannel_->sendInputReport(report, std::move(promise));
+    });
+}
+
 void JniSession::sendKeyEvent(int keyCode, bool isDown)
 {
     if (!streaming_ || !inputChannel_) return;

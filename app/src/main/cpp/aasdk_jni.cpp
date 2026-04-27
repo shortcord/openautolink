@@ -107,6 +107,30 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendTouchEvent(
 
 /*
  * Class:     com_openautolink_app_transport_aasdk_AasdkNative
+ * Method:    nativeSendMultiTouchEvent
+ */
+JNIEXPORT void JNICALL
+Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendMultiTouchEvent(
+    JNIEnv* env, jclass /*clazz*/,
+    jint action, jint actionIndex, jintArray ids, jfloatArray xs, jfloatArray ys)
+{
+    auto session = getSession();
+    if (!session) return;
+
+    jsize count = env->GetArrayLength(ids);
+    jint* idArr = env->GetIntArrayElements(ids, nullptr);
+    jfloat* xArr = env->GetFloatArrayElements(xs, nullptr);
+    jfloat* yArr = env->GetFloatArrayElements(ys, nullptr);
+
+    session->sendMultiTouchEvent(action, actionIndex, idArr, xArr, yArr, count);
+
+    env->ReleaseIntArrayElements(ids, idArr, JNI_ABORT);
+    env->ReleaseFloatArrayElements(xs, xArr, JNI_ABORT);
+    env->ReleaseFloatArrayElements(ys, yArr, JNI_ABORT);
+}
+
+/*
+ * Class:     com_openautolink_app_transport_aasdk_AasdkNative
  * Method:    nativeSendKeyEvent
  */
 JNIEXPORT void JNICALL
