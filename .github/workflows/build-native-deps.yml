@@ -1,0 +1,137 @@
+name: Build Native Dependencies
+
+# Builds aasdk + OpenSSL + Boost for Android and uploads as release assets.
+# Triggers on submodule pointer or build script changes, or manual dispatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      abis:
+        description: 'ABIs to build (comma-separated)'
+        required: false
+        default: 'arm64-v8a,x86_64'
+  push:
+    branches: [main]
+    paths:
+      - 'external/opencardev-aasdk'
+      - 'scripts/build-openssl-android.sh'
+      - 'scripts/build-aasdk-android.sh'
+      - 'scripts/setup-ndk-deps.sh'
+      - '.github/workflows/build-native-deps.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      ANDROID_API: 32
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Android NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK r28b
+        run: |
+          yes | sdkmanager "ndk;28.2.13676358" || true
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> $GITHUB_ENV
+
+      - name: Build OpenSSL (${{ matrix.abi }})
+        run: |
+          chmod +x scripts/build-openssl-android.sh
+          bash scripts/build-openssl-android.sh ${{ matrix.abi }}
+
+      - name: Setup Boost headers
+        run: |
+          chmod +x scripts/setup-ndk-deps.sh
+          bash scripts/setup-ndk-deps.sh
+
+      - name: Build aasdk (${{ matrix.abi }})
+        run: |
+          chmod +x scripts/build-aasdk-android.sh
+          bash scripts/build-aasdk-android.sh ${{ matrix.abi }}
+
+      - name: Package native deps tarball
+        run: |
+          cd app/src/main/cpp
+          tar czf /tmp/native-deps-${{ matrix.abi }}.tar.gz \
+            third_party/openssl/${{ matrix.abi }}/ \
+            third_party/boost/include/ \
+            third_party/aasdk/${{ matrix.abi }}/
+
+      - name: Upload tarball as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-deps-${{ matrix.abi }}
+          path: /tmp/native-deps-${{ matrix.abi }}.tar.gz
+          retention-days: 90
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all tarballs
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/native-deps
+
+      - name: Get metadata
+        id: meta
+        run: |
+          AASDK_SHA=$(git submodule status external/opencardev-aasdk | awk '{print substr($1,1,8)}')
+          DATE=$(date -u +%Y-%m-%d)
+          echo "tag=native-deps" >> $GITHUB_OUTPUT
+          echo "aasdk_sha=$AASDK_SHA" >> $GITHUB_OUTPUT
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          AASDK_SHA="${{ steps.meta.outputs.aasdk_sha }}"
+          DATE="${{ steps.meta.outputs.date }}"
+
+          BODY=$(cat <<'EOF'
+          Native prebuilt dependencies for Android NDK build.
+
+          | | |
+          |---|---|
+          | **Built** | REPLACE_DATE |
+          | **aasdk** | `REPLACE_SHA` |
+          | **NDK** | r28b (API 32) |
+          | **Components** | OpenSSL 3.3.2, Boost 1.83.0, aasdk + protobuf + abseil |
+
+          Download and extract into `app/src/main/cpp/`:
+          ```bash
+          # For each ABI:
+          tar xzf native-deps-<ABI>.tar.gz -C app/src/main/cpp/
+          ```
+          EOF
+          )
+          BODY="${BODY//REPLACE_DATE/$DATE}"
+          BODY="${BODY//REPLACE_SHA/$AASDK_SHA}"
+
+          # Delete existing release if present (to replace assets)
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          gh release create "$TAG" \
+            --title "Native Dependencies ($DATE)" \
+            --notes "$BODY" \
+            --prerelease \
+            /tmp/native-deps/native-deps-arm64-v8a/native-deps-arm64-v8a.tar.gz \
+            /tmp/native-deps/native-deps-x86_64/native-deps-x86_64.tar.gz

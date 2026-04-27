@@ -11,7 +11,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.openautolink.app"
+        applicationId = findProperty("appId") as? String ?: "com.openautolink.app"
         minSdk = 32
         targetSdk = 36
         versionCode = (findProperty("oalVersionCode") as? String)?.toIntOrNull() ?: 1
@@ -20,7 +20,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")  // ARM64 for real AAOS, x86_64 for emulator
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
 
         externalNativeBuild {

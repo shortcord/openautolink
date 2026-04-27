@@ -25,6 +25,15 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Download native deps
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for ABI in arm64-v8a x86_64; do
+            gh release download native-deps -p "native-deps-${ABI}.tar.gz" -O "/tmp/native-deps-${ABI}.tar.gz"
+            tar xzf "/tmp/native-deps-${ABI}.tar.gz" -C app/src/main/cpp/
+          done
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
