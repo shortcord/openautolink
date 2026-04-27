@@ -59,4 +59,7 @@ class AasdkSdrConfig(
 
     /** Video codec preference for manual mode: "h264" or "h265". */
     @JvmField val videoCodec: String = "h265",
+
+    /** Physical pixel density of the AAOS display (from DisplayMetrics.densityDpi). */
+    @JvmField val realDensity: Int = 0,
 )

@@ -223,7 +223,7 @@ class SessionManager(
         aaDpi: Int = 160,
         aaWidthMargin: Int = 0,
         aaHeightMargin: Int = 0,
-        aaPixelAspect: Int = 0,
+        aaPixelAspect: Int = -1,
         videoFps: Int = 60,
         driveSide: String = "left",
         hideClock: Boolean = false,
@@ -367,7 +367,7 @@ class SessionManager(
         directTransport: String, hotspotSsid: String, hotspotPassword: String,
         videoAutoNegotiate: Boolean = true, codec: String = "h264",
         aaResolution: String = "1080p", aaDpi: Int = 160,
-        aaWidthMargin: Int = 0, aaHeightMargin: Int = 0, aaPixelAspect: Int = 0, videoFps: Int = 60,
+        aaWidthMargin: Int = 0, aaHeightMargin: Int = 0, aaPixelAspect: Int = -1, videoFps: Int = 60,
         driveSide: String = "left",
         hideClock: Boolean = false, hideSignal: Boolean = false, hideBattery: Boolean = false,
         scalingMode: String = "letterbox",
@@ -466,6 +466,7 @@ class SessionManager(
             hideBattery = hideBattery,
             autoNegotiate = videoAutoNegotiate,
             videoCodec = codec,
+            realDensity = ctx.resources.displayMetrics.densityDpi,
         )
         _touchWidth.value = resW
         _touchHeight.value = resH

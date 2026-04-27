@@ -266,6 +266,7 @@ private:
         bool hideBattery = false;
         bool autoNegotiate = true;
         std::string videoCodec = "h265";
+        int realDensity = 0;
     };
     SdrConfig sdrConfig_;
 

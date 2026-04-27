@@ -186,11 +186,14 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     sdrConfig_.hideBattery = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "hideBattery", "Z"));
     sdrConfig_.autoNegotiate = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "autoNegotiate", "Z"));
     sdrConfig_.videoCodec = readString("videoCodec");
+    sdrConfig_.realDensity = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "realDensity", "I"));
     env->DeleteLocalRef(sdrClass);
 
-    LOGI("Starting session: video=%dx%d@%dfps dpi=%d",
+    LOGI("Starting session: video=%dx%d@%dfps dpi=%d realDpi=%d pixelAspect=%d autoNeg=%d codec=%s",
          sdrConfig_.videoWidth, sdrConfig_.videoHeight,
-         sdrConfig_.videoFps, sdrConfig_.videoDpi);
+         sdrConfig_.videoFps, sdrConfig_.videoDpi, sdrConfig_.realDensity,
+         sdrConfig_.pixelAspectE4, sdrConfig_.autoNegotiate,
+         sdrConfig_.videoCodec.c_str());
 
     // Create JNI transport from the Nearby stream pipe
     transport_ = std::make_shared<JniTransport>(*ioService_, jvm_, transportRef);
@@ -893,6 +896,7 @@ void JniSession::buildServiceDiscoveryResponse(
               if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
               if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
               if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
+              if (sdrConfig_.realDensity > 0) vc->set_real_density(sdrConfig_.realDensity);
           }
           for (int t : {3, 2, 1}) {
               auto* vc = ms->add_video_configs();
@@ -903,6 +907,7 @@ void JniSession::buildServiceDiscoveryResponse(
               if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
               if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
               if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
+              if (sdrConfig_.realDensity > 0) vc->set_real_density(sdrConfig_.realDensity);
           }
       } else {
           // Manual mode: single config at the selected resolution and codec
@@ -917,6 +922,7 @@ void JniSession::buildServiceDiscoveryResponse(
           if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
           if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
           if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
+          if (sdrConfig_.realDensity > 0) vc->set_real_density(sdrConfig_.realDensity);
       }
     }
 
@@ -1059,6 +1065,14 @@ void JniSession::buildServiceDiscoveryResponse(
                  ms.has_audio_type() ? (int)ms.audio_type() : -1,
                  ms.video_configs_size(), ms.audio_configs_size(),
                  (int)ms.available_while_in_call());
+            for (int v = 0; v < ms.video_configs_size(); v++) {
+                const auto& vc = ms.video_configs(v);
+                LOGI("    vc[%d] res=%d fps=%d dpi=%d codec=%d pixel_aspect=%d real_dpi=%d",
+                     v, (int)vc.codec_resolution(), (int)vc.frame_rate(),
+                     vc.density(), (int)vc.video_codec_type(),
+                     vc.has_pixel_aspect_ratio_e4() ? vc.pixel_aspect_ratio_e4() : 0,
+                     vc.has_real_density() ? vc.real_density() : 0);
+            }
         } else if (ch.has_media_source_service()) {
             LOGI("  ch[%d] id=%d media_source: avail_type=%d", i, ch.id(),
                  (int)ch.media_source_service().available_type());
