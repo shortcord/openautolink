@@ -265,6 +265,7 @@ private:
         bool hideSignal = false;
         bool hideBattery = false;
         bool autoNegotiate = true;
+        std::string videoCodec = "h265";
     };
     SdrConfig sdrConfig_;
 
@@ -273,6 +274,7 @@ private:
         jmethodID onSessionStarted = nullptr;
         jmethodID onSessionStopped = nullptr;
         jmethodID onVideoFrame = nullptr;
+        jmethodID onVideoCodecConfigured = nullptr;
         jmethodID onAudioFrame = nullptr;
         jmethodID onMicRequest = nullptr;
         jmethodID onNavigationStatus = nullptr;

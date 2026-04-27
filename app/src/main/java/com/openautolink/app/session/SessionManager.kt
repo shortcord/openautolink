@@ -286,15 +286,6 @@ class SessionManager(
                             vd.lowFuel ?: false
                         )
                     }
-                    // EV energy model — battery level, capacity, range for Maps
-                    if (vd.evBatteryLevelWh != null && vd.evBatteryCapacityWh != null) {
-                        session.sendEnergyModel(
-                            vd.evBatteryLevelWh.toInt(),
-                            vd.evBatteryCapacityWh.toInt(),
-                            ((vd.rangeKm ?: 0f) * 1000).toInt(),
-                            (vd.evChargeRateW ?: 0f).toInt()
-                        )
-                    }
                     vd.rpmE3?.let { session.sendRpm(it) }
                 },
                 onIgnitionOn = { /* aasdk mode doesn't need ignition-based reconnect */ }
@@ -326,15 +317,16 @@ class SessionManager(
             OalMediaBrowserService.updateSessionToken(token)
         }
 
-        // Enable and launch cluster service binding (AAOS only — on regular Android,
-        // CarAppActivity steals focus from MainActivity and causes display issues)
+        // Enable cluster service (AAOS only — on regular Android, CarAppActivity
+        // steals focus from MainActivity and causes display issues)
         val isAaos = context?.packageManager?.hasSystemFeature(
             android.content.pm.PackageManager.FEATURE_AUTOMOTIVE) == true
         _clusterManager?.release()
         if (isAaos) {
             _clusterManager = context?.let { com.openautolink.app.cluster.ClusterManager(it) }
             _clusterManager?.setClusterEnabled(true)
-            _clusterManager?.launchClusterBinding()
+            // Don't call launchClusterBinding() — let Templates Host discover the service
+            // via intent filter. This avoids CarAppActivity popping up on the main display.
         } else {
             OalLog.i(TAG, "Non-AAOS device — cluster service disabled")
             _clusterManager = null
@@ -473,6 +465,7 @@ class SessionManager(
             hideSignal = hideSignal,
             hideBattery = hideBattery,
             autoNegotiate = videoAutoNegotiate,
+            videoCodec = codec,
         )
         _touchWidth.value = resW
         _touchHeight.value = resH
@@ -514,14 +507,6 @@ class SessionManager(
                     startLocationForwarding(session)
                     _vehicleDataForwarder?.start()
                     _imuForwarder?.start()
-                } else if (newState == SessionState.IDLE) {
-                    // Connection lost — clean up forwarders and cluster
-                    stopDirectLocationForwarding()
-                    _vehicleDataForwarder?.stop()
-                    _imuForwarder?.stop()
-                    _navigationDisplay.clear()
-                    ClusterNavigationState.clear()
-                    _clusterManager?.setClusterEnabled(false)
                 }
             }
         }
@@ -665,9 +650,8 @@ class SessionManager(
 
         OalLog.i(TAG, "System wake detected (${elapsed / 1000}s gap, state=$state)")
         DiagnosticLog.i("transport", "System wake detected (${elapsed / 1000}s gap)")
-        // The native session's read thread will detect the dead socket and fire
-        // onSessionStopped, which triggers auto-reconnect in AasdkSession.
-        // No manual intervention needed here.
+        // aasdk mode: the Nearby manager handles reconnection
+        // No explicit force-reconnect needed
     }
 
     suspend fun requestKeyframe() {
