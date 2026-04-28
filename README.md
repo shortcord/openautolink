@@ -55,7 +55,7 @@ OpenAutoLink embeds the [aasdk](https://github.com/opencardev/aasdk) v1.6 C++ li
 
 Two connection methods:
 
-**Wireless (Nearby Connections):** A companion app on the phone advertises via Google Nearby Connections. The car discovers the phone, upgrades to WiFi, and starts an AA session.
+**Wireless (phone hotspot):** A companion app on the phone uses Google Nearby Connections for discovery, then the car joins the phone's WiFi hotspot and runs the AA session over TCP. The phone hotspot is the primary transport — no router or home WiFi needed.
 
 **USB (AOA v2):** Plug the phone directly into the head unit's USB port. The app performs the Android Open Accessory handshake and runs the AA session over bulk USB endpoints.
 
@@ -63,24 +63,25 @@ Two connection methods:
 ┌─────────────────┐                              ┌──────────────────────────────┐
 │   Android Phone  │                              │   Car Head Unit (AAOS)       │
 │                  │                              │                              │
-│  OAL Companion   │◀── Nearby Connections ──────▶│   Kotlin: transport, UI,     │
-│  (wireless)      │    (BT discovery → WiFi)     │   video, audio, sensors      │
-│                  │                              │          ▼                    │
-│         or       │                              │   C++ JNI: aasdk v1.6        │
-│                  │                              │   SSL → Cryptor → Messenger  │
-│  USB cable       │◀── AOA v2 (bulk USB) ──────▶│   → AA channels              │
+│  OAL Companion   │◀── Nearby (discovery) ─────▶│   Kotlin: transport, UI,     │
+│  + phone hotspot │◀── WiFi (hotspot) ─────────▶│   video, audio, sensors      │
+│  (wireless)      │◀── AA protocol (TCP) ──────▶│          ▼                    │
+│                  │                              │   C++ JNI: aasdk v1.6        │
+│         or       │                              │   SSL → Cryptor → Messenger  │
+│                  │                              │   → AA channels              │
+│  USB cable       │◀── AOA v2 (bulk USB) ──────▶│                              │
 │  (direct)        │                              │                              │
 └─────────────────┘                              └──────────────────────────────┘
 ```
 
 ## Features
 
-- **Zero hardware (wireless)** — phone to car over WiFi via Nearby Connections, no cables
+- **Zero hardware (wireless)** — phone hotspot → car joins WiFi → AA over TCP, no cables or router needed
 - **USB cable support** — AOA v2 direct connection for wired setups
 - **aasdk v1.6 native protocol** — battle-tested C++ AA library via JNI, not a reimplementation
 - **EV battery data in Android Auto** — battery %, range, fuel type, charge port forwarded from VHAL into AA. Google Maps shows battery level alongside navigation
 - **H.264, H.265, and VP9** video with auto-negotiation. Up to 4K with AA Developer Mode
-- **AAC-LC audio** — compressed audio reduces WiFi bandwidth ~10× vs PCM
+- **PCM and AAC-LC audio** — PCM for compatibility, AAC-LC for ~10× WiFi bandwidth reduction
 - **Multi-phone support** — set a default phone, switch between phones with an overlay chooser
 - **Pixel-perfect display adaptation** — `width_margin` / `height_margin` auto-computed for wide and ultra-wide AAOS screens
 - **Per-purpose audio volume** — separate sliders for media, navigation, and assistant
