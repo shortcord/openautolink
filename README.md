@@ -169,6 +169,8 @@ Because this is an AAOS app, installation on the car goes through your own Googl
 
 > **GM AAOS USB permission note:** On GM head units, the system will ask for USB connection permission every time you plug in, even if you check "Always allow." This is a known GM AAOS limitation — the permission preference is not persisted. There is no workaround; just tap Allow each time.
 
+> **Recommendation: uninstall or disable music apps on the head unit.** If Spotify, YouTube Music, or another music app is installed on both the AAOS head unit and the phone, media controls (steering wheel buttons, play/pause, skip) can get confused — the car may try to control the AAOS app and the AA app simultaneously. Uninstall or disable the AAOS versions (Settings → Apps) so media controls go exclusively to the phone's AA session.
+
 ## Video and Display
 
 ### Native Dependencies
