@@ -61,6 +61,7 @@ data class ProjectionUiState(
     val aaDpi: Int = 160,
     val fileLoggingActive: Boolean = false,
     val fileLoggingPath: String? = null,
+    val fileLoggingEnabled: Boolean = false,
 )
 
 class ProjectionViewModel(application: Application) : AndroidViewModel(application) {
@@ -159,6 +160,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         preferences.aaPixelAspect,
         _fileLoggingActive,
         _fileLoggingPath,
+        preferences.fileLoggingEnabled,
     ) { values ->
         ProjectionUiState(
             sessionState = values[0] as SessionState,
@@ -183,6 +185,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             aaPixelAspect = values[19] as Int,
             fileLoggingActive = values[20] as Boolean,
             fileLoggingPath = values[21] as? String,
+            fileLoggingEnabled = values[22] as Boolean,
         )
     }.stateIn(
         viewModelScope,

@@ -276,9 +276,10 @@ fun ProjectionScreen(
                 modifier = Modifier.testTag("statsButton"),
             )
 
+            // File logging button — only shown when enabled in Settings → Diagnostics
+            if (uiState.fileLoggingEnabled) {
             Spacer(modifier = Modifier.height(8.dp))
 
-            // File logging button — draggable, toggles USB/file log capture
             DraggableOverlayButton(
                 icon = Icons.Default.FiberManualRecord,
                 contentDescription = "File Logging",
@@ -296,6 +297,7 @@ fun ProjectionScreen(
                 },
                 modifier = Modifier.testTag("fileLogButton"),
             )
+            } // end fileLoggingEnabled
 
         }
 

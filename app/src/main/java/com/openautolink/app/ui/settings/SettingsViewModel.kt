@@ -339,11 +339,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         super.onCleared()
     }
 
-    /** Restart the session with current settings. Called from Settings "Save & Restart". */
-    fun saveAndRestart() {
+    /** Reconnect the AA session with current settings. Called from Settings "Save & Reconnect". */
+    fun saveAndReconnect() {
         viewModelScope.launch {
             val sm = com.openautolink.app.session.SessionManager.instanceOrNull() ?: return@launch
-            sm.stop()
             val codec = preferences.videoCodec.first()
             val micSrc = preferences.micSource.first()
             val scalingMode = preferences.videoScalingMode.first()
@@ -370,7 +369,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             val saBottom = preferences.safeAreaBottom.first()
             val saLeft = preferences.safeAreaLeft.first()
             val saRight = preferences.safeAreaRight.first()
-            sm.start(
+            sm.reconnect(
                 codecPreference = codec,
                 micSourcePreference = micSrc,
                 scalingMode = scalingMode,

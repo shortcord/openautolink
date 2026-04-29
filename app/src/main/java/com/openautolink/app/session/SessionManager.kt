@@ -685,6 +685,116 @@ class SessionManager(
     }
 
     /**
+     * Reconnect the AA session with new SDR/settings without tearing down
+     * component islands (audio, mic, GNSS, VHAL, IMU, cluster, diagnostics).
+     *
+     * Only the AA protocol session is restarted — the phone will reconnect
+     * and renegotiate SDR with the new parameters. File logging, TCP log
+     * streaming, telemetry, and all sensor forwarders stay alive.
+     *
+     * Falls back to full [start] if component islands haven't been initialized yet.
+     */
+    fun reconnect(
+        codecPreference: String = "h264",
+        micSourcePreference: String = "car",
+        scalingMode: String = "letterbox",
+        directTransport: String = "nearby",
+        hotspotSsid: String = "",
+        hotspotPassword: String = "",
+        videoAutoNegotiate: Boolean = true,
+        aaResolution: String = "1080p",
+        aaDpi: Int = 160,
+        aaWidthMargin: Int = 0,
+        aaHeightMargin: Int = 0,
+        aaPixelAspect: Int = -1,
+        videoFps: Int = 60,
+        driveSide: String = "left",
+        hideClock: Boolean = false,
+        hideSignal: Boolean = false,
+        hideBattery: Boolean = false,
+        volumeOffsetMedia: Int = 0,
+        volumeOffsetNavigation: Int = 0,
+        volumeOffsetAssistant: Int = 0,
+        manualIpAddress: String? = null,
+        safeAreaTop: Int = 0,
+        safeAreaBottom: Int = 0,
+        safeAreaLeft: Int = 0,
+        safeAreaRight: Int = 0,
+    ) {
+        // If islands were never initialized, do a full start
+        if (_audioPlayer == null) {
+            start(
+                codecPreference, micSourcePreference, scalingMode, directTransport,
+                hotspotSsid, hotspotPassword, videoAutoNegotiate, aaResolution,
+                aaDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, videoFps,
+                driveSide, hideClock, hideSignal, hideBattery,
+                volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
+                manualIpAddress, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
+            )
+            return
+        }
+
+        OalLog.i(TAG, "Reconnecting AA session with new settings (minimal restart)")
+        micSource = micSourcePreference
+
+        // 1. Cancel old session observer coroutines
+        observeJob?.cancel()
+        observeJob = null
+        decoderWatchJob?.cancel()
+        decoderWatchJob = null
+        keyframeWatchJob?.cancel()
+        keyframeWatchJob = null
+        callStateJob?.cancel()
+        callStateJob = null
+
+        // 2. Stop old AA session + location forwarding
+        aasdkSession?.stop()
+        aasdkSession = null
+        stopDirectLocationForwarding()
+
+        // 3. Flush video decoder (codec/scaling may have changed)
+        _videoDecoder?.release()
+        _videoDecoder = MediaCodecDecoder(codecPreference, scalingMode)
+        _telemetryCollector?.videoDecoder = _videoDecoder
+
+        // 4. Update audio volume offsets in-place (no release/recreate)
+        (_audioPlayer as? AudioPlayerImpl)?.coordinator?.let { coord ->
+            coord.volumeOffsetMedia = volumeOffsetMedia
+            coord.volumeOffsetNavigation = volumeOffsetNavigation
+            coord.volumeOffsetAssistant = volumeOffsetAssistant
+        }
+
+        // 5. Pause sensor forwarders — they'll restart when new session reaches STREAMING
+        _vehicleDataForwarder?.stop()
+        _imuForwarder?.stop()
+
+        // 6. Clear stale navigation state
+        _navigationDisplay.clear()
+        ClusterNavigationState.clear()
+
+        // 7. Update status — don't go to IDLE, just show reconnecting
+        _statusMessage.value = "Reconnecting..."
+        _phoneBatteryLevel.value = null
+        _phoneBatteryCritical.value = false
+        _voiceSessionActive.value = false
+        _phoneSignalStrength.value = null
+
+        // 8. Start new AA session with new SDR config
+        observeJob = scope.launch {
+            decoderWatchJob = launch { watchDecoderState() }
+            keyframeWatchJob = launch { watchKeyframeNeeds() }
+            callStateJob = launch { watchCallState() }
+
+            startSession(directTransport, hotspotSsid, hotspotPassword,
+                videoAutoNegotiate, codecPreference, aaResolution, aaDpi,
+                aaWidthMargin, aaHeightMargin, aaPixelAspect, videoFps,
+                driveSide, hideClock, hideSignal, hideBattery, scalingMode,
+                manualIpAddress,
+                safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight)
+        }
+    }
+
+    /**
      * Called from Activity.onResume() to detect system sleep/wake.
      */
     fun onSystemWake() {

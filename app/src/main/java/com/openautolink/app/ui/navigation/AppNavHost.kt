@@ -46,7 +46,7 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                         viewModel = settingsViewModel,
                         sessionState = projectionUiState.sessionState,
                         onSaveAndConnect = {
-                            settingsViewModel.saveAndRestart()
+                            settingsViewModel.saveAndReconnect()
                             onBack()
                         },
                         onBack = onBack,

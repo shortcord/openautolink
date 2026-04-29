@@ -240,7 +240,7 @@ private fun ConnectionStatusBar(
                 modifier = Modifier.size(18.dp),
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Save & Restart")
+            Text("Save & Reconnect")
         }
 
         // Status indicator dot + text
@@ -413,7 +413,7 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
                 )
                 Text(
                     text = "The IP address of the phone running the companion app. " +
-                            "Requires Save & Restart to take effect.",
+                            "Requires Save & Reconnect to take effect.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -1164,7 +1164,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             text = "How the video fits your screen. " +
                     "Letterbox shows the full frame with black bars on the sides. " +
                     "Crop fills the screen but cuts off top/bottom. " +
-                    "Requires reconnect (Save & Restart).",
+                    "Requires reconnect (Save & Reconnect).",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
@@ -1363,7 +1363,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Changes to video settings require an AA session restart (Save & Restart).",
+            text = "Changes to video settings require an AA session reconnect (Save & Reconnect).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1432,7 +1432,7 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         Text(
             text = "Map physical buttons (steering wheel, remote) to Android Auto actions. " +
                     "Tap an action, then press the physical button you want to assign. " +
-                    "Requires Save & Restart.",
+                    "Requires Save & Reconnect.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
@@ -1639,7 +1639,7 @@ private fun AudioTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         Text(
             text = "Adjust relative volume for each audio purpose. " +
                     "0 = default. Positive = louder, negative = quieter. " +
-                    "Requires Save & Restart.",
+                    "Requires Save & Reconnect.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
