@@ -52,6 +52,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val AA_WIDTH_MARGIN = intPreferencesKey("aa_width_margin")
         val AA_HEIGHT_MARGIN = intPreferencesKey("aa_height_margin")
         val AA_PIXEL_ASPECT = intPreferencesKey("aa_pixel_aspect")
+        val AA_TARGET_LAYOUT_WIDTH_DP = intPreferencesKey("aa_target_layout_width_dp")
 
         // App-side settings
         val DRIVE_SIDE = stringPreferencesKey("drive_side")
@@ -108,6 +109,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_AA_WIDTH_MARGIN = 0
         const val DEFAULT_AA_HEIGHT_MARGIN = 0
         const val DEFAULT_AA_PIXEL_ASPECT = -1  // -1 = auto-compute from display/video AR in crop mode
+        const val DEFAULT_AA_TARGET_LAYOUT_WIDTH_DP = 0  // 0 = disabled (use DPI slider directly)
         const val DEFAULT_DRIVE_SIDE = "left"
         const val DEFAULT_GPS_FORWARDING = true
         const val DEFAULT_CLUSTER_NAVIGATION = true
@@ -217,6 +219,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[AA_PIXEL_ASPECT] ?: DEFAULT_AA_PIXEL_ASPECT
     }
 
+    val aaTargetLayoutWidthDp: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[AA_TARGET_LAYOUT_WIDTH_DP] ?: DEFAULT_AA_TARGET_LAYOUT_WIDTH_DP
+    }
+
     val driveSide: Flow<String> = dataStore.data.map { prefs ->
         prefs[DRIVE_SIDE] ?: DEFAULT_DRIVE_SIDE
     }
@@ -311,6 +317,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setAaPixelAspect(value: Int) {
         dataStore.edit { it[AA_PIXEL_ASPECT] = value }
+    }
+
+    suspend fun setAaTargetLayoutWidthDp(value: Int) {
+        dataStore.edit { it[AA_TARGET_LAYOUT_WIDTH_DP] = value }
     }
 
     suspend fun setVideoAutoNegotiate(enabled: Boolean) {

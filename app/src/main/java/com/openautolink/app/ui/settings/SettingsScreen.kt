@@ -1073,49 +1073,238 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        val recommendedDpi = when (uiState.aaResolution) {
-            "480p" -> 80
-            "720p" -> 107
-            "1440p" -> 213
-            "4k" -> 320
-            else -> 160
-        }
-
-        Text(
-            text = "Controls how Android Auto sizes its UI elements. " +
-                    "160 is standard for 1080p. For higher resolutions, scale DPI proportionally " +
-                    "to keep UI elements the same visual size (e.g. 320 for 4K). " +
-                    "Lower = more content, smaller controls. Higher = bigger controls, less content.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
-
-        if (!uiState.videoAutoNegotiate && uiState.aaResolution != "1080p" && uiState.aaDpi != recommendedDpi) {
+        // --- Layout Width Target (auto-negotiate only) ---
+        if (uiState.videoAutoNegotiate) {
             Text(
-                text = "Recommended for ${uiState.aaResolution}: $recommendedDpi DPI (tap to apply)",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF64B5F6),
-                modifier = Modifier
-                    .padding(bottom = 8.dp)
-                    .clickable { viewModel.updateAaDpi(recommendedDpi) }
+                text = "Layout Width Target — scales DPI per resolution tier so AA always " +
+                        "sees the same dp width regardless of which tier the phone picks. " +
+                        "Controls card/search results sizing. 0 = off (use DPI slider below).",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 12.dp)
             )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth(0.7f)
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                data class LayoutPreset(val dp: Int, val label: String)
+                listOf(
+                    LayoutPreset(0, "Off"),
+                    LayoutPreset(960, "Compact"),
+                    LayoutPreset(1280, "Normal"),
+                    LayoutPreset(1920, "Wide"),
+                ).forEach { preset ->
+                    val isSelected = uiState.aaTargetLayoutWidthDp == preset.dp
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.clickable {
+                            viewModel.updateAaTargetLayoutWidthDp(preset.dp)
+                        }
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = preset.label,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (preset.dp > 0) {
+                                Text(
+                                    text = "${preset.dp}dp",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (uiState.aaTargetLayoutWidthDp > 0) {
+                // Show the computed DPI per tier when layout width is active
+                val tierInfo = listOf(
+                    "480p" to 800, "720p" to 1280, "1080p" to 1920,
+                    "1440p" to 2560, "4K" to 3840
+                ).joinToString(" · ") { (name, width) ->
+                    val dpi = (width * 160) / uiState.aaTargetLayoutWidthDp
+                    "$name→${maxOf(dpi, 80)}"
+                }
+                Text(
+                    text = "Per-tier DPI: $tierInfo",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
         }
 
-        // Slider for custom DPI (80-400 range)
+        // DPI description — show different text depending on whether layout width target is active
+        if (uiState.aaTargetLayoutWidthDp > 0 && uiState.videoAutoNegotiate) {
+            Text(
+                text = "Layout Width Target is active — DPI is computed automatically per tier. " +
+                        "The slider below is ignored in auto-negotiate mode when a target is set.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        } else {
+            val recommendedDpi = when (uiState.aaResolution) {
+                "480p" -> 80
+                "720p" -> 107
+                "1440p" -> 213
+                "4k" -> 320
+                else -> 160
+            }
+
+            Text(
+                text = "Controls how Android Auto sizes its UI elements. " +
+                        "Lower = more content, smaller text/icons. Higher = bigger text/icons, less content.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // Expandable "How DPI works" info panel
+            var dpiInfoExpanded by remember { mutableStateOf(false) }
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier
+                    .fillMaxWidth(0.7f)
+                    .padding(bottom = 12.dp)
+                    .clickable { dpiInfoExpanded = !dpiInfoExpanded }
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.DisplaySettings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (dpiInfoExpanded) "How DPI works ▲" else "How DPI works ▼",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    if (dpiInfoExpanded) {
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // What it affects
+                        val currentWidthDp = if (!uiState.videoAutoNegotiate) {
+                            val (w, _) = when (uiState.aaResolution) {
+                                "480p" -> 800 to 480; "720p" -> 1280 to 720
+                                "1440p" -> 2560 to 1440; "4k" -> 3840 to 2160
+                                else -> 1920 to 1080
+                            }
+                            (w * 160) / uiState.aaDpi
+                        } else null
+
+                        Text(
+                            text = "DPI tells Android Auto how physically dense your display is. " +
+                                    "AA converts your pixel resolution into 'dp' (density-independent pixels) " +
+                                    "using the formula:\n\n" +
+                                    "    screenWidthDp = pixelWidth × 160 ÷ DPI\n\n" +
+                                    "This dp width determines how AA lays out its UI — card widths, " +
+                                    "search results panels, navigation rail, status bar height, and text size " +
+                                    "are all sized in dp.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "AA layout breakpoints (from phone-side Phenotype flags):",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "  • < 880dp → Canonical (phone-like, narrow cards)\n" +
+                                    "  • 880–1240dp → Semi-widescreen (medium cards)\n" +
+                                    "  • > 1240dp → Full widescreen (wide cards, CoolWalk)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+
+                        if (currentWidthDp != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            val layoutMode = when {
+                                currentWidthDp < 880 -> "Canonical"
+                                currentWidthDp < 1240 -> "Semi-widescreen"
+                                else -> "Full widescreen"
+                            }
+                            Text(
+                                text = "Your current setting: ${uiState.aaResolution} at DPI ${uiState.aaDpi} " +
+                                        "→ ${currentWidthDp}dp → $layoutMode",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "Practical tips:\n" +
+                                    "• 160 DPI at 1080p = 1920dp (full widescreen, wide search results)\n" +
+                                    "• 320 DPI at 1080p = 960dp (semi-wide, narrower search results)\n" +
+                                    "• Higher DPI = smaller dp width = more compact AA layout\n" +
+                                    "• Text and icons also get physically smaller at higher DPI\n" +
+                                    "• Match DPI to resolution to keep consistent sizing:\n" +
+                                    "    480p→80  720p→107  1080p→160  1440p→213  4K→320",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            if (!uiState.videoAutoNegotiate && uiState.aaResolution != "1080p" && uiState.aaDpi != recommendedDpi) {
+                Text(
+                    text = "Recommended for ${uiState.aaResolution}: $recommendedDpi DPI (tap to apply)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF64B5F6),
+                    modifier = Modifier
+                        .padding(bottom = 8.dp)
+                        .clickable { viewModel.updateAaDpi(recommendedDpi) }
+                )
+            }
+        }
+
+        // Slider for custom DPI (80-640 range)
         var sliderDpi by remember(uiState.aaDpi) { mutableIntStateOf(uiState.aaDpi) }
+        val dpiSliderEnabled = !(uiState.aaTargetLayoutWidthDp > 0 && uiState.videoAutoNegotiate)
         Text(
             text = "DPI: $sliderDpi",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
+            color = if (dpiSliderEnabled) Color.Unspecified
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
             modifier = Modifier.padding(bottom = 4.dp)
         )
         Slider(
             value = sliderDpi.toFloat(),
             onValueChange = { sliderDpi = it.toInt() },
             onValueChangeFinished = { viewModel.updateAaDpi(sliderDpi) },
-            valueRange = 80f..400f,
+            valueRange = 80f..640f,
             steps = 0,
+            enabled = dpiSliderEnabled,
             modifier = Modifier.fillMaxWidth(0.7f)
         )
 
@@ -1126,7 +1315,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                 .padding(top = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            listOf(120, 160, 200, 240, 320).forEach { preset ->
+            listOf(120, 160, 240, 320, 480).forEach { preset ->
                 val isSelected = uiState.aaDpi == preset
                 Surface(
                     shape = MaterialTheme.shapes.small,

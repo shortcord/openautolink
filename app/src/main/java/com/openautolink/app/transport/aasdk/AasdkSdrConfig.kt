@@ -68,4 +68,12 @@ class AasdkSdrConfig(
     @JvmField val safeAreaBottom: Int = 0,
     @JvmField val safeAreaLeft: Int = 0,
     @JvmField val safeAreaRight: Int = 0,
+
+    /**
+     * Target layout width in dp for per-tier DPI scaling (auto-negotiate mode).
+     * When > 0, each resolution tier gets a computed DPI so that
+     * screenWidthDp = tierPixelWidth * 160 / dpi ≈ this value.
+     * 0 = disabled (use videoDpi uniformly for all tiers).
+     */
+    @JvmField val targetLayoutWidthDp: Int = 0,
 )

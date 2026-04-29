@@ -196,13 +196,14 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     sdrConfig_.safeAreaBottom = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "safeAreaBottom", "I"));
     sdrConfig_.safeAreaLeft = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "safeAreaLeft", "I"));
     sdrConfig_.safeAreaRight = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "safeAreaRight", "I"));
+    sdrConfig_.targetLayoutWidthDp = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "targetLayoutWidthDp", "I"));
     env->DeleteLocalRef(sdrClass);
 
-    LOGI("Starting session: video=%dx%d@%dfps dpi=%d realDpi=%d pixelAspect=%d autoNeg=%d codec=%s",
+    LOGI("Starting session: video=%dx%d@%dfps dpi=%d realDpi=%d pixelAspect=%d autoNeg=%d codec=%s targetLayoutDp=%d",
          sdrConfig_.videoWidth, sdrConfig_.videoHeight,
          sdrConfig_.videoFps, sdrConfig_.videoDpi, sdrConfig_.realDensity,
          sdrConfig_.pixelAspectE4, sdrConfig_.autoNegotiate,
-         sdrConfig_.videoCodec.c_str());
+         sdrConfig_.videoCodec.c_str(), sdrConfig_.targetLayoutWidthDp);
     if (sdrConfig_.safeAreaTop > 0 || sdrConfig_.safeAreaBottom > 0 ||
         sdrConfig_.safeAreaLeft > 0 || sdrConfig_.safeAreaRight > 0) {
         LOGI("Safe area insets: top=%d bottom=%d left=%d right=%d",
@@ -951,12 +952,20 @@ void JniSession::buildServiceDiscoveryResponse(
 
       if (sdrConfig_.autoNegotiate) {
           // Auto mode: H.265 at all tiers, then H.264 fallback
+          // Landscape tier pixel widths indexed by VRes enum (1-5)
+          static constexpr int tierWidths[] = {0, 800, 1280, 1920, 2560, 3840};
           int tiers[] = {5, 4, 3, 2, 1};
           for (int t : tiers) {
               auto* vc = ms->add_video_configs();
               vc->set_codec_resolution(static_cast<VRes>(t));
               vc->set_frame_rate(fps);
-              vc->set_density(sdrConfig_.videoDpi);
+              if (sdrConfig_.targetLayoutWidthDp > 0) {
+                  // Per-tier DPI: scale so each tier produces the same dp width
+                  int dpi = (tierWidths[t] * 160) / sdrConfig_.targetLayoutWidthDp;
+                  vc->set_density(std::max(dpi, 80));
+              } else {
+                  vc->set_density(sdrConfig_.videoDpi);
+              }
               vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265);
               applyCommonVideoFields(vc);
           }
@@ -964,7 +973,12 @@ void JniSession::buildServiceDiscoveryResponse(
               auto* vc = ms->add_video_configs();
               vc->set_codec_resolution(static_cast<VRes>(t));
               vc->set_frame_rate(fps);
-              vc->set_density(sdrConfig_.videoDpi);
+              if (sdrConfig_.targetLayoutWidthDp > 0) {
+                  int dpi = (tierWidths[t] * 160) / sdrConfig_.targetLayoutWidthDp;
+                  vc->set_density(std::max(dpi, 80));
+              } else {
+                  vc->set_density(sdrConfig_.videoDpi);
+              }
               vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
               applyCommonVideoFields(vc);
           }

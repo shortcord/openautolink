@@ -256,6 +256,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             val aaWM = preferences.aaWidthMargin.first()
             val aaHM = preferences.aaHeightMargin.first()
             val aaPA = preferences.aaPixelAspect.first()
+            val aaTargetLayoutDp = preferences.aaTargetLayoutWidthDp.first()
             val videoFps = preferences.videoFps.first()
             val driveSide = preferences.driveSide.first()
             val hideClock = preferences.hideAaClock.first()
@@ -309,6 +310,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 aaWidthMargin = aaWM,
                 aaHeightMargin = aaHM,
                 aaPixelAspect = aaPA,
+                aaTargetLayoutWidthDp = aaTargetLayoutDp,
                 videoFps = videoFps,
                 driveSide = driveSide,
                 hideClock = hideClock,

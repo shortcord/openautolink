@@ -285,6 +285,7 @@ private:
         int safeAreaBottom = 0;
         int safeAreaLeft = 0;
         int safeAreaRight = 0;
+        int targetLayoutWidthDp = 0;
     };
     SdrConfig sdrConfig_;
 

@@ -225,6 +225,7 @@ class SessionManager(
         aaWidthMargin: Int = 0,
         aaHeightMargin: Int = 0,
         aaPixelAspect: Int = -1,
+        aaTargetLayoutWidthDp: Int = 0,
         videoFps: Int = 60,
         driveSide: String = "left",
         hideClock: Boolean = false,
@@ -364,7 +365,7 @@ class SessionManager(
             // Start direct mode session
             startSession(directTransport, hotspotSsid, hotspotPassword,
                 videoAutoNegotiate, codecPreference, aaResolution, aaDpi,
-                aaWidthMargin, aaHeightMargin, aaPixelAspect, videoFps,
+                aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp, videoFps,
                 driveSide, hideClock, hideSignal, hideBattery, scalingMode,
                 manualIpAddress,
                 safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight)
@@ -375,7 +376,8 @@ class SessionManager(
         directTransport: String, hotspotSsid: String, hotspotPassword: String,
         videoAutoNegotiate: Boolean = true, codec: String = "h264",
         aaResolution: String = "1080p", aaDpi: Int = 160,
-        aaWidthMargin: Int = 0, aaHeightMargin: Int = 0, aaPixelAspect: Int = -1, videoFps: Int = 60,
+        aaWidthMargin: Int = 0, aaHeightMargin: Int = 0, aaPixelAspect: Int = -1,
+        aaTargetLayoutWidthDp: Int = 0, videoFps: Int = 60,
         driveSide: String = "left",
         hideClock: Boolean = false, hideSignal: Boolean = false, hideBattery: Boolean = false,
         scalingMode: String = "letterbox",
@@ -475,6 +477,20 @@ class SessionManager(
             computedPixelAspect = if (aaPixelAspect > 0) aaPixelAspect else 0
         }
 
+        // Per-tier DPI: in manual mode (single tier), compute DPI from target dp width
+        // so the user doesn't have to do the math. In auto-negotiate, C++ handles it.
+        val computedTargetLayoutWidthDp: Int
+        val effectiveDpi: Int
+        if (aaTargetLayoutWidthDp > 0 && !videoAutoNegotiate) {
+            // Manual mode with target: compute DPI for the selected tier
+            effectiveDpi = maxOf((resW * 160) / aaTargetLayoutWidthDp, 80)
+            computedTargetLayoutWidthDp = 0 // C++ doesn't need it — single tier
+            OalLog.i(TAG, "Per-tier DPI (manual): ${resW}px / ${aaTargetLayoutWidthDp}dp → DPI $effectiveDpi")
+        } else {
+            effectiveDpi = aaDpi
+            computedTargetLayoutWidthDp = aaTargetLayoutWidthDp
+        }
+
         val session = AasdkSession(scope, ctx)
         session.transportMode = directTransport
         session.manualIpAddress = manualIpAddress
@@ -482,7 +498,7 @@ class SessionManager(
             videoWidth = resW,
             videoHeight = resH,
             videoFps = videoFps,
-            videoDpi = aaDpi,
+            videoDpi = effectiveDpi,
             marginWidth = computedWidthMargin,
             marginHeight = computedHeightMargin,
             pixelAspectE4 = computedPixelAspect,
@@ -501,6 +517,7 @@ class SessionManager(
             safeAreaBottom = safeAreaBottom,
             safeAreaLeft = safeAreaLeft,
             safeAreaRight = safeAreaRight,
+            targetLayoutWidthDp = computedTargetLayoutWidthDp,
         )
         _touchWidth.value = resW
         _touchHeight.value = resH
@@ -707,6 +724,7 @@ class SessionManager(
         aaWidthMargin: Int = 0,
         aaHeightMargin: Int = 0,
         aaPixelAspect: Int = -1,
+        aaTargetLayoutWidthDp: Int = 0,
         videoFps: Int = 60,
         driveSide: String = "left",
         hideClock: Boolean = false,
@@ -726,7 +744,7 @@ class SessionManager(
             start(
                 codecPreference, micSourcePreference, scalingMode, directTransport,
                 hotspotSsid, hotspotPassword, videoAutoNegotiate, aaResolution,
-                aaDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, videoFps,
+                aaDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp, videoFps,
                 driveSide, hideClock, hideSignal, hideBattery,
                 volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
                 manualIpAddress, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
@@ -787,7 +805,7 @@ class SessionManager(
 
             startSession(directTransport, hotspotSsid, hotspotPassword,
                 videoAutoNegotiate, codecPreference, aaResolution, aaDpi,
-                aaWidthMargin, aaHeightMargin, aaPixelAspect, videoFps,
+                aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp, videoFps,
                 driveSide, hideClock, hideSignal, hideBattery, scalingMode,
                 manualIpAddress,
                 safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight)

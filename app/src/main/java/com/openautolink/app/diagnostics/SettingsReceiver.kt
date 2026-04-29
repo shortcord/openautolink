@@ -26,6 +26,7 @@ import kotlinx.coroutines.runBlocking
  *   aa_resolution       --es svalue <str>      480p, 720p, 1080p, 1440p, 4k
  *   aa_width_margin     --ei value <int>       0+
  *   aa_height_margin    --ei value <int>       0+
+ *   aa_target_layout_dp --ei value <int>       0=off, 960/1280/1920
  *   video_scaling_mode  --es svalue <str>      crop, letterbox
  *   video_auto_negotiate --ez bvalue <bool>    true/false
  *   video_codec         --es svalue <str>      h264, h265
@@ -65,6 +66,10 @@ class SettingsReceiver : BroadcastReceiver() {
                 "aa_height_margin" -> {
                     val v = intent.getIntExtra("value", -1)
                     if (v >= 0) { prefs.setAaHeightMargin(v); log("aa_height_margin=$v") }
+                }
+                "aa_target_layout_dp" -> {
+                    val v = intent.getIntExtra("value", -1)
+                    if (v >= 0) { prefs.setAaTargetLayoutWidthDp(v); log("aa_target_layout_dp=$v") }
                 }
                 "video_scaling_mode" -> {
                     val v = intent.getStringExtra("svalue") ?: return@runBlocking
