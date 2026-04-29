@@ -286,6 +286,8 @@ private:
         int safeAreaLeft = 0;
         int safeAreaRight = 0;
         int targetLayoutWidthDp = 0;
+        std::vector<int> fuelTypes;
+        std::vector<int> evConnectorTypes;
     };
     SdrConfig sdrConfig_;
 

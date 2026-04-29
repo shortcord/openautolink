@@ -252,6 +252,21 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     sdrConfig_.safeAreaLeft = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "safeAreaLeft", "I"));
     sdrConfig_.safeAreaRight = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "safeAreaRight", "I"));
     sdrConfig_.targetLayoutWidthDp = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "targetLayoutWidthDp", "I"));
+
+    // Read int arrays: fuelTypes and evConnectorTypes
+    auto readIntArray = [&](const char* field) -> std::vector<int> {
+        jfieldID fid = env->GetFieldID(sdrClass, field, "[I");
+        auto jarr = static_cast<jintArray>(env->GetObjectField(sdrConfig, fid));
+        if (!jarr) return {};
+        jsize len = env->GetArrayLength(jarr);
+        std::vector<int> result(len);
+        env->GetIntArrayRegion(jarr, 0, len, result.data());
+        env->DeleteLocalRef(jarr);
+        return result;
+    };
+    sdrConfig_.fuelTypes = readIntArray("fuelTypes");
+    sdrConfig_.evConnectorTypes = readIntArray("evConnectorTypes");
+
     env->DeleteLocalRef(sdrClass);
 
     LOGI("Starting session: video=%dx%d@%dfps dpi=%d realDpi=%d pixelAspect=%d marginW=%d marginH=%d autoNeg=%d codec=%s targetLayoutDp=%d",
@@ -1131,6 +1146,18 @@ void JniSession::buildServiceDiscoveryResponse(
       ss->add_sensors()->set_sensor_type(ST::SENSOR_GPS_SATELLITE_DATA);
       ss->add_sensors()->set_sensor_type(ST::SENSOR_RPM);
       ss->add_sensors()->set_sensor_type(ST::SENSOR_VEHICLE_ENERGY_MODEL);
+
+      // Fuel types and EV connector types — required for phone to recognize
+      // this as an EV and request sensor type 23 (VehicleEnergyModel)
+      namespace FT = aap_protobuf::service::sensorsource::message;
+      for (int ft : sdrConfig_.fuelTypes) {
+          ss->add_supported_fuel_types(static_cast<FT::FuelType>(ft));
+      }
+      for (int ct : sdrConfig_.evConnectorTypes) {
+          ss->add_supported_ev_connector_types(static_cast<FT::EvConnectorType>(ct));
+      }
+      LOGI("SDR sensor: %zu fuel types, %zu ev connectors",
+           sdrConfig_.fuelTypes.size(), sdrConfig_.evConnectorTypes.size());
     }
 
     // ---- Input channel ----
@@ -1468,9 +1495,11 @@ void JniSession::sendEnergyModelSensor(int batteryLevelWh, int batteryCapacityWh
         auto* batt = em->mutable_battery();
         batt->set_config_id(1);
 
+        // Maps reads min_usable_capacity as the CURRENT battery level (not a static floor).
+        // SOC = min_usable_capacity / max_capacity. See ev-energy-model-reverse-engineering.md.
         auto* minCap = batt->mutable_min_usable_capacity();
-        minCap->set_watt_hours(0);
-        minCap->set_display_value(0);
+        minCap->set_watt_hours(batteryLevelWh);
+        minCap->set_display_value(static_cast<float>(batteryLevelWh) / 1000.0f);
 
         auto* maxCap = batt->mutable_max_capacity();
         maxCap->set_watt_hours(batteryCapacityWh);

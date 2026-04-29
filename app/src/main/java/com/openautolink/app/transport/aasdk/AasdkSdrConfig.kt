@@ -76,4 +76,10 @@ class AasdkSdrConfig(
      * 0 = disabled (use videoDpi uniformly for all tiers).
      */
     @JvmField val targetLayoutWidthDp: Int = 0,
+
+    /** Fuel types from VHAL INFO_FUEL_TYPE (e.g. [10] = ELECTRIC). */
+    @JvmField val fuelTypes: IntArray = intArrayOf(),
+
+    /** EV connector types from VHAL INFO_EV_CONNECTOR_TYPE (e.g. [1,5] = J1772+CCS1). */
+    @JvmField val evConnectorTypes: IntArray = intArrayOf(),
 )

@@ -424,6 +424,12 @@ class SessionManager(
         val vd = _vehicleDataForwarder?.latestVehicleData?.value
         val driverPos = if (driveSide == "right") 1 else 0
 
+        // Fuel types and EV connector types from VHAL — needed for phone to
+        // recognize this as an EV and request sensor type 23 (VehicleEnergyModel)
+        val fuelTypes = vd?.fuelTypes ?: emptyList()
+        val evConnectorTypes = vd?.evConnectorTypes ?: emptyList()
+        OalLog.i(TAG, "SDR fuel=$fuelTypes ev_conn=$evConnectorTypes")
+
         // Auto-compute pixel_aspect_ratio for non-16:9 displays (crop mode).
         //
         // pixel_aspect tells the phone "each pixel on the display is X/10000
@@ -522,6 +528,8 @@ class SessionManager(
             safeAreaLeft = safeAreaLeft,
             safeAreaRight = safeAreaRight,
             targetLayoutWidthDp = computedTargetLayoutWidthDp,
+            fuelTypes = fuelTypes.map { it }.toIntArray(),
+            evConnectorTypes = evConnectorTypes.map { it }.toIntArray(),
         )
         _touchWidth.value = resW
         _touchHeight.value = resH
