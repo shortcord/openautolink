@@ -154,15 +154,20 @@ Because this is an AAOS app, installation on the car goes through your own Googl
 
 ### 3. Connect
 
-**Wireless:**
-1. Open the Companion app on the phone and tap **Start**.
-2. Open OpenAutoLink on the car — it discovers the phone automatically.
-3. Android Auto projection starts within seconds.
+**Wireless (Nearby + phone hotspot):**
+1. **Turn on your phone's WiFi hotspot** (Settings → Hotspot / Tethering).
+2. **Connect the car to the hotspot.** On the head unit, go to Settings → Network & Internet → WiFi and join the phone's hotspot network. The car needs an active WiFi connection to the phone before OpenAutoLink can stream.
+3. Open the **Companion app** on the phone and tap **Start**.
+4. Open **OpenAutoLink** on the car — it discovers the phone via Nearby Connections and starts the AA session over the hotspot WiFi.
+
+> **Hotspot reconnect note:** When the car wakes from sleep, it should automatically rejoin the phone's hotspot — but in practice this can take 30+ seconds or occasionally fail to reconnect on its own. This appears to be a GM / AAOS WiFi behavior. If the car doesn't reconnect, toggle the phone hotspot off and back on, or manually reconnect from the car's WiFi settings. Once WiFi is back, OpenAutoLink reconnects automatically if you have pressed the "Start" button or have one of the auto connect options configured.
 
 **USB:**
 1. Plug the phone into the head unit's USB port.
 2. OpenAutoLink detects the device and performs the AOA v2 handshake.
 3. Android Auto projection starts over the USB connection.
+
+> **GM AAOS USB permission note:** On GM head units, the system will ask for USB connection permission every time you plug in, even if you check "Always allow." This is a known GM AAOS limitation — the permission preference is not persisted. There is no workaround; just tap Allow each time.
 
 ## Video and Display
 
