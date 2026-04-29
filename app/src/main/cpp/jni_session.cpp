@@ -1148,16 +1148,28 @@ void JniSession::buildServiceDiscoveryResponse(
       ss->add_sensors()->set_sensor_type(ST::SENSOR_VEHICLE_ENERGY_MODEL);
 
       // Fuel types and EV connector types — required for phone to recognize
-      // this as an EV and request sensor type 23 (VehicleEnergyModel)
+      // this as an EV and request sensor type 23 (VehicleEnergyModel).
+      // Falls back to ELECTRIC + J1772/COMBO_1 if VHAL data not yet available
+      // (matches bridge-mode fallback logic).
       namespace FT = aap_protobuf::service::sensorsource::message;
-      for (int ft : sdrConfig_.fuelTypes) {
-          ss->add_supported_fuel_types(static_cast<FT::FuelType>(ft));
+      if (sdrConfig_.fuelTypes.empty()) {
+          ss->add_supported_fuel_types(FT::FUEL_TYPE_ELECTRIC);
+      } else {
+          for (int ft : sdrConfig_.fuelTypes) {
+              ss->add_supported_fuel_types(static_cast<FT::FuelType>(ft));
+          }
       }
-      for (int ct : sdrConfig_.evConnectorTypes) {
-          ss->add_supported_ev_connector_types(static_cast<FT::EvConnectorType>(ct));
+      if (sdrConfig_.evConnectorTypes.empty()) {
+          ss->add_supported_ev_connector_types(FT::EV_CONNECTOR_TYPE_J1772);
+          ss->add_supported_ev_connector_types(FT::EV_CONNECTOR_TYPE_COMBO_1);
+      } else {
+          for (int ct : sdrConfig_.evConnectorTypes) {
+              ss->add_supported_ev_connector_types(static_cast<FT::EvConnectorType>(ct));
+          }
       }
       LOGI("SDR sensor: %zu fuel types, %zu ev connectors",
-           sdrConfig_.fuelTypes.size(), sdrConfig_.evConnectorTypes.size());
+           sdrConfig_.fuelTypes.empty() ? 1u : sdrConfig_.fuelTypes.size(),
+           sdrConfig_.evConnectorTypes.empty() ? 2u : sdrConfig_.evConnectorTypes.size());
     }
 
     // ---- Input channel ----
@@ -1488,36 +1500,46 @@ void JniSession::sendEnergyModelSensor(int batteryLevelWh, int batteryCapacityWh
     int rangeM, int chargeRateW)
 {
     if (!streaming_ || !sensorChannel_) return;
+    // Guard: skip if values are invalid (matches bridge-mode logic)
+    if (batteryCapacityWh <= 0 || batteryLevelWh <= 0 || rangeM <= 0) return;
+
     ioService_->post([this, batteryLevelWh, batteryCapacityWh, rangeM, chargeRateW]() {
         aap_protobuf::service::sensorsource::message::SensorBatch batch;
-        auto* em = batch.add_vehicle_energy_model_data();
+        aap_protobuf::service::sensorsource::message::VehicleEnergyModel vem;
 
-        auto* batt = em->mutable_battery();
+        // Battery config — matches bridge-mode (verified working on real car)
+        auto* batt = vem.mutable_battery();
         batt->set_config_id(1);
 
-        // Maps reads min_usable_capacity as the CURRENT battery level (not a static floor).
-        // SOC = min_usable_capacity / max_capacity. See ev-energy-model-reverse-engineering.md.
-        auto* minCap = batt->mutable_min_usable_capacity();
-        minCap->set_watt_hours(batteryLevelWh);
-        minCap->set_display_value(static_cast<float>(batteryLevelWh) / 1000.0f);
+        batt->mutable_max_capacity()->set_watt_hours(batteryCapacityWh);
 
-        auto* maxCap = batt->mutable_max_capacity();
-        maxCap->set_watt_hours(batteryCapacityWh);
-        maxCap->set_display_value(static_cast<float>(batteryCapacityWh) / 1000.0f); // kWh
+        // CRITICAL: Maps reads min_usable_capacity as the CURRENT battery level (Wh)!
+        // From AAOS Maps decompile (rah.m33791O): SOC = min_usable_capacity / max_capacity.
+        batt->mutable_min_usable_capacity()->set_watt_hours(batteryLevelWh);
 
-        // Current level as reserve_energy (hacky but Maps reads it)
-        auto* reserve = batt->mutable_reserve_energy();
-        reserve->set_watt_hours(batteryLevelWh);
-        reserve->set_display_value(static_cast<float>(batteryLevelWh) / 1000.0f);
+        // Reserve = small buffer below which Maps warns "low battery"
+        batt->mutable_reserve_energy()->set_watt_hours(static_cast<int>(batteryCapacityWh * 0.05));
 
-        batt->set_display_unit(1); // kWh
-        batt->set_charge_efficiency(0.9f);
-        batt->set_discharge_efficiency(0.9f);
         batt->set_regen_braking_capable(true);
 
-        if (chargeRateW > 0) {
-            batt->set_max_charge_power_w(chargeRateW);
-        }
+        // Charge/discharge power — needed for server-side EV routing computation
+        int chargePower = (chargeRateW > 0) ? chargeRateW : 150000;
+        batt->set_max_charge_power_w(chargePower);
+        batt->set_max_discharge_power_w(150000);
+
+        // Energy consumption derived from car's own range estimate
+        // consumption = currentEnergy / rangeRemaining (Wh/m) * 1000 (Wh/km)
+        auto* cons = vem.mutable_consumption();
+        float whPerKm = (static_cast<float>(batteryLevelWh) / static_cast<float>(rangeM)) * 1000.0f;
+        cons->mutable_driving()->set_rate(whPerKm);
+        cons->mutable_auxiliary()->set_rate(2.0f);    // typical aux consumption
+        cons->mutable_aerodynamic()->set_rate(0.36f);  // drag coefficient contribution
+
+        // Charging prefs
+        vem.mutable_charging_prefs()->set_mode(1);  // standard
+
+        auto* vemMsg = batch.add_vehicle_energy_model_data();
+        *vemMsg = vem;
 
         auto promise = aasdk::channel::SendPromise::defer(*strand_);
         promise->then([]() {}, [](const auto&) {});
