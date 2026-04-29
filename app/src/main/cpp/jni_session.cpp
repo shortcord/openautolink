@@ -904,8 +904,13 @@ void JniSession::buildServiceDiscoveryResponse(
     response.set_head_unit_software_version("1.0");
 
     // Session configuration (bitmask: bit0=hide clock, bit1=hide signal, bit2=hide battery)
-    // Java implementation sets this to 7 (all hidden) — may affect preflight authorization
-    response.set_session_configuration(7);
+    {
+        int session_config = 0;
+        if (sdrConfig_.hideClock)   session_config |= 1;
+        if (sdrConfig_.hideSignal)  session_config |= 2;
+        if (sdrConfig_.hideBattery) session_config |= 4;
+        response.set_session_configuration(session_config);
+    }
 
     // ---- Video channel (matches bridge exactly — NO audio_type) ----
     { auto* svc = response.add_channels();
@@ -936,6 +941,14 @@ void JniSession::buildServiceDiscoveryResponse(
           }
       };
 
+      auto applyCommonVideoFields = [&](auto* vc) {
+          if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
+          if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
+          if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
+          if (sdrConfig_.realDensity > 0) vc->set_real_density(sdrConfig_.realDensity);
+          applySafeArea(vc);
+      };
+
       if (sdrConfig_.autoNegotiate) {
           // Auto mode: H.265 at all tiers, then H.264 fallback
           int tiers[] = {5, 4, 3, 2, 1};
@@ -945,10 +958,7 @@ void JniSession::buildServiceDiscoveryResponse(
               vc->set_frame_rate(fps);
               vc->set_density(sdrConfig_.videoDpi);
               vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265);
-              if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
-              if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
-              if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
-              applySafeArea(vc);
+              applyCommonVideoFields(vc);
           }
           for (int t : {3, 2, 1}) {
               auto* vc = ms->add_video_configs();
@@ -956,10 +966,7 @@ void JniSession::buildServiceDiscoveryResponse(
               vc->set_frame_rate(fps);
               vc->set_density(sdrConfig_.videoDpi);
               vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
-              if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
-              if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
-              if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
-              applySafeArea(vc);
+              applyCommonVideoFields(vc);
           }
       } else {
           // Manual mode: single config at the selected resolution and codec
@@ -971,10 +978,7 @@ void JniSession::buildServiceDiscoveryResponse(
           vc->set_frame_rate(fps);
           vc->set_density(sdrConfig_.videoDpi);
           vc->set_video_codec_type(codecType);
-          if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
-          if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
-          if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
-          applySafeArea(vc);
+          applyCommonVideoFields(vc);
       }
     }
 
@@ -1052,6 +1056,9 @@ void JniSession::buildServiceDiscoveryResponse(
       ss->add_sensors()->set_sensor_type(ST::SENSOR_GPS_SATELLITE_DATA);
       ss->add_sensors()->set_sensor_type(ST::SENSOR_RPM);
       ss->add_sensors()->set_sensor_type(ST::SENSOR_VEHICLE_ENERGY_MODEL);
+      // Location characterization bitmask — tells AA about available sensor fusion
+      // RAW_GPS_ONLY=256, ACCELEROMETER=4, GYROSCOPE=2, COMPASS=8, CAR_SPEED=64
+      ss->set_location_characterization(256 | 4 | 2 | 8 | 64);
     }
 
     // ---- Input channel ----
