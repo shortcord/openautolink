@@ -105,7 +105,7 @@ mkdir -p "$STUB_DIR"
 cp "$REPO_ROOT/app/src/main/cpp/stubs/libusb.h" "$STUB_DIR/"
 cp "$REPO_ROOT/app/src/main/cpp/stubs/libusb_stub.c" "$STUB_DIR/"
 
-# Create cmake shim dir for find_package overrides
+# Create cmake3 shim dir for find_package overrides
 SHIM_DIR="$SHARED_DIR/cmake-shims"
 mkdir -p "$SHIM_DIR"
 
@@ -165,7 +165,7 @@ if [ ! -f "$HOST_PROTOC" ]; then
     mkdir -p "$HOST_BUILD_DIR"
     cd "$HOST_BUILD_DIR"
 
-    cmake "$AASDK_NATIVE" \
+    cmake3 "$AASDK_NATIVE" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_AASDK_STATIC=ON \
         -DSKIP_BUILD_PROTOBUF=OFF \
@@ -181,7 +181,7 @@ if [ ! -f "$HOST_PROTOC" ]; then
         2>&1
 
     # Build everything for host — aasdk + aap_protobuf + protobuf + abseil
-    cmake --build . --target aasdk aap_protobuf -j$(nproc) 2>&1
+    cmake3 --build . --target aasdk aap_protobuf -j$(nproc) 2>&1
     echo ""
     echo "Host build complete:"
     ls -la "$HOST_PROTOC" 2>&1
@@ -197,7 +197,7 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-cmake "$AASDK_NATIVE" \
+cmake3 "$AASDK_NATIVE" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
     -DANDROID_ABI=$TARGET_ABI \
     -DANDROID_PLATFORM=android-$ANDROID_API \
@@ -234,20 +234,20 @@ echo ""
 echo "=== Building aasdk ==="
 echo ""
 
-cmake --build . --target aasdk aap_protobuf -j$(nproc) 2>&1
+cmake3 --build . --target aasdk aap_protobuf -j$(nproc) 2>&1
 
 # Build protobuf runtime and abseil (needed for linking)
 echo ""
 echo "=== Building protobuf + abseil dependencies ==="
 echo ""
-cmake --build . --target protobuf-lite -j$(nproc) 2>&1 || true
-cmake --build . --target libprotobuf -j$(nproc) 2>&1 || true
+cmake3 --build . --target protobuf-lite -j$(nproc) 2>&1 || true
+cmake3 --build . --target libprotobuf -j$(nproc) 2>&1 || true
 
 # Build all abseil targets
-ABSL_TARGETS=$(cmake --build . --target help 2>&1 | grep -oP 'absl_\w+' | sort -u || true)
+ABSL_TARGETS=$(cmake3 --build . --target help 2>&1 | grep -oP 'absl_\w+' | sort -u || true)
 if [ -n "$ABSL_TARGETS" ]; then
     for target in $ABSL_TARGETS; do
-        cmake --build . --target "$target" -j$(nproc) 2>&1 || true
+        cmake3 --build . --target "$target" -j$(nproc) 2>&1 || true
     done
 fi
 
