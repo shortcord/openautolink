@@ -283,7 +283,13 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             listOf(
-                "nearby" to "Google Nearby",
+                // Nearby mode is hidden for now: on GM AAOS the system-level
+                // permissions needed to drive the BT→WiFi handoff aren't
+                // grantable to a non-system app, so users always have to
+                // pre-connect to the phone hotspot manually anyway, which
+                // makes Hotspot mode the only working path. Code is kept
+                // intact for a future revisit.
+                // "nearby" to "Google Nearby",
                 "hotspot" to "Phone Hotspot",
                 "usb" to "USB Cable",
             ).forEach { (mode, label) ->
