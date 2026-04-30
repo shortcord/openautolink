@@ -10,6 +10,8 @@
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <map>
+#include <mutex>
 #include <string>
 
 #include <jni.h>
@@ -256,10 +258,37 @@ private:
     std::atomic<bool> streaming_{false};
     std::atomic<bool> micOpen_{false};
     std::atomic<bool> pingOutstanding_{false};
+    std::atomic<bool> aborted_{false};
+    std::atomic<bool> sessionStoppedFired_{false};
     std::atomic<int> negotiatedCodecType_{0};
+    std::atomic<int64_t> pingSentAtMs_{0};
+
+    // Channel-error coalescing + escalation tracking (guarded by errorMu_)
+    std::mutex errorMu_;
+    int64_t firstErrorAtMs_ = 0;
+    int errorCount_ = 0;
+    std::map<std::string, int64_t> lastLogPerChannel_;
 
     void sendPing();
     void schedulePing();
+
+public:
+    /**
+     * Centralized channel-error reporting. Called by per-channel handlers.
+     * Coalesces log spam and escalates to triggerAbort() when many errors
+     * fire in a short window (indicates remote disconnect / dead transport).
+     */
+    void reportChannelError(const char* channelName, const aasdk::error::Error& e);
+
+    /**
+     * Force-stop the session asynchronously without joining ioThread (safe
+     * to call from io thread). Notifies Kotlin via onSessionStopped, which
+     * triggers the auto-reconnect path. Idempotent.
+     */
+    void triggerAbort(const std::string& reason);
+
+private:
+    static int64_t nowMs();
 
     // SDR config (from Kotlin)
     struct SdrConfig {

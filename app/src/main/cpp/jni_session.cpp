@@ -381,6 +381,21 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
         }
         controlChannel_->receive(shared_from_this());
     });
+
+    // Handshake watchdog: if streaming_ hasn't gone true within 15s of TCP up,
+    // the phone-side proxy is stuck (AA app dead, gearhead handshake hung, etc.).
+    // Abort so Kotlin's auto-reconnect tears down and tries again.
+    {
+        auto watchdog = std::make_shared<boost::asio::deadline_timer>(
+            *ioService_, boost::posix_time::seconds(15));
+        watchdog->async_wait([this, watchdog, self = shared_from_this()]
+                             (const boost::system::error_code& ec) {
+            if (ec || stopped_ || aborted_) return;
+            if (!streaming_) {
+                triggerAbort("handshake timeout (15s, no SSL/version response)");
+            }
+        });
+    }
 }
 
 // ============================================================================
@@ -400,14 +415,16 @@ void JniSession::stop()
     ioService_->stop();
     if (ioThread_.joinable()) ioThread_.join();
 
-    // Notify Kotlin
-    if (callbackRef_ && cbMethods_.onSessionStopped) {
+    // Notify Kotlin (only if onSessionStopped hasn't already been fired by triggerAbort)
+    if (callbackRef_) {
         bool attached;
         JNIEnv* env = getEnv(attached);
         if (env) {
-            jstring reason = env->NewStringUTF("stopped");
-            env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
-            env->DeleteLocalRef(reason);
+            if (!sessionStoppedFired_.exchange(true) && cbMethods_.onSessionStopped) {
+                jstring reason = env->NewStringUTF("stopped");
+                env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
+                env->DeleteLocalRef(reason);
+            }
             env->DeleteGlobalRef(callbackRef_);
             callbackRef_ = nullptr;
         }
@@ -640,8 +657,9 @@ void JniSession::onPingResponse(
 
 void JniSession::sendPing()
 {
-    if (stopped_ || !controlChannel_) return;
+    if (stopped_ || aborted_ || !controlChannel_) return;
     pingOutstanding_ = true;
+    pingSentAtMs_ = nowMs();
     aap_protobuf::service::control::message::PingRequest request;
     request.set_timestamp(std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -652,22 +670,95 @@ void JniSession::sendPing()
 
 void JniSession::schedulePing()
 {
-    if (stopped_) return;
+    if (stopped_ || aborted_) return;
     auto timer = std::make_shared<boost::asio::deadline_timer>(
         *ioService_, boost::posix_time::milliseconds(1500));
     timer->async_wait([this, timer, self = shared_from_this()](const boost::system::error_code& ec) {
-        if (ec || stopped_) return;
-        if (!pingOutstanding_) {
+        if (ec || stopped_ || aborted_) return;
+        // Watchdog: outstanding ping for >8s = phone is gone, abort.
+        if (pingOutstanding_) {
+            int64_t ageMs = nowMs() - pingSentAtMs_.load();
+            if (ageMs > 8000) {
+                triggerAbort("ping timeout (" + std::to_string(ageMs) + "ms)");
+                return;
+            }
+        } else {
             sendPing();
         }
         schedulePing();
     });
 }
 
+int64_t JniSession::nowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void JniSession::triggerAbort(const std::string& reason)
+{
+    if (aborted_.exchange(true)) return;
+    LOGW("Session abort: %s", reason.c_str());
+    streaming_ = false;
+
+    // Stop the transport so any pending reads fail and the io loop becomes idle.
+    // Do NOT call stop() here — we're on the io thread and it would deadlock
+    // on ioThread_.join(). Kotlin's onSessionStopped handler will call
+    // nativeStopSession asynchronously to do the real teardown.
+    if (transport_) transport_->stop();
+
+    if (sessionStoppedFired_.exchange(true)) return;
+    if (callbackRef_ && cbMethods_.onSessionStopped) {
+        bool attached;
+        JNIEnv* env = getEnv(attached);
+        if (env) {
+            jstring r = env->NewStringUTF(reason.c_str());
+            env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, r);
+            env->DeleteLocalRef(r);
+        }
+        releaseEnv(attached);
+    }
+}
+
 void JniSession::onChannelError(const aasdk::error::Error& e)
 {
-    LOGE("Channel error: %s", e.what());
-    if (cbMethods_.onError) {
+    reportChannelError("control", e);
+}
+
+void JniSession::reportChannelError(const char* channelName, const aasdk::error::Error& e)
+{
+    int64_t now = nowMs();
+    bool shouldLog = true;
+    bool escalate = false;
+    int totalInWindow = 0;
+
+    {
+        std::lock_guard<std::mutex> lk(errorMu_);
+        // Coalesce: at most one log per channel per second (with count summary)
+        auto it = lastLogPerChannel_.find(channelName);
+        if (it != lastLogPerChannel_.end() && (now - it->second) < 1000) {
+            shouldLog = false;
+        } else {
+            lastLogPerChannel_[channelName] = now;
+        }
+        // Escalation: count errors across all channels in a 2s window
+        if (firstErrorAtMs_ == 0 || (now - firstErrorAtMs_) > 2000) {
+            firstErrorAtMs_ = now;
+            errorCount_ = 1;
+        } else {
+            errorCount_++;
+        }
+        totalInWindow = errorCount_;
+        // 5+ channel errors within 2s = remote disconnect, abort.
+        if (errorCount_ >= 5) escalate = true;
+    }
+
+    if (shouldLog) {
+        LOGE("%s channel error: %s (%d errors in 2s window)",
+             channelName, e.what(), totalInWindow);
+    }
+
+    if (cbMethods_.onError && callbackRef_ && shouldLog) {
         bool attached;
         JNIEnv* env = getEnv(attached);
         if (env) {
@@ -676,6 +767,11 @@ void JniSession::onChannelError(const aasdk::error::Error& e)
             env->DeleteLocalRef(msg);
         }
         releaseEnv(attached);
+    }
+
+    if (escalate && !aborted_) {
+        triggerAbort("channel-error escalation (" + std::to_string(totalInWindow) +
+                     " errors in 2s, last on " + std::string(channelName) + ")");
     }
 }
 

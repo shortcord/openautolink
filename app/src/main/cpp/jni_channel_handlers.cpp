@@ -210,7 +210,9 @@ void JniAudioSinkHandler::onMediaIndication(const aasdk::common::DataConstBuffer
 
 void JniAudioSinkHandler::onChannelError(const aasdk::error::Error& e)
 {
-    LOGE("Audio channel error (type=%d): %s", static_cast<int>(type_), e.what());
+    char name[32];
+    snprintf(name, sizeof(name), "audio[%d]", static_cast<int>(type_));
+    session_.reportChannelError(name, e);
 }
 
 // ============================================================================
@@ -261,7 +263,7 @@ void JniSensorHandler::onSensorStartRequest(
 
 void JniSensorHandler::onChannelError(const aasdk::error::Error& e)
 {
-    LOGE("Sensor channel error: %s", e.what());
+    session_.reportChannelError("sensor", e);
 }
 
 // ============================================================================
@@ -304,7 +306,7 @@ void JniInputHandler::onKeyBindingRequest(
 
 void JniInputHandler::onChannelError(const aasdk::error::Error& e)
 {
-    LOGE("Input channel error: %s", e.what());
+    session_.reportChannelError("input", e);
 }
 
 // ============================================================================
@@ -773,7 +775,7 @@ void JniNavStatusHandler::onCurrentPosition(
 
 void JniNavStatusHandler::onChannelError(const aasdk::error::Error& e)
 {
-    LOGE("Nav channel error: %s", e.what());
+    session_.reportChannelError("nav", e);
 }
 
 // ============================================================================
@@ -852,7 +854,7 @@ void JniMicHandler::feedAudio(const uint8_t* data, size_t size)
 
 void JniMicHandler::onChannelError(const aasdk::error::Error& e)
 {
-    LOGE("Mic channel error: %s", e.what());
+    session_.reportChannelError("mic", e);
 }
 
 // ============================================================================
@@ -916,7 +918,7 @@ void JniMediaStatusHandler::onPlaybackUpdate(
 
 void JniMediaStatusHandler::onChannelError(const aasdk::error::Error& e)
 {
-    LOGE("Media status channel error: %s", e.what());
+    session_.reportChannelError("media-status", e);
 }
 
 // ============================================================================
@@ -964,7 +966,7 @@ void JniPhoneStatusHandler::onPhoneStatusUpdate(
 
 void JniPhoneStatusHandler::onChannelError(const aasdk::error::Error& e)
 {
-    LOGE("Phone status channel error: %s", e.what());
+    session_.reportChannelError("phone-status", e);
 }
 
 // ============================================================================
@@ -1016,7 +1018,7 @@ void JniBluetoothHandler::onBluetoothAuthenticationResult(
 
 void JniBluetoothHandler::onChannelError(const aasdk::error::Error& e)
 {
-    LOGE("Bluetooth channel error: %s", e.what());
+    session_.reportChannelError("bluetooth", e);
 }
 
 } // namespace openautolink::jni

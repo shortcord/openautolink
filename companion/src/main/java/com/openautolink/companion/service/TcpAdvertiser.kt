@@ -9,8 +9,10 @@ import com.openautolink.companion.diagnostics.CompanionLog
 import com.openautolink.companion.trigger.TransparentTriggerActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -32,6 +34,11 @@ class TcpAdvertiser(
         const val PORT = 5277
         const val NSD_SERVICE_TYPE = "_openautolink._tcp"
         const val NSD_SERVICE_NAME = "OpenAutoLink"
+
+        /** How long we wait for Google AA to connect to our proxy before retrying. */
+        private const val AA_CONNECT_TIMEOUT_MS = 8_000L
+        /** Re-fire the AA launch intent up to this many times before resetting the car socket. */
+        private const val MAX_AA_LAUNCH_RETRIES = 3
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -40,12 +47,17 @@ class TcpAdvertiser(
     private var activeCarSocket: Socket? = null
     private var nsdManager: NsdManager? = null
     private var nsdRegistrationListener: NsdManager.RegistrationListener? = null
+    private var aaConnectWatchdog: Job? = null
 
     @Volatile
     private var isRunning = false
 
     @Volatile
     private var isLaunching = false
+
+    /** Number of times we've re-launched AA without it connecting back to the proxy. */
+    @Volatile
+    private var aaLaunchAttempts = 0
 
     fun start() {
         if (isRunning) return
@@ -82,6 +94,7 @@ class TcpAdvertiser(
         activeCarSocket?.let { runCatching { it.close() } }
         activeCarSocket = carSocket
         isLaunching = false
+        aaLaunchAttempts = 0
 
         launchAndroidAuto(carSocket)
     }
@@ -97,6 +110,10 @@ class TcpAdvertiser(
                     listener = object : AaProxy.Listener {
                         override fun onConnected() {
                             CompanionLog.i(TAG, "AA flowing through TCP proxy")
+                            // AA is alive — cancel the watchdog and reset retry counter.
+                            aaConnectWatchdog?.cancel()
+                            aaConnectWatchdog = null
+                            aaLaunchAttempts = 0
                             stateListener.onProxyConnected()
                         }
 
@@ -111,34 +128,71 @@ class TcpAdvertiser(
                 activeProxy = proxy
                 val localPort = proxy.start()
 
-                val aaIntent = Intent().apply {
-                    setClassName(
-                        "com.google.android.projection.gearhead",
-                        "com.google.android.apps.auto.wireless.setup.service.impl.WirelessStartupActivity"
-                    )
-                    addFlags(
-                        Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP
-                    )
-                    putExtra("PARAM_HOST_ADDRESS", "127.0.0.1")
-                    putExtra("PARAM_SERVICE_PORT", localPort)
-                    putExtra("ip_address", "127.0.0.1")
-                    putExtra("projection_port", localPort)
-                }
-
-                CompanionLog.i(TAG, "Launching AA via TransparentTrigger, proxy port=$localPort")
-                val triggerIntent =
-                    Intent(context, TransparentTriggerActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-                        putExtra("intent", aaIntent)
-                    }
-                context.startActivity(triggerIntent)
-
-                // Don't call onLaunchTimeout — that's for Nearby retry logic.
-                // TCP stays connected; AA will connect to the proxy when ready.
+                fireAaLaunchIntent(localPort)
+                startAaConnectWatchdog(carSocket)
             } catch (e: Exception) {
                 CompanionLog.e(TAG, "Failed to launch AA: ${e.message}")
+                isLaunching = false
+                stateListener.onProxyDisconnected()
+            }
+        }
+    }
+
+    private fun fireAaLaunchIntent(localPort: Int) {
+        val aaIntent = Intent().apply {
+            setClassName(
+                "com.google.android.projection.gearhead",
+                "com.google.android.apps.auto.wireless.setup.service.impl.WirelessStartupActivity"
+            )
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+            putExtra("PARAM_HOST_ADDRESS", "127.0.0.1")
+            putExtra("PARAM_SERVICE_PORT", localPort)
+            putExtra("ip_address", "127.0.0.1")
+            putExtra("projection_port", localPort)
+        }
+
+        CompanionLog.i(TAG, "Launching AA via TransparentTrigger, proxy port=$localPort")
+        val triggerIntent =
+            Intent(context, TransparentTriggerActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                putExtra("intent", aaIntent)
+            }
+        context.startActivity(triggerIntent)
+    }
+
+    /**
+     * If Google AA doesn't connect to our proxy within [AA_CONNECT_TIMEOUT_MS]
+     * the AA app on the phone is dead/stuck/in-the-wrong-state. Attempt
+     * recovery without requiring the user to tap Stop+Start:
+     *   - Retry the launch intent up to [MAX_AA_LAUNCH_RETRIES] times.
+     *   - If that still fails, force-close the car socket so the car-side
+     *     reconnects with a fresh TCP session and we start over.
+     */
+    private fun startAaConnectWatchdog(carSocket: Socket) {
+        aaConnectWatchdog?.cancel()
+        aaConnectWatchdog = scope.launch {
+            delay(AA_CONNECT_TIMEOUT_MS)
+            val proxy = activeProxy
+            if (proxy == null || proxy.hasActiveBridge() || !isRunning) return@launch
+            aaLaunchAttempts++
+            if (aaLaunchAttempts <= MAX_AA_LAUNCH_RETRIES) {
+                CompanionLog.w(TAG,
+                    "AA didn't connect to proxy in ${AA_CONNECT_TIMEOUT_MS}ms — retry #$aaLaunchAttempts")
+                val port = proxy.localPort
+                if (port > 0) fireAaLaunchIntent(port)
+                startAaConnectWatchdog(carSocket)
+            } else {
+                CompanionLog.w(TAG,
+                    "AA never connected after $MAX_AA_LAUNCH_RETRIES retries — force-resetting car socket")
+                aaLaunchAttempts = 0
+                runCatching { carSocket.close() }
+                activeProxy?.stop()
+                activeProxy = null
+                activeCarSocket = null
                 isLaunching = false
                 stateListener.onProxyDisconnected()
             }
@@ -148,6 +202,8 @@ class TcpAdvertiser(
     fun stop() {
         CompanionLog.i(TAG, "Stopping TCP server")
         isRunning = false
+        aaConnectWatchdog?.cancel()
+        aaConnectWatchdog = null
         unregisterNsd()
         activeProxy?.stop()
         activeProxy = null

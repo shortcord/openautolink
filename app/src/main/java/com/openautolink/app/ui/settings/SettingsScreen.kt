@@ -2000,8 +2000,9 @@ private fun DiagnosticsSettingsTab(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Log to File", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "Write diagnostic logs to USB stick or internal storage. " +
-                        "Files saved to openautolink/logs/.",
+                    "Write OAL diagnostic logs (transport, video, audio, sensors, " +
+                        "navigation) to a file in openautolink/logs/. Recommended " +
+                        "only for troubleshooting — turn off for best performance.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -2019,8 +2020,13 @@ private fun DiagnosticsSettingsTab(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Include Full Logcat", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "Also capture full Android logcat (native C++, system, " +
-                        "framework) to a separate file. Larger output.",
+                    "Also capture the full Android logcat for our app's process " +
+                        "(native C++/JNI, AOSP framework, MediaCodec, AudioTrack, " +
+                        "Binder, Surface). Saves to logcat_<timestamp>.log. " +
+                        "AAOS does not allow apps to read system-wide logs without " +
+                        "root, so other apps and PowerManager events are not " +
+                        "included. Significantly larger files — only enable when " +
+                        "actively troubleshooting.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

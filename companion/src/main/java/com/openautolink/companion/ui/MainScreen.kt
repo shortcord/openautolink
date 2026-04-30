@@ -616,12 +616,26 @@ private fun FileLoggingSection() {
                 }
                 Switch(
                     checked = fileLoggingActive,
-                    enabled = isServiceRunning,
+                    enabled = true,
                     onCheckedChange = { enabled ->
-                        val service = getCompanionService(context)
-                        if (service != null) {
-                            if (enabled) service.startFileLogging()
-                            else service.stopFileLogging()
+                        if (enabled) {
+                            val running = isServiceRunning
+                            val service = getCompanionService(context)
+                            if (running && service != null) {
+                                service.startFileLogging()
+                            } else {
+                                // Service not running — piggyback on ACTION_START so
+                                // logging starts atomically once the service is up,
+                                // avoiding the race between startForegroundService
+                                // returning and onCreate completing.
+                                val intent = android.content.Intent(context, CompanionService::class.java).apply {
+                                    action = CompanionService.ACTION_START
+                                    putExtra(CompanionService.EXTRA_START_LOGGING, true)
+                                }
+                                androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                            }
+                        } else {
+                            getCompanionService(context)?.stopFileLogging()
                         }
                     },
                 )
@@ -629,7 +643,7 @@ private fun FileLoggingSection() {
 
             if (!isServiceRunning && !fileLoggingActive) {
                 Text(
-                    text = "Start the service first to enable logging.",
+                    text = "Toggle on to start the service and begin logging.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -644,10 +658,15 @@ private fun FileLoggingSection() {
                 )
             }
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(8.dp))
             Text(
-                text = "Saves OAL logs + logcat to internal storage. " +
-                    "Access via Files app → Android/data/com.openautolink.companion/",
+                text = "Logs persist as long as this toggle is on, regardless of " +
+                    "connection state. If no connection is ever made within 10 minutes " +
+                    "of enabling, logging auto-disables to prevent runaway files.\n\n" +
+                    "Recommended only for troubleshooting — turn this back off " +
+                    "when you're done. Continuous file logging adds I/O overhead " +
+                    "and can affect proxy throughput.\n\n" +
+                    "Files: Android/data/com.openautolink.companion/files/openautolink/logs/",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

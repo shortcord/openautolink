@@ -99,6 +99,16 @@ class TcpConnector(
             val socket = Socket()
             socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
+            // Detect dead phone within ~10s (kernel sends keepalive after idle, then
+            // 3 probes 2s apart). Critical for sleep/wake and ungraceful disconnects.
+            try {
+                socket.keepAlive = true
+                // Best-effort: low-level setsockopt for tighter timing on Android.
+                // Falls back to OS defaults (~2h idle) if reflection fails.
+                setKeepAliveParams(socket, idleSec = 5, intervalSec = 2, count = 3)
+            } catch (e: Exception) {
+                OalLog.d(TAG, "TCP keepalive tuning unavailable: ${e.message}")
+            }
             OalLog.i(TAG, "Connected to companion at $host:$port ($source)")
             isRunning = false
             stopNsdDiscovery()
@@ -188,6 +198,37 @@ class TcpConnector(
         } catch (e: Exception) {
             OalLog.e(TAG, "Gateway detection failed: ${e.message}")
             return null
+        }
+    }
+
+    /**
+     * Tune TCP keepalive timing on a connected [Socket].
+     *
+     * `Socket.setKeepAlive(true)` only enables `SO_KEEPALIVE`; the per-connection
+     * timing constants (`TCP_KEEPIDLE` / `TCP_KEEPINTVL` / `TCP_KEEPCNT`) need
+     * a native `setsockopt` call. Without these the kernel uses its default
+     * 2-hour idle timer which is useless for sub-10s dead-peer detection.
+     *
+     * Uses [ParcelFileDescriptor.fromSocket] (public API) to dup the underlying
+     * FD; socket options set on the dup propagate to the original because both
+     * reference the same kernel socket. No hidden-API reflection.
+     */
+    private fun setKeepAliveParams(socket: Socket, idleSec: Int, intervalSec: Int, count: Int) {
+        // Linux kernel ABI constants — stable across all Android versions.
+        // Not exposed in OsConstants on Android, but the underlying kernel
+        // syscall accepts these directly.
+        val IPPROTO_TCP = 6
+        val TCP_KEEPIDLE = 4
+        val TCP_KEEPINTVL = 5
+        val TCP_KEEPCNT = 6
+        val pfd = android.os.ParcelFileDescriptor.fromSocket(socket)
+        try {
+            val fd = pfd.fileDescriptor
+            android.system.Os.setsockoptInt(fd, IPPROTO_TCP, TCP_KEEPIDLE, idleSec)
+            android.system.Os.setsockoptInt(fd, IPPROTO_TCP, TCP_KEEPINTVL, intervalSec)
+            android.system.Os.setsockoptInt(fd, IPPROTO_TCP, TCP_KEEPCNT, count)
+        } finally {
+            pfd.close()
         }
     }
 }
