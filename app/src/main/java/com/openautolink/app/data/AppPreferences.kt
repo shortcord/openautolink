@@ -188,12 +188,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
     }
 
     val directTransport: Flow<String> = dataStore.data.map { prefs ->
-        // Migrate any saved "nearby" preference to "hotspot" — Nearby mode is
-        // disabled in the UI for now (see SettingsScreen) because the system
-        // permissions needed for the BT→WiFi handoff aren't grantable on GM
-        // AAOS.
-        val raw = prefs[DIRECT_TRANSPORT] ?: DEFAULT_DIRECT_TRANSPORT
-        if (raw == "nearby") "hotspot" else raw
+        prefs[DIRECT_TRANSPORT] ?: DEFAULT_DIRECT_TRANSPORT
     }
 
     val manualIpEnabled: Flow<Boolean> = dataStore.data.map { prefs ->

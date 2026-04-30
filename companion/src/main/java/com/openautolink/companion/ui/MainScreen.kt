@@ -185,25 +185,6 @@ fun MainScreen(
                 )
             }
 
-            // Nearby mode is hidden for now: on GM AAOS the car-side app can't
-            // get the system permissions needed to drive the BT→WiFi handoff,
-            // so users always have to pre-connect to the phone hotspot anyway.
-            // That makes Hotspot mode the only working path. We migrate any
-            // existing "nearby" pref to "tcp" here so the service starts in
-            // the right mode. Code is kept intact for a future revisit.
-            if (transportMode != CompanionPrefs.TRANSPORT_TCP) {
-                transportMode = CompanionPrefs.TRANSPORT_TCP
-                prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_TCP).apply()
-            }
-
-            Text(
-                text = "Transport: WiFi Hotspot",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-
-            /*
-            // Disabled — see comment above.
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -224,10 +205,12 @@ fun MainScreen(
                     shape = SegmentedButtonDefaults.itemShape(1, 2),
                 ) { Text("Nearby") }
             }
-            */
 
             Text(
-                text = "Car connects to this phone's hotspot via TCP. Enable your phone's WiFi hotspot and connect the car to it.",
+                text = if (transportMode == CompanionPrefs.TRANSPORT_TCP)
+                    "Car connects to this phone's hotspot via TCP. Enable your phone's WiFi hotspot and connect the car to it."
+                else
+                    "Car discovers this phone via Google Nearby Connections (Bluetooth → WiFi Direct).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 4.dp),
