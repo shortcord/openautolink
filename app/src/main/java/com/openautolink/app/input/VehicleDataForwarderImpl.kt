@@ -108,8 +108,18 @@ class VehicleDataForwarderImpl(
     private val _propertyStatus = mutableMapOf<String, String>()
     override val propertyStatus: Map<String, String> get() = _propertyStatus.toMap()
 
+    @Volatile private var startInFlight = false
+
     override fun start() {
         if (isActive) return
+        // Idempotency guard: if start() is already running on a coroutine,
+        // a second concurrent call must NOT launch another connectToCar +
+        // registerProperties — they race against each other and the
+        // emulator silently fails property subscription.
+        synchronized(this) {
+            if (isActive || startInFlight) return
+            startInFlight = true
+        }
         // Run on background thread — Car API calls can block (connect, waitForConnected)
         scope.launch {
             try {
@@ -126,6 +136,8 @@ class VehicleDataForwarderImpl(
                 Log.w(TAG, "Failed to start vehicle data forwarding: ${root.message}")
                 DiagnosticLog.w("vhal", "Failed to start: ${root.javaClass.simpleName}: ${root.message}")
                 cleanup()
+            } finally {
+                startInFlight = false
             }
         }
     }

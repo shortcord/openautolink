@@ -35,6 +35,11 @@ class AaProxy(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var serverSocket: ServerSocket? = null
 
+    /** Port the proxy is listening on for the local AA app. 0 if not started. */
+    @Volatile
+    var localPort: Int = 0
+        private set
+
     @Volatile
     private var isRunning = false
 
@@ -53,6 +58,7 @@ class AaProxy(
         isRunning = true
 
         val localPort = server.localPort
+        this.localPort = localPort
         CompanionLog.i(TAG, "Proxy listening on localhost:$localPort")
 
         scope.launch {

@@ -211,6 +211,40 @@ class AasdkSession(
         _connectionState.value = ConnectionState.DISCONNECTED
     }
 
+    /**
+     * Force a clean reconnect without setting [explicitStop]. Used for sleep/wake
+     * recovery and for the JNI abort path. The native session is torn down (which
+     * fires onSessionStopped → auto-reconnect path) and the transport connector
+     * is restarted.
+     */
+    fun forceReconnect(reason: String) {
+        OalLog.w(TAG, "Force reconnect: $reason")
+        // Treat the upcoming nativeStopSession() as an explicit stop so the
+        // onSessionStopped handler doesn't schedule its own auto-reconnect 3s
+        // later — we're doing the restart ourselves immediately. Without this
+        // both reconnects race and one fails with "Native session start failed".
+        explicitStop = true
+        _nearbyManager?.stop()
+        _nearbyManager = null
+        _tcpConnector?.stop()
+        _tcpConnector = null
+        _usbConnectionManager?.stop()
+        _usbConnectionManager = null
+        AasdkNative.nativeStopSession()
+        transportPipe?.close()
+        transportPipe = null
+        _connectionState.value = ConnectionState.DISCONNECTED
+        // Now clear the explicitStop flag so the freshly-started session can
+        // auto-reconnect normally if its connection later dies.
+        explicitStop = false
+        // Restart transport.
+        when (transportMode) {
+            "hotspot" -> startTcp()
+            "usb" -> startUsb()
+            else -> startNearby()
+        }
+    }
+
     // -- Input forwarding (app → phone via native aasdk) --
 
     fun sendTouchEvent(action: Int, pointerId: Int, x: Float, y: Float, pointerCount: Int) {
@@ -483,15 +517,39 @@ class AasdkSession(
         // Audio focus is handled by the native layer — always grants
     }
 
+    /** Coalesce native onError log spam: at most one log per second per message. */
+    @Volatile private var lastOnErrorLogMs: Long = 0
+    @Volatile private var lastOnErrorMsg: String = ""
+    private var onErrorSuppressedCount = 0
+
     override fun onError(message: String) {
-        OalLog.e(TAG, "Native error: $message")
+        val now = android.os.SystemClock.elapsedRealtime()
+        var shouldEmit = false
+        synchronized(this) {
+            if (message == lastOnErrorMsg && (now - lastOnErrorLogMs) < 1000) {
+                onErrorSuppressedCount++
+                return
+            }
+            val suppressed = onErrorSuppressedCount
+            lastOnErrorMsg = message
+            lastOnErrorLogMs = now
+            onErrorSuppressedCount = 0
+            if (suppressed > 0) OalLog.e(TAG, "Native error (×${suppressed + 1}): $message")
+            else OalLog.e(TAG, "Native error: $message")
+            shouldEmit = true
+        }
         // Flag protocol/handshake errors so reconnect uses extended backoff.
         // AASDK Error 30 = SSL handshake rejected (phone still holds old session).
         if ("AASDK Error: 30" in message) {
             lastFailureWasProtocolError = true
         }
-        scope.launch {
-            _controlMessages.emit(ControlMessage.Error(code = -1, message = message))
+        // Only emit at most once per second (matches the log coalescing). Auto-reconnect
+        // is wired to onSessionStopped, not onError, so suppressing extra emits doesn't
+        // hurt recovery — it just keeps the UI from flickering "Error" 100 times.
+        if (shouldEmit) {
+            scope.launch {
+                _controlMessages.emit(ControlMessage.Error(code = -1, message = message))
+            }
         }
     }
 }

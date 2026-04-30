@@ -46,6 +46,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 
 /**
@@ -212,6 +213,19 @@ class SessionManager(
     // Track last known active time for sleep/wake detection
     private var lastActiveTimestamp = SystemClock.elapsedRealtime()
 
+    /** Reentrancy guard for reconnect() so rapid Save&Reconnect taps coalesce. */
+    @Volatile private var reconnectInProgress = false
+
+    /** Screen-off receiver registration tracker. */
+    private var screenReceiver: android.content.BroadcastReceiver? = null
+    /** True when we proactively stopped the session for sleep; restart on wake. */
+    @Volatile private var pausedForSleep = false
+    /** Timestamp of the most recent SCREEN_ON / USER_PRESENT — used to suppress
+     *  SCREEN_OFF that AAOS sometimes delivers seconds AFTER wake (queued during
+     *  input dispatch). Without this, a queued SCREEN_OFF tears down a freshly
+     *  woken session right after we restored it. */
+    @Volatile private var lastWakeTimestamp = 0L
+
     fun start(
         codecPreference: String = "h264",
         micSourcePreference: String = "car",
@@ -372,6 +386,10 @@ class SessionManager(
                 manualIpAddress,
                 safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight)
         }
+
+        // Listen for system sleep so we can gracefully tear down before the
+        // socket goes stale. Wake is handled in MainActivity.onResume().
+        registerScreenReceiver()
     }
 
     private fun startSession(
@@ -420,7 +438,7 @@ class SessionManager(
         }
         OalLog.i(TAG, "BT MAC for SDR: ${if (btMac.isNotEmpty()) btMac else "(none)"}")
 
-        // Vehicle identity from VHAL
+        // Vehicle identity from VHAL.
         val vd = _vehicleDataForwarder?.latestVehicleData?.value
         val driverPos = if (driveSide == "right") 1 else 0
 
@@ -672,6 +690,7 @@ class SessionManager(
     }
 
     fun stop() {
+        unregisterScreenReceiver()
         observeJob?.cancel()
         observeJob = null
         decoderWatchJob?.cancel()
@@ -764,17 +783,60 @@ class SessionManager(
             return
         }
 
+        OalLog.i(TAG, "Reconnect requested")
+        // Reentrancy guard: rapid Save&Reconnect taps used to fire 20+ in <30ms.
+        if (reconnectInProgress) {
+            OalLog.w(TAG, "reconnect() already in progress — ignoring duplicate call")
+            return
+        }
+        reconnectInProgress = true
         OalLog.i(TAG, "Reconnecting AA session with new settings (minimal restart)")
         micSource = micSourcePreference
 
-        // 1. Cancel old session observer coroutines
-        observeJob?.cancel()
+        // 1. Cancel old session observer coroutines (await cancellation so the
+        // new keyframeWatchJob doesn't race with the old one — the spam of
+        // 20+ "Keyframe re-request #2" lines came from this exact race).
+        // Run on IO so we don't block the Main thread (causes ANR — we wait on
+        // cancelAndJoin and then aasdkSession.stop() which JNI-joins the io_thread).
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                try {
+                    observeJob?.cancelAndJoin()
+                    decoderWatchJob?.cancelAndJoin()
+                    keyframeWatchJob?.cancelAndJoin()
+                    callStateJob?.cancelAndJoin()
+                } catch (_: Exception) {}
+                doReconnectAfterCancel(
+                    codecPreference, micSourcePreference, scalingMode, directTransport,
+                    hotspotSsid, hotspotPassword, videoAutoNegotiate, aaResolution,
+                    aaDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
+                    videoFps, driveSide, hideClock, hideSignal, hideBattery,
+                    volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
+                    manualIpAddress, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
+                )
+            } catch (e: Exception) {
+                OalLog.e(TAG, "reconnect() failed: ${e.message}")
+            } finally {
+                // Always clear the guard so a future reconnect attempt can run.
+                reconnectInProgress = false
+            }
+        }
+    }
+
+    private fun doReconnectAfterCancel(
+        codecPreference: String, micSourcePreference: String, scalingMode: String,
+        directTransport: String, hotspotSsid: String, hotspotPassword: String,
+        videoAutoNegotiate: Boolean, aaResolution: String, aaDpi: Int,
+        aaWidthMargin: Int, aaHeightMargin: Int, aaPixelAspect: Int,
+        aaTargetLayoutWidthDp: Int, videoFps: Int, driveSide: String,
+        hideClock: Boolean, hideSignal: Boolean, hideBattery: Boolean,
+        volumeOffsetMedia: Int, volumeOffsetNavigation: Int, volumeOffsetAssistant: Int,
+        manualIpAddress: String?,
+        safeAreaTop: Int, safeAreaBottom: Int, safeAreaLeft: Int, safeAreaRight: Int,
+    ) {
         observeJob = null
-        decoderWatchJob?.cancel()
         decoderWatchJob = null
-        keyframeWatchJob?.cancel()
         keyframeWatchJob = null
-        callStateJob?.cancel()
         callStateJob = null
 
         // 2. Stop old AA session + location forwarding
@@ -841,6 +903,26 @@ class SessionManager(
         val now = SystemClock.elapsedRealtime()
         val elapsed = now - lastActiveTimestamp
         lastActiveTimestamp = now
+        // Mark wake so a queued SCREEN_OFF that arrives moments later (AAOS
+        // sometimes delivers it post-wake) is ignored by the screen receiver.
+        lastWakeTimestamp = now
+
+        // If we paused for sleep, always restart on wake regardless of gap.
+        if (pausedForSleep) {
+            pausedForSleep = false
+            OalLog.i(TAG, "System wake: restarting session paused for sleep (${elapsed / 1000}s gap)")
+            DiagnosticLog.i("transport", "Wake: restart paused session (${elapsed / 1000}s)")
+            // Run on IO — start() reaches into JNI/SSL init.
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                aasdkSession?.start()
+            }
+            _clusterManager?.ensureAlive()
+            _mediaSessionManager?.getSessionToken()?.let { token ->
+                OalMediaBrowserService.updateSessionToken(token)
+            }
+            return
+        }
+
         if (elapsed < 10_000) return
         val state = _sessionState.value
         if (state == SessionState.IDLE) return
@@ -856,6 +938,94 @@ class SessionManager(
         _mediaSessionManager?.getSessionToken()?.let { token ->
             OalMediaBrowserService.updateSessionToken(token)
         }
+
+        // Long gap (>30s) with the session not in IDLE means our TCP socket is
+        // almost certainly dead from suspend. Force a clean reconnect rather
+        // than wait for the keepalive/ping watchdog to notice.
+        if (elapsed > 30_000) {
+            OalLog.w(TAG, "Long wake gap — forcing clean reconnect")
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                aasdkSession?.forceReconnect("system wake after ${elapsed / 1000}s gap")
+            }
+        }
+    }
+
+    /**
+     * Register a receiver for ACTION_SCREEN_OFF so we can gracefully tear down
+     * the AA session before AAOS deep-suspends. Without this, sockets go stale
+     * during sleep and on wake the app sits on a dead pipe rendering the last
+     * frame until the user manually reconnects.
+     */
+    private fun registerScreenReceiver() {
+        if (screenReceiver != null) return
+        val ctx = context ?: return
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context?, intent: android.content.Intent?) {
+                when (intent?.action) {
+                    android.content.Intent.ACTION_SCREEN_OFF -> {
+                        // Suppress SCREEN_OFF that arrives shortly after a wake.
+                        // AAOS broadcasts can be queued/delayed during input
+                        // dispatch and we'd otherwise tear down a freshly woken
+                        // session. 5s window is generous; real sleep events
+                        // come in solo with no recent wake.
+                        val now = SystemClock.elapsedRealtime()
+                        if ((now - lastWakeTimestamp) < 5_000) {
+                            OalLog.i(TAG, "SCREEN_OFF ignored — arrived ${now - lastWakeTimestamp}ms after wake")
+                            return
+                        }
+                        if (_sessionState.value != SessionState.IDLE && aasdkSession != null) {
+                            OalLog.i(TAG, "SCREEN_OFF — pausing AA session for sleep")
+                            DiagnosticLog.i("transport", "SCREEN_OFF: pause for sleep")
+                            pausedForSleep = true
+                            _statusMessage.value = "Paused for sleep"
+                            // Run aasdkSession.stop() off Main — it joins the C++
+                            // io_thread via JNI and can take 100s of ms. Doing this
+                            // on Main causes ANRs which are reported as crashes.
+                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                aasdkSession?.stop()
+                            }
+                        }
+                    }
+                    android.content.Intent.ACTION_SCREEN_ON,
+                    android.content.Intent.ACTION_USER_PRESENT -> {
+                        // Record wake so a queued SCREEN_OFF arriving moments
+                        // later doesn't tear down our just-restarted session.
+                        lastWakeTimestamp = SystemClock.elapsedRealtime()
+                        if (pausedForSleep) {
+                            OalLog.i(TAG, "SCREEN_ON received — wake handler will restart session")
+                        }
+                    }
+                }
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_SCREEN_OFF)
+            addAction(android.content.Intent.ACTION_SCREEN_ON)
+            addAction(android.content.Intent.ACTION_USER_PRESENT)
+        }
+        try {
+            // SCREEN_OFF / SCREEN_ON / USER_PRESENT are protected system
+            // broadcasts — they're never sent by other apps, so RECEIVER_NOT_EXPORTED
+            // is safe and required on Android 14+ (target SDK 34+).
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                ctx.registerReceiver(r, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                ctx.registerReceiver(r, filter)
+            }
+            screenReceiver = r
+            OalLog.i(TAG, "Screen on/off receiver registered")
+        } catch (e: Exception) {
+            OalLog.w(TAG, "Screen receiver registration failed: ${e.message}")
+        }
+    }
+
+    private fun unregisterScreenReceiver() {
+        val ctx = context ?: return
+        screenReceiver?.let {
+            try { ctx.unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        screenReceiver = null
     }
 
     suspend fun requestKeyframe() {
@@ -1032,7 +1202,13 @@ class SessionManager(
             }
             is ControlMessage.Error -> {
                 OalLog.e(TAG, "Error ${message.code}: ${message.message}")
-                _statusMessage.value = "Error: ${message.message}"
+                // Don't surface raw aasdk error strings ("AASDK Error: 30, Native Code: 0")
+                // to the user. We're auto-recovering. Just show a friendly status.
+                if ("AASDK Error" in message.message) {
+                    _statusMessage.value = "Reconnecting..."
+                } else {
+                    _statusMessage.value = "Error: ${message.message}"
+                }
             }
             is ControlMessage.PhoneBattery -> {
                 _phoneBatteryLevel.value = message.level

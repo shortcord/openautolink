@@ -37,6 +37,9 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
     private var fileLogger: CompanionFileLogger? = null
+    private var fileLogIdleTimeoutJob: kotlinx.coroutines.Job? = null
+    /** True once a connection has been observed during the current logging session. */
+    @Volatile private var loggingSessionEverConnected: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -73,6 +76,9 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
                 _isConnected.value = false
                 _statusText.value = "Advertising..."
                 startNearby()
+                if (intent.getBooleanExtra(EXTRA_START_LOGGING, false)) {
+                    startFileLogging()
+                }
             }
 
             else -> {
@@ -122,6 +128,13 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         _statusText.value = "Connected"
         acquireWakeLock()
         updateNotification("Connected — AA active")
+        // Connection observed: cancel the idle-timeout for any active log session.
+        if (_fileLoggingActive.value) {
+            loggingSessionEverConnected = true
+            fileLogIdleTimeoutJob?.cancel()
+            fileLogIdleTimeoutJob = null
+            CompanionLog.i(TAG, "File logging: connection established, idle timeout cleared")
+        }
     }
 
     override fun onProxyDisconnected() {
@@ -226,11 +239,29 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
             CompanionLog.fileLogger = logger
             _fileLoggingActive.value = true
             _fileLoggingPath.value = path
+            loggingSessionEverConnected = _isConnected.value
             CompanionLog.i(TAG, "File logging enabled: $path")
+            // 10-minute idle timeout: if the AA proxy never connects while
+            // logging is active, auto-disable to avoid runaway log files when
+            // the user forgets the toggle on. Cleared on first connection.
+            fileLogIdleTimeoutJob?.cancel()
+            if (!loggingSessionEverConnected) {
+                fileLogIdleTimeoutJob = serviceScope.launch {
+                    delay(LOG_IDLE_TIMEOUT_MS)
+                    if (_fileLoggingActive.value && !loggingSessionEverConnected) {
+                        CompanionLog.w(TAG,
+                            "File logging idle timeout (${LOG_IDLE_TIMEOUT_MS / 60_000} min, no connection) — auto-disabling")
+                        stopFileLogging()
+                    }
+                }
+            }
         }
     }
 
     fun stopFileLogging() {
+        fileLogIdleTimeoutJob?.cancel()
+        fileLogIdleTimeoutJob = null
+        loggingSessionEverConnected = false
         CompanionLog.fileLogger = null
         fileLogger?.stop()
         fileLogger = null
@@ -242,9 +273,13 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         private const val TAG = "OAL_Service"
         private const val CHANNEL_ID = "oal_companion_channel"
         private const val NOTIFICATION_ID = 1
+        /** Idle timeout for file logging when no AA connection is ever made. */
+        private const val LOG_IDLE_TIMEOUT_MS = 10L * 60L * 1000L
 
         const val ACTION_START = "com.openautolink.companion.ACTION_START"
         const val ACTION_STOP = "com.openautolink.companion.ACTION_STOP"
+        /** Optional extra on ACTION_START: also start file logging once the service is up. */
+        const val EXTRA_START_LOGGING = "com.openautolink.companion.EXTRA_START_LOGGING"
 
         /** Observable service state for UI. */
         private val _isRunning = MutableStateFlow(false)

@@ -4,6 +4,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.openautolink.app.data.AppPreferences
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -40,6 +45,10 @@ import kotlinx.coroutines.runBlocking
  */
 class SettingsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_RECONNECT) {
+            handleReconnect(context)
+            return
+        }
         if (intent.action != ACTION) return
 
         val key = intent.getStringExtra("key") ?: return
@@ -120,7 +129,56 @@ class SettingsReceiver : BroadcastReceiver() {
         OalLog.i("SettingsRcv", "SET_PREF: $msg")
     }
 
+    /**
+     * Debug-only: trigger a SessionManager.reconnect() with the user's current
+     * preferences. Used to test reconnect/abort behavior without hitting the UI.
+     *
+     *   adb shell am broadcast -a com.openautolink.app.RECONNECT com.openautolink.app
+     */
+    private fun handleReconnect(context: Context) {
+        val sm = com.openautolink.app.session.SessionManager.instanceOrNull()
+        if (sm == null) {
+            OalLog.w("SettingsRcv", "RECONNECT: SessionManager not initialized")
+            return
+        }
+        val prefs = AppPreferences.getInstance(context)
+        // Don't block the broadcast thread — it's the Main thread for unregistered
+        // receivers and even reading DataStore via .first() can stall it. Use a
+        // pendingResult to keep the receiver alive while a background coroutine runs.
+        val pending = goAsync()
+        receiverScope.launch {
+            try {
+                sm.reconnect(
+                    codecPreference = prefs.videoCodec.first(),
+                    micSourcePreference = prefs.micSource.first(),
+                    scalingMode = prefs.videoScalingMode.first(),
+                    directTransport = prefs.directTransport.first(),
+                    hotspotSsid = prefs.hotspotSsid.first(),
+                    hotspotPassword = prefs.hotspotPassword.first(),
+                    videoAutoNegotiate = prefs.videoAutoNegotiate.first(),
+                    aaResolution = prefs.aaResolution.first(),
+                    aaDpi = prefs.aaDpi.first(),
+                    aaWidthMargin = prefs.aaWidthMargin.first(),
+                    aaHeightMargin = prefs.aaHeightMargin.first(),
+                    aaPixelAspect = prefs.aaPixelAspect.first(),
+                    aaTargetLayoutWidthDp = prefs.aaTargetLayoutWidthDp.first(),
+                    videoFps = prefs.videoFps.first(),
+                    driveSide = prefs.driveSide.first(),
+                    manualIpAddress = if (prefs.manualIpEnabled.first())
+                        prefs.manualIpAddress.first().takeIf { it.isNotBlank() } else null,
+                )
+                OalLog.i("SettingsRcv", "RECONNECT: triggered")
+            } catch (e: Exception) {
+                OalLog.e("SettingsRcv", "RECONNECT failed: ${e.message}")
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
     companion object {
         const val ACTION = "com.openautolink.app.SET_PREF"
+        const val ACTION_RECONNECT = "com.openautolink.app.RECONNECT"
+        private val receiverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 }
