@@ -98,7 +98,11 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         tcpAdvertiser?.stop()
 
         val prefs = getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
-        val mode = prefs.getString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.DEFAULT_TRANSPORT)
+        // Nearby mode is disabled in the UI for now (see MainScreen) because
+        // the car-side app can't get the system permissions needed for the
+        // BT→WiFi handoff on GM AAOS. Force TCP regardless of any stale pref.
+        val rawMode = prefs.getString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.DEFAULT_TRANSPORT)
+        val mode = if (rawMode == CompanionPrefs.TRANSPORT_NEARBY) CompanionPrefs.TRANSPORT_TCP else rawMode
 
         when (mode) {
             CompanionPrefs.TRANSPORT_TCP -> {
@@ -108,10 +112,11 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
                 updateNotification("TCP: waiting for car on port ${TcpAdvertiser.PORT}...")
             }
             else -> {
-                CompanionLog.i(TAG, "Transport mode: Nearby")
-                nearbyAdvertiser = NearbyAdvertiser(this, serviceScope, this)
-                nearbyAdvertiser?.start()
-                updateNotification("Nearby: searching for car...")
+                // Unreachable while Nearby is disabled; fall back to TCP for safety.
+                CompanionLog.w(TAG, "Unknown transport mode '$mode', falling back to TCP")
+                tcpAdvertiser = TcpAdvertiser(this, this)
+                tcpAdvertiser?.start()
+                updateNotification("TCP: waiting for car on port ${TcpAdvertiser.PORT}...")
             }
         }
     }
