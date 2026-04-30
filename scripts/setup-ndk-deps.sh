@@ -35,26 +35,22 @@ if [ ! -f "$BOOST_STAGING/boost/asio.hpp" ]; then
     rm -rf "$BOOST_STAGING"
     mkdir -p "$BOOST_STAGING"
 
-    if [ -f "/usr/include/boost/asio.hpp" ]; then
-        echo "Copying Boost headers from system (native ext4 → ext4, fast)..."
-        cp -r /usr/include/boost "$BOOST_STAGING/"
-    else
-        BOOST_URL="https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz"
-        TARBALL="$WORK_DIR/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz"
-        if [ ! -f "$TARBALL" ]; then
-            echo "Downloading Boost ${BOOST_VERSION}..."
-            curl -fSL "$BOOST_URL" -o "$TARBALL"
-        fi
-        echo "Extracting Boost headers..."
-        # Extract boost headers to temp dir and move (avoids tar --strip-components
-        # + member filter interaction that silently extracts nothing on some tar versions)
-        EXTRACT_TMP="$WORK_DIR/boost_extract"
-        rm -rf "$EXTRACT_TMP"
-        mkdir -p "$EXTRACT_TMP"
-        tar xzf "$TARBALL" -C "$EXTRACT_TMP" "boost_${BOOST_VERSION_UNDERSCORE}/boost"
-        mv "$EXTRACT_TMP/boost_${BOOST_VERSION_UNDERSCORE}/boost" "$BOOST_STAGING/"
-        rm -rf "$EXTRACT_TMP"
+    BOOST_URL="https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz"
+    TARBALL="$WORK_DIR/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz"
+    if [ ! -f "$TARBALL" ]; then
+        echo "Downloading Boost ${BOOST_VERSION}..."
+        curl -fSL "$BOOST_URL" -o "$TARBALL"
     fi
+    echo "Extracting Boost headers..."
+    # Extract boost headers to temp dir and move (avoids tar --strip-components
+    # + member filter interaction that silently extracts nothing on some tar versions)
+    EXTRACT_TMP="$WORK_DIR/boost_extract"
+    rm -rf "$EXTRACT_TMP"
+    mkdir -p "$EXTRACT_TMP"
+    tar xzf "$TARBALL" -C "$EXTRACT_TMP" "boost_${BOOST_VERSION_UNDERSCORE}/boost"
+    mv "$EXTRACT_TMP/boost_${BOOST_VERSION_UNDERSCORE}/boost" "$BOOST_STAGING/"
+    rm -rf "$EXTRACT_TMP"
+
     echo "Boost headers staged: $(find "$BOOST_STAGING/boost" -type f | wc -l) files"
 fi
 
