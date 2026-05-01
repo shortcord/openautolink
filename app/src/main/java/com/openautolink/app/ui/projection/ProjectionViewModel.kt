@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 data class ProjectionUiState(
@@ -107,6 +108,13 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _audioStats = MutableStateFlow(AudioStats())
     private val _showStats = MutableStateFlow(false)
     private val _showPhoneChooser = MutableStateFlow(false)
+    /**
+     * Transient status surfaced inside the Car Hotspot chooser. Set when the
+     * directed warm-cache loop has been trying without success long enough
+     * that the user should verify their setup. Cleared on next select / dismiss.
+     */
+    private val _carHotspotChooserMessage = MutableStateFlow<String?>(null)
+    val carHotspotChooserMessage: StateFlow<String?> = _carHotspotChooserMessage.asStateFlow()
     private val _fileLoggingActive = MutableStateFlow(false)
     private val _fileLoggingPath = MutableStateFlow<String?>(null)
     private var fileLogWriter: FileLogWriter? = null
@@ -248,20 +256,19 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     @Volatile private var lastAutoReconnectAttemptMs: Long = 0L
     private val AUTO_RECONNECT_MIN_GAP_MS = 10_000L
     /**
-     * How long to wait for mDNS alone to surface a resolved phone before
-     * falling back to a TCP sweep. mDNS on GM AAOS typically returns in
-     * <1s; we give it 3s of headroom so the common case has zero sweep
-     * activity.
+     * Gap between directed warm-cache probes inside [resolveCarHotspotPhone]
+     * and the idle background poller. Each probe has its own short timeout
+     * (~700ms) inside `probeHost`, so this is purely the time we wait
+     * between attempts on the SAME known IP.
      */
-    private val MDNS_GRACE_MS = 3_000L
-
+    private val WARM_CACHE_RETRY_GAP_MS = 1_500L
     /**
-     * How long to give the warm-cache phase (parallel identity probes of
-     * known phones' last-known IPs) before falling through to mDNS. A
-     * successful identity probe on the local subnet typically completes
-     * in <100ms; ~700ms is a generous ceiling that still feels instant.
+     * Gap between idle-state warm-cache polls. While in Car Hotspot mode +
+     * idle session + has a default phone, we periodically probe known
+     * IPs so auto-reconnect works even if mDNS is multicast-filtered on
+     * the AP. No /24 sweep — just a single TCP probe per known IP.
      */
-    private val WARM_CACHE_BUDGET_MS = 700L
+    private val IDLE_WARM_CACHE_POLL_MS = 3_000L
     private val connectLock = Any()
 
     fun connect() {
@@ -378,7 +385,14 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             //   3. Fall back to the persistent manual-IP setting.
             val mode = preferences.connectionMode.first()
             val carHotspotPhone = if (overrideIp == null && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
-                resolveCarHotspotPhone(timeoutMs = 15_000)
+                // Long budget: with directed probing (no /24 sweep) this is
+                // cheap — just one TCP probe per known IP every
+                // [WARM_CACHE_RETRY_GAP_MS]. The user's guidance is to set a
+                // static IP on the phone for the car's WiFi; once that's done
+                // we want to keep retrying the known IP rather than nag the
+                // user with a chooser. If the AP genuinely re-leased a new
+                // IP, the user can press Scan in the chooser.
+                resolveCarHotspotPhone(timeoutMs = 45_000)
             } else null
             val carHotspotIp: String? = carHotspotPhone?.host
             val manualIp = overrideIp ?: carHotspotIp ?: manualIpFromPrefs
@@ -395,6 +409,23 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     if (!pickedId.isNullOrBlank()) {
                         _activePhoneId.value = pickedId
                     }
+                }
+                // Resolve failed and we have nothing to fall back to → guide
+                // the user. Re-open the chooser with a clear message; the
+                // user can re-tap a phone or press Scan.
+                if (carHotspotPhone == null && manualIp == null) {
+                    val defaultName = try {
+                        knownPhonesStore.phones.first()
+                            .firstOrNull { it.phoneId == defaultPhoneId.value }
+                            ?.friendlyName
+                    } catch (_: Exception) { null }
+                    val who = defaultName ?: "your phone"
+                    _carHotspotChooserMessage.value =
+                        "Couldn't reach $who. Verify it's connected to this car's WiFi and the companion app is started. " +
+                            "If the connection looks good, tap your phone again. If its IP changed, press Scan."
+                    _showPhoneChooser.value = true
+                    OalLog.w(TAG, "Car Hotspot resolve gave up after 45s — re-opening chooser with guidance")
+                    return@launch
                 }
             }
 
@@ -613,6 +644,39 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     connect()
                 }
         }
+        // Idle-state directed warm-cache poller. While we're in Car Hotspot
+        // mode + idle + have a default phone, periodically TCP-probe the
+        // default phone's last-known IP. A successful probe lands in
+        // [phoneDiscovery.phones], which the collector above turns into an
+        // auto-connect. This replaces the old "auto-sweep on connect" path
+        // — we never need to scan the whole /24 if we already know the IP.
+        viewModelScope.launch {
+            while (true) {
+                try {
+                    val mode = connectionMode.value
+                    val idle = sessionManager.sessionState.value == SessionState.IDLE
+                    val defId = defaultPhoneId.value
+                    if (mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT &&
+                        idle && defId.isNotBlank() && !connectInFlight && !alwaysAskPhone.value
+                    ) {
+                        val knownNow = try { knownPhonesStore.phones.first() } catch (_: Exception) { emptyList() }
+                        val targets = knownNow.mapNotNull { kp ->
+                            val ip = kp.lastKnownIp ?: return@mapNotNull null
+                            com.openautolink.app.transport.PhoneDiscovery.KnownTarget(
+                                expectedPhoneId = kp.phoneId,
+                                host = ip,
+                            )
+                        }.sortedByDescending { it.expectedPhoneId == defId }
+                        if (targets.isNotEmpty()) {
+                            // Single quick probe pass. probeKnown adds hits
+                            // into phoneDiscovery.phones on its own.
+                            phoneDiscovery.probeKnown(targets)
+                        }
+                    }
+                } catch (_: Exception) { /* keep poller alive */ }
+                kotlinx.coroutines.delay(IDLE_WARM_CACHE_POLL_MS)
+            }
+        }
     }
 
     /** Whether the phone chooser overlay is showing. */
@@ -681,6 +745,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      */
     fun selectCarHotspotPhone(phone: com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone) {
         _showPhoneChooser.value = false
+        _carHotspotChooserMessage.value = null
         val phoneId = phone.phoneId
         val host = phone.host
         if (phoneId.isNullOrBlank() || host.isNullOrBlank()) {
@@ -782,24 +847,29 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     /**
      * Resolve a usable phone for the Car Hotspot connect flow.
      *
-     * Strategy: **warm cache → mDNS → sweep.** Each phase only runs if the
-     * previous one didn't find the phone:
+     * Strategy: **directed warm-cache probe loop + mDNS race. Never
+     * auto-sweep.** When we have known phones, the AP almost always
+     * re-leases the same IP to the same MAC, so the right behavior is to
+     * keep probing the known IP until the phone wakes up — not to blast
+     * 254 sockets across the subnet. The /24 sweep stays available, but
+     * only via the explicit "Scan" button in the chooser.
      *
-     *   - **Phase 0 (warm cache):** parallel-probe last-known IPs of all
-     *     known phones. Automotive APs almost always re-lease the same IP
-     *     to the same MAC, so this typically returns in <500ms with no
-     *     mDNS / sweep traffic at all.
-     *   - **Phase 1 (mDNS):** cheap, passive, usually returns on AAOS 14+.
-     *     Grace window of [MDNS_GRACE_MS].
-     *   - **Phase 2 (sweep):** full TCP sweep of preferred → fallback
-     *     interfaces. Only fires if both phase 0 and phase 1 came up
-     *     empty.
+     * Concurrent waits:
+     *   - mDNS passive listener (started elsewhere). If it surfaces a
+     *     resolved phone first, we use that.
+     *   - Periodic [PhoneDiscovery.probeKnown] on every known
+     *     `lastKnownIp` (every [WARM_CACHE_RETRY_GAP_MS]) until [timeoutMs]
+     *     elapses. Each probe has its own short timeout inside
+     *     `probeHost`, so a transient failure (slow phone wake, AP latency)
+     *     just means we retry the same IP a moment later — not escalate
+     *     to a sweep.
      *
-     * Preference order for which phone to pick out of the discovery flow:
-     *   1. Default phone (matching [AppPreferences.defaultPhoneId]) when
-     *      it has a resolved host.
-     *   2. Any currently-discovered phone with a resolved host.
-     *   3. null if nothing comes up before [timeoutMs] elapses.
+     * If there are no known phones at all (first run), we just wait for
+     * mDNS until [timeoutMs] elapses. The user can press "Scan" manually
+     * if mDNS is multicast-filtered on this AP.
+     *
+     * Preference order: default phone (matching
+     * [AppPreferences.defaultPhoneId]) → any resolved phone → null.
      */
     private suspend fun resolveCarHotspotPhone(
         timeoutMs: Long,
@@ -813,9 +883,8 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             preferences.defaultPhoneId.first().takeIf { it.isNotBlank() }
         } catch (_: Exception) { null }
 
-        // Phase 0: warm cache hit. Build the target list with the default
-        // phone's last-known IP first so the most-likely-to-succeed probe
-        // gets to race in parallel with the others.
+        // Build the directed-probe target list with the default phone first
+        // so the most-likely-to-succeed probe gets the head of the line.
         val knownTargets: List<com.openautolink.app.transport.PhoneDiscovery.KnownTarget> = try {
             val knownNow = knownPhonesStore.phones.first()
             knownNow
@@ -829,46 +898,77 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 .sortedByDescending { it.expectedPhoneId == defaultId }
         } catch (_: Exception) { emptyList() }
 
-        if (knownTargets.isNotEmpty()) {
-            val cacheHit = kotlinx.coroutines.withTimeoutOrNull(WARM_CACHE_BUDGET_MS) {
-                phoneDiscovery.probeKnown(knownTargets)
-            } == true
-            if (cacheHit) {
-                // probeKnown added results into the discovery flow — read it
-                // back through pickBestPhone so we honor the default-phone
-                // preference if the default was actually one of the hits.
-                val picked = pickBestPhone(phoneDiscovery.phones.value, defaultId)
-                if (picked != null) {
-                    OalLog.i(
-                        TAG,
-                        "Resolved via warm cache hit on ${picked.host} (${picked.friendlyName ?: picked.phoneId?.take(8)})",
-                    )
-                    return picked
-                }
+        if (knownTargets.isEmpty()) {
+            // First-run / no remembered phones. Try mDNS first — it's free
+            // and silent. If it surfaces a usable IPv4 host within the grace
+            // window we're done with no sweep at all. If it doesn't (some
+            // car APs only return IPv6 link-local via mDNS, which we filter
+            // out as unusable), fall back to a single /24 sweep so the
+            // chooser populates with a real IPv4 host.
+            OalLog.i(TAG, "No known phones — trying mDNS first, sweep on fallback")
+            val mdnsGrace = 4_000L
+            val early = kotlinx.coroutines.withTimeoutOrNull(mdnsGrace) {
+                phoneDiscovery.phones
+                    .map { list -> pickBestPhone(list, defaultId) }
+                    .first { it != null }
+            }
+            if (early != null) {
+                OalLog.i(TAG, "First-run mDNS resolved within ${mdnsGrace}ms")
+                return early
+            }
+            OalLog.i(TAG, "First-run mDNS grace expired without IPv4 — kicking sweep")
+            kickSweep()
+            val remaining = (timeoutMs - mdnsGrace).coerceAtLeast(5_000L)
+            return kotlinx.coroutines.withTimeoutOrNull(remaining) {
+                phoneDiscovery.phones
+                    .map { list -> pickBestPhone(list, defaultId) }
+                    .first { it != null }
             }
         }
 
-        // Phase 1: mDNS-only grace period. Cheapest, fastest, no socket
-        // pressure on the network.
-        val mdnsResult = kotlinx.coroutines.withTimeoutOrNull(MDNS_GRACE_MS) {
-            phoneDiscovery.phones
-                .map { list -> pickBestPhone(list, defaultId) }
-                .first { it != null }
-        }
-        if (mdnsResult != null) {
-            OalLog.i(TAG, "Resolved via mDNS in <${MDNS_GRACE_MS}ms")
-            return mdnsResult
-        }
-
-        // Phase 2: kick a sweep and keep watching the same flow. mDNS keeps
-        // running too — whichever fills in the host first wins.
-        OalLog.i(TAG, "mDNS grace expired with no resolved phone; falling back to sweep")
-        kickSweep()
-        val remaining = (timeoutMs - WARM_CACHE_BUDGET_MS - MDNS_GRACE_MS).coerceAtLeast(1_000L)
-        return kotlinx.coroutines.withTimeoutOrNull(remaining) {
-            phoneDiscovery.phones
-                .map { list -> pickBestPhone(list, defaultId) }
-                .first { it != null }
+        OalLog.i(
+            TAG,
+            "Resolving ${knownTargets.size} known phone(s) — directed probe + mDNS race, no auto-sweep",
+        )
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            kotlinx.coroutines.coroutineScope {
+                // Race A: directed probe loop. Retry probeKnown periodically
+                // until something answers. Each probe is short (<1s), so a
+                // single transient failure no longer escalates to a /24 sweep.
+                val probeRace = async {
+                    var attempt = 0
+                    while (true) {
+                        attempt++
+                        val hit = phoneDiscovery.probeKnown(knownTargets)
+                        if (hit) {
+                            val picked = pickBestPhone(phoneDiscovery.phones.value, defaultId)
+                            if (picked != null) {
+                                OalLog.i(
+                                    TAG,
+                                    "Resolved via directed probe on ${picked.host} (attempt=$attempt, ${picked.friendlyName ?: picked.phoneId?.take(8)})",
+                                )
+                                return@async picked
+                            }
+                        }
+                        kotlinx.coroutines.delay(WARM_CACHE_RETRY_GAP_MS)
+                    }
+                    @Suppress("UNREACHABLE_CODE")
+                    null
+                }
+                // Race B: mDNS passive. Whichever resolves first wins.
+                val mdnsRace = async {
+                    phoneDiscovery.phones
+                        .map { list -> pickBestPhone(list, defaultId) }
+                        .first { it != null }
+                }
+                val picked = kotlinx.coroutines.selects.select<com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone?> {
+                    probeRace.onAwait { it }
+                    mdnsRace.onAwait { it }
+                }
+                probeRace.cancel()
+                mdnsRace.cancel()
+                picked
+            }
         }
     }
 
@@ -919,6 +1019,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      */
     fun dismissPhoneChooser() {
         _showPhoneChooser.value = false
+        _carHotspotChooserMessage.value = null
         if (connectionMode.value == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
             // Car Hotspot: chooser was opened over a live session. Do nothing.
             return

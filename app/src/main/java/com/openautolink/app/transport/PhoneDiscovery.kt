@@ -591,9 +591,17 @@ class PhoneDiscovery private constructor(private val context: Context) {
                     friendlyName = parts.getOrNull(1)?.takeIf { it.isNotBlank() },
                 )
             } catch (e: Exception) {
-                // Most failures are "host unreachable" which is expected for
-                // ~250/254 IPs. Log only at debug to avoid spam.
-                OalLog.d(TAG, "probeHost($host) failed: ${e.javaClass.simpleName}: ${e.message}")
+                // Most failures are "host unreachable" / timeout — expected
+                // for ~250/254 IPs during a sweep, and also expected when
+                // the idle warm-cache poller probes a known IP that's
+                // currently asleep. Don't log timeouts at all (they are
+                // the overwhelmingly common case and pollute the on-device
+                // log viewer). Keep other exception classes at debug.
+                if (e !is java.net.SocketTimeoutException &&
+                    e !is java.net.ConnectException
+                ) {
+                    OalLog.d(TAG, "probeHost($host) failed: ${e.javaClass.simpleName}: ${e.message}")
+                }
                 null
             } finally {
                 try { socket.close() } catch (_: Exception) {}

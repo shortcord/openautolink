@@ -82,6 +82,7 @@ fun ProjectionScreen(
     val knownPhones by viewModel.knownPhones.collectAsStateWithLifecycle()
     val defaultPhoneId by viewModel.defaultPhoneId.collectAsStateWithLifecycle()
     val carHotspotSwitching by viewModel.carHotspotSwitching.collectAsStateWithLifecycle()
+    val chooserMessage by viewModel.carHotspotChooserMessage.collectAsStateWithLifecycle()
     val activePhoneId by viewModel.activePhoneId.collectAsStateWithLifecycle()
 
     // Settings overlay state
@@ -409,6 +410,7 @@ fun ProjectionScreen(
                     sweeping = carHotspotSweeping,
                     sweepProgress = carHotspotSweepProgress,
                     switching = carHotspotSwitching,
+                    chooserMessage = chooserMessage,
                     onSelect = { viewModel.selectCarHotspotPhone(it) },
                     onSelectKnown = { kp ->
                         // Selecting a known-but-not-currently-discovered phone:
@@ -554,6 +556,7 @@ private fun CarHotspotPhoneChooserOverlay(
     sweeping: Boolean,
     sweepProgress: String,
     switching: Boolean,
+    chooserMessage: String?,
     onSelect: (com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone) -> Unit,
     onSelectKnown: (com.openautolink.app.data.KnownPhone) -> Unit,
     onSetDefault: (String) -> Unit,
@@ -652,6 +655,23 @@ private fun CarHotspotPhoneChooserOverlay(
                     style = MaterialTheme.typography.bodySmall,
                     color = darkScheme.onSurfaceVariant.copy(alpha = 0.85f),
                 )
+
+                if (!chooserMessage.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(darkScheme.error.copy(alpha = 0.18f))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Text(
+                            chooserMessage!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = darkScheme.error,
+                        )
+                    }
+                }
 
                 // ── Known phones ─────────────────────────────────────
                 if (knownPhones.isNotEmpty()) {
