@@ -785,7 +785,7 @@ void JniSession::onChannelOpenRequest(
 void JniSession::onMediaChannelSetupRequest(
     const aap_protobuf::service::media::shared::message::Setup& request)
 {
-    LOGI("Video setup from phone: type=%d (0=H264 1=H265 2=VP9)", request.type());
+    LOGI("Video setup from phone: type=%d (3=H264 5=VP9 6=AV1 7=H265)", request.type());
     logProtoRaw("VideoSetup", request);
     negotiatedCodecType_ = request.type();
 
@@ -805,8 +805,8 @@ void JniSession::onMediaChannelSetupRequest(
     config.set_max_unacked(30);
     if (sdrConfig_.autoNegotiate) {
         // Auto mode: accept all configurations
-        // SDR has 5 H.265 + 3 H.264 = 8 total
-        for (int i = 0; i < 8; i++) {
+        // SDR has 5 H.265 + 3 VP9 + 3 H.264 = 11 total
+        for (int i = 0; i < 11; i++) {
             config.add_configuration_indices(i);
         }
     } else {
@@ -900,7 +900,7 @@ void JniSession::onMediaWithTimestampIndication(
                 uint8_t hevcNalType = (d[nalStart] >> 1) & 0x3F;
                 if (hevcNalType >= 16 && hevcNalType <= 21) isKeyFrame = true;
                 if (hevcNalType == 32 || hevcNalType == 33 || hevcNalType == 34) isCodecConfig = true;
-            } else {
+            } else if (codec == 3) {
                 uint8_t nalType = d[nalStart] & 0x1F;
                 if (nalType == 5) isKeyFrame = true;
                 if (nalType == 7 || nalType == 8) isCodecConfig = true;
@@ -909,6 +909,16 @@ void JniSession::onMediaWithTimestampIndication(
             if (isKeyFrame && isCodecConfig) break;
             pos = nalStart + 1;
         }
+    }
+    if (codec == 5 && buffer.size >= 1) {
+        // VP9 raw frame header: frame marker must be 2, show_existing_frame=0,
+        // and frame_type=0 for keyframes. This covers the common AA profile 0
+        // stream and avoids relying on H.264/H.265 NAL parsing for VP9.
+        const uint8_t first = buffer.cdata[0];
+        const bool frameMarkerOk = (first & 0xC0) == 0x80;
+        const bool showExistingFrame = (first & 0x08) != 0;
+        const bool interFrame = (first & 0x04) != 0;
+        isKeyFrame = frameMarkerOk && !showExistingFrame && !interFrame;
     }
 
     // Build flags matching VideoFrame.FLAG_* constants
@@ -1089,7 +1099,15 @@ void JniSession::buildServiceDiscoveryResponse(
     { auto* svc = response.add_channels();
       svc->set_id(2); // VIDEO — Java uses 2 (MEDIA_SINK), works with localhost proxy
       auto* ms = svc->mutable_media_sink_service();
-      ms->set_available_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
+      auto primaryVideoCodec = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265;
+      if (!sdrConfig_.autoNegotiate) {
+          if (sdrConfig_.videoCodec == "h264") {
+              primaryVideoCodec = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP;
+          } else if (sdrConfig_.videoCodec == "vp9") {
+              primaryVideoCodec = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_VP9;
+          }
+      }
+      ms->set_available_type(primaryVideoCodec);
       ms->set_available_while_in_call(true);
 
       using VRes = aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
@@ -1123,7 +1141,7 @@ void JniSession::buildServiceDiscoveryResponse(
       };
 
       if (sdrConfig_.autoNegotiate) {
-          // Auto mode: H.265 at all tiers, then H.264 fallback
+          // Auto mode: H.265 at all tiers, VP9 at high tiers, then H.264 fallback
           // Landscape tier pixel widths indexed by VRes enum (1-5)
           static constexpr int tierWidths[] = {0, 800, 1280, 1920, 2560, 3840};
           int tiers[] = {5, 4, 3, 2, 1};
@@ -1141,6 +1159,19 @@ void JniSession::buildServiceDiscoveryResponse(
               vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265);
               applyCommonVideoFields(vc);
           }
+          for (int t : {5, 4, 3}) {
+              auto* vc = ms->add_video_configs();
+              vc->set_codec_resolution(static_cast<VRes>(t));
+              vc->set_frame_rate(fps);
+              if (sdrConfig_.targetLayoutWidthDp > 0) {
+                  int dpi = (tierWidths[t] * 160) / sdrConfig_.targetLayoutWidthDp;
+                  vc->set_density(std::max(dpi, 80));
+              } else {
+                  vc->set_density(sdrConfig_.videoDpi);
+              }
+              vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_VP9);
+              applyCommonVideoFields(vc);
+          }
           for (int t : {3, 2, 1}) {
               auto* vc = ms->add_video_configs();
               vc->set_codec_resolution(static_cast<VRes>(t));
@@ -1156,9 +1187,12 @@ void JniSession::buildServiceDiscoveryResponse(
           }
       } else {
           // Manual mode: single config at the selected resolution and codec
-          auto codecType = (sdrConfig_.videoCodec == "h264")
-              ? aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP
-              : aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265;
+          auto codecType = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265;
+          if (sdrConfig_.videoCodec == "h264") {
+              codecType = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP;
+          } else if (sdrConfig_.videoCodec == "vp9") {
+              codecType = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_VP9;
+          }
           auto* vc = ms->add_video_configs();
           vc->set_codec_resolution(res);
           vc->set_frame_rate(fps);
