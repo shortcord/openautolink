@@ -53,15 +53,15 @@ import com.openautolink.app.data.AppPreferences
 import kotlin.math.roundToInt
 
 /**
- * EV energy-model tuning screen. See docs/ev-energy-model-tuning-plan.md.
+ * EV energy-model tuning content — rendered inside [SettingsScreen]'s
+ * EV tab. See docs/ev-energy-model-tuning-plan.md.
  *
- * The screen does not (yet) check whether the connected vehicle is an EV;
- * non-EV vehicles get an empty live-readout card explaining the situation.
+ * The tab does not check whether the connected vehicle is an EV; non-EV
+ * vehicles get an empty live-readout card explaining the situation.
  */
 @Composable
-fun EvEnergyModelScreen(
+fun EvEnergyModelTab(
     viewModel: EvEnergyModelViewModel = viewModel(),
-    onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val readout by viewModel.readout.collectAsStateWithLifecycle()
@@ -76,99 +76,76 @@ fun EvEnergyModelScreen(
         viewModel.consumeEvent()
     }
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background,
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("evEnergyModelTab"),
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-                .testTag("evEnergyModelScreen"),
+                .verticalScroll(rememberScrollState()),
         ) {
-            Row(modifier = Modifier.fillMaxSize()) {
-                // Back rail
-                Column(modifier = Modifier.fillMaxHeight().padding(vertical = 16.dp, horizontal = 12.dp)) {
-                    FilledTonalIconButton(onClick = onBack, modifier = Modifier.size(56.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
+            ExplanationCard()
+            Spacer(Modifier.height(16.dp))
+            DetectedVehicleCard(match = match, onApply = viewModel::applyEpaValues)
+            Spacer(Modifier.height(16.dp))
+            MasterToggleRow(
+                enabled = state.tuningEnabled,
+                onToggle = viewModel::setTuningEnabled,
+            )
+            Spacer(Modifier.height(8.dp))
+            EpaBaselineRow(
+                useEpa = state.useEpaBaseline,
+                masterEnabled = state.tuningEnabled,
+                hasMatch = match.matched,
+                onToggle = viewModel::setUseEpaBaseline,
+            )
+            Spacer(Modifier.height(16.dp))
+            LiveReadoutCard(readout, state.tuningEnabled)
 
-                // Content
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 24.dp, vertical = 16.dp)
-                        .verticalScroll(rememberScrollState()),
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
+            Spacer(Modifier.height(16.dp))
+
+            TuningControls(state, viewModel, enabled = state.tuningEnabled, learned = learned)
+
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
+            Spacer(Modifier.height(16.dp))
+            ProfilesDatabaseCard(
+                lastUpdateMs = state.profilesLastUpdateMs,
+                url = state.profilesUpdateUrl,
+                refreshing = state.refreshing,
+                onRefresh = viewModel::refreshProfilesFromNetwork,
+            )
+
+            Spacer(Modifier.height(24.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FilledTonalButton(
+                    onClick = viewModel::sendNow,
+                    modifier = Modifier.testTag("evSendNow"),
                 ) {
-                    Text(
-                        text = "EV Range Estimates",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    ExplanationCard()
-                    Spacer(Modifier.height(16.dp))
-                    DetectedVehicleCard(match = match, onApply = viewModel::applyEpaValues)
-                    Spacer(Modifier.height(16.dp))
-                    MasterToggleRow(
-                        enabled = state.tuningEnabled,
-                        onToggle = viewModel::setTuningEnabled,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    EpaBaselineRow(
-                        useEpa = state.useEpaBaseline,
-                        masterEnabled = state.tuningEnabled,
-                        hasMatch = match.matched,
-                        onToggle = viewModel::setUseEpaBaseline,
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    LiveReadoutCard(readout, state.tuningEnabled)
-
-                    Spacer(Modifier.height(24.dp))
-                    HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
-                    Spacer(Modifier.height(16.dp))
-
-                    TuningControls(state, viewModel, enabled = state.tuningEnabled, learned = learned)
-
-                    Spacer(Modifier.height(24.dp))
-                    HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
-                    Spacer(Modifier.height(16.dp))
-                    ProfilesDatabaseCard(
-                        lastUpdateMs = state.profilesLastUpdateMs,
-                        url = state.profilesUpdateUrl,
-                        refreshing = state.refreshing,
-                        onRefresh = viewModel::refreshProfilesFromNetwork,
-                    )
-
-                    Spacer(Modifier.height(24.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        FilledTonalButton(
-                            onClick = viewModel::sendNow,
-                            modifier = Modifier.testTag("evSendNow"),
-                        ) {
-                            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Send now")
-                        }
-                        FilledTonalButton(
-                            onClick = viewModel::resetToDefaults,
-                            modifier = Modifier.testTag("evReset"),
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Reset to defaults")
-                        }
-                    }
-                    Spacer(Modifier.height(48.dp))
+                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Send now")
+                }
+                FilledTonalButton(
+                    onClick = viewModel::resetToDefaults,
+                    modifier = Modifier.testTag("evReset"),
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Reset to defaults")
                 }
             }
-
-            SnackbarHost(
-                hostState = snackbarHost,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
-            )
+            Spacer(Modifier.height(48.dp))
         }
+
+        SnackbarHost(
+            hostState = snackbarHost,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+        )
     }
 }
 

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.DisplaySettings
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VideoSettings
 import androidx.compose.material3.Button
@@ -83,6 +84,7 @@ private enum class SettingsTab(
     VIDEO("Video", Icons.Default.VideoSettings),
     AUDIO("Audio", Icons.Default.Mic),
     INPUT("Input", Icons.Default.Keyboard),
+    EV("EV", Icons.Default.BatteryChargingFull),
     DIAGNOSTICS("Diagnostics", Icons.Default.BugReport),
 }
 
@@ -113,7 +115,6 @@ fun SettingsScreen(
     onBack: () -> Unit = {},
     onNavigateToDiagnostics: () -> Unit = {},
     onNavigateToSafeAreaEditor: () -> Unit = {},
-    onNavigateToEvEnergyModel: () -> Unit = {},
 ) {
     val uiState by viewModel.settingsState.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableStateOf(SettingsTab.CONNECTION) }
@@ -198,8 +199,9 @@ fun SettingsScreen(
                         SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
                         SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
                         SettingsTab.INPUT -> InputTab(viewModel, uiState)
+                        SettingsTab.EV -> EvEnergyModelTab()
                         SettingsTab.DIAGNOSTICS -> DiagnosticsSettingsTab(
-                            viewModel, uiState, onNavigateToDiagnostics, onNavigateToEvEnergyModel
+                            viewModel, uiState, onNavigateToDiagnostics
                         )
                     }
                 }
@@ -2083,7 +2085,6 @@ private fun DiagnosticsSettingsTab(
     viewModel: SettingsViewModel,
     uiState: SettingsUiState,
     onNavigateToDiagnostics: () -> Unit,
-    onNavigateToEvEnergyModel: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -2115,26 +2116,6 @@ private fun DiagnosticsSettingsTab(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text("Open Diagnostics Dashboard")
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // EV energy-model tuning entry — see docs/ev-energy-model-tuning-plan.md.
-        SectionHeader("EV Range Estimates")
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "Tweak the energy model OpenAutoLink sends to Maps so " +
-                "battery-on-arrival matches what your car shows natively. " +
-                "Only meaningful on EV vehicles.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth(0.7f).padding(bottom = 12.dp),
-        )
-        FilledTonalButton(
-            onClick = onNavigateToEvEnergyModel,
-            modifier = Modifier.testTag("openEvEnergyModelButton"),
-        ) {
-            Text("Tweak EV Range Estimates")
         }
 
         Spacer(modifier = Modifier.height(24.dp))
