@@ -282,80 +282,17 @@ fun MainScreen(
             HorizontalDivider()
             Spacer(Modifier.height(20.dp))
 
-            // ── Transport Mode ─────────────────────────────────────
-            Text(
-                text = "Transport Mode",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-
-            var transportMode by remember {
-                mutableStateOf(
-                    prefs.getString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.DEFAULT_TRANSPORT)
-                        ?: CompanionPrefs.DEFAULT_TRANSPORT
-                )
+            // Migrate any legacy "nearby" transport pref to TCP. The Nearby
+            // path is broken on GM AAOS (the car-side app can't get the
+            // permissions needed for the BT→WiFi handoff), so TCP is the
+            // only working transport. Done silently — the user has no
+            // choice to make here.
+            run {
+                val current = prefs.getString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.DEFAULT_TRANSPORT)
+                if (current != CompanionPrefs.TRANSPORT_TCP) {
+                    prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_TCP).apply()
+                }
             }
-
-            // Nearby mode is hidden for now: on GM AAOS the car-side app can't
-            // get the system permissions needed to drive the BT→WiFi handoff,
-            // so users always have to pre-connect to the phone hotspot anyway.
-            // That makes Hotspot mode the only working path. We migrate any
-            // existing "nearby" pref to "tcp" here so the service starts in
-            // the right mode. Code is kept intact for a future revisit.
-            if (transportMode != CompanionPrefs.TRANSPORT_TCP) {
-                transportMode = CompanionPrefs.TRANSPORT_TCP
-                prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_TCP).apply()
-            }
-
-            Text(
-                text = "Transport: WiFi Hotspot",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-
-            /*
-            // Disabled — see comment above.
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                SegmentedButton(
-                    selected = transportMode == CompanionPrefs.TRANSPORT_TCP,
-                    onClick = {
-                        transportMode = CompanionPrefs.TRANSPORT_TCP
-                        prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_TCP).apply()
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(0, 2),
-                ) { Text("WiFi Hotspot") }
-                SegmentedButton(
-                    selected = transportMode == CompanionPrefs.TRANSPORT_NEARBY,
-                    onClick = {
-                        transportMode = CompanionPrefs.TRANSPORT_NEARBY
-                        prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_NEARBY).apply()
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(1, 2),
-                ) { Text("Nearby") }
-            }
-            */
-
-            Text(
-                text = "Car connects to this phone's hotspot via TCP. Enable your phone's WiFi hotspot and connect the car to it.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-
-            Text(
-                text = "⚠ Restart the service after changing transport mode.",
-                style = MaterialTheme.typography.bodySmall,
-                color = OalOrange,
-                modifier = Modifier.padding(vertical = 2.dp),
-            )
-
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(20.dp))
 
             // ── Auto-Start Section ─────────────────────────────────
             Text(
