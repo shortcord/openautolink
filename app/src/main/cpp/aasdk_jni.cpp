@@ -156,11 +156,11 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendMultiTouchEvent(
 JNIEXPORT void JNICALL
 Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendKeyEvent(
     JNIEnv* /*env*/, jclass /*clazz*/,
-    jint keyCode, jboolean isDown)
+    jint keyCode, jboolean isDown, jint metastate, jboolean longpress)
 {
     std::lock_guard<std::mutex> lock(gSessionMutex);
     if (gSession) {
-        gSession->sendKeyEvent(keyCode, isDown);
+        gSession->sendKeyEvent(keyCode, isDown, metastate, longpress);
     }
 }
 

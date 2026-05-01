@@ -103,7 +103,7 @@ public:
         const int* ids, const float* xs, const float* ys, int count);
 
     /** Send key event to phone. */
-    void sendKeyEvent(int keyCode, bool isDown);
+    void sendKeyEvent(int keyCode, bool isDown, int metastate, bool longpress);
 
     /** Send GPS location to phone. */
     void sendGpsLocation(double lat, double lon, double alt,

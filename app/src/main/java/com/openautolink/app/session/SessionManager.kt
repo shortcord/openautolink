@@ -1149,7 +1149,12 @@ class SessionManager(
                     )
                 }
             }
-            is ControlMessage.Button -> session.sendKeyEvent(message.keycode, message.down)
+            is ControlMessage.Button -> session.sendKeyEvent(
+                message.keycode,
+                message.down,
+                message.metastate,
+                message.longpress
+            )
             is ControlMessage.KeyframeRequest -> session.requestKeyframe()
             is ControlMessage.VehicleData -> {
                 message.speedKmh?.let { session.sendSpeed((it / 3.6f * 1000).toInt()) }
@@ -1316,8 +1321,8 @@ class SessionManager(
             return
         }
         DiagnosticLog.i("input", "MediaSession command -> AA key=${KeyEvent.keyCodeToString(keyCode)}")
-        session.sendKeyEvent(keyCode, true)
-        session.sendKeyEvent(keyCode, false)
+        session.sendKeyEvent(keyCode, true, 0, false)
+        session.sendKeyEvent(keyCode, false, 0, false)
     }
 
     // ── EV energy-model tuning ──────────────────────────────────────

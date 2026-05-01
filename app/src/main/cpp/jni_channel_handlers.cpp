@@ -11,6 +11,8 @@
 #include <android/log.h>
 #include <sstream>
 #include <cstring>
+#include <algorithm>
+#include <array>
 
 #include <aap_protobuf/service/control/message/ChannelOpenResponse.pb.h>
 #include <aap_protobuf/service/navigationstatus/message/NavigationState.pb.h>
@@ -39,6 +41,7 @@
 #include <aap_protobuf/service/bluetooth/message/BluetoothPairingRequest.pb.h>
 #include <aap_protobuf/service/bluetooth/message/BluetoothPairingResponse.pb.h>
 #include <aap_protobuf/service/bluetooth/message/BluetoothAuthenticationData.pb.h>
+#include <aap_protobuf/service/media/sink/message/KeyBindingResponse.pb.h>
 #include <aap_protobuf/shared/MessageStatus.pb.h>
 
 #define LOG_TAG "OAL-Handlers"
@@ -46,6 +49,30 @@
 #define LOGI(...) openautolink::jni::oal_jni_log(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) openautolink::jni::oal_jni_log(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) openautolink::jni::oal_jni_log(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+static constexpr std::array<int, 16> kSupportedInputKeycodes = {
+    5,   // CALL
+    6,   // ENDCALL
+    19,  // DPAD_UP
+    20,  // DPAD_DOWN
+    21,  // DPAD_LEFT
+    22,  // DPAD_RIGHT
+    23,  // DPAD_CENTER
+    84,  // SEARCH / voice
+    85,  // MEDIA_PLAY_PAUSE
+    86,  // MEDIA_STOP
+    87,  // MEDIA_NEXT
+    88,  // MEDIA_PREVIOUS
+    89,  // MEDIA_REWIND
+    90,  // MEDIA_FAST_FORWARD
+    126, // MEDIA_PLAY
+    127, // MEDIA_PAUSE
+};
+
+static bool isSupportedInputKeycode(int keycode) {
+    return std::find(kSupportedInputKeycodes.begin(), kSupportedInputKeycodes.end(), keycode) !=
+           kSupportedInputKeycodes.end();
+}
 
 // Hex-dump helper for raw protobuf bytes (energy forecast investigation)
 static std::string hexDump(const uint8_t* data, size_t len, size_t maxBytes = 256) {
@@ -301,6 +328,21 @@ void JniInputHandler::onKeyBindingRequest(
 {
     LOGI("Key binding request");
     logProtoRaw("KeyBinding", request);
+    bool supported = true;
+    for (int i = 0; i < request.keycodes_size(); ++i) {
+        if (!isSupportedInputKeycode(request.keycodes(i))) {
+            LOGW("Unsupported key binding requested: keycode=%d", request.keycodes(i));
+            supported = false;
+        }
+    }
+
+    aap_protobuf::service::media::sink::message::KeyBindingResponse response;
+    response.set_status(supported
+        ? aap_protobuf::shared::STATUS_SUCCESS
+        : aap_protobuf::shared::STATUS_KEYCODE_NOT_BOUND);
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([]() {}, [this](const auto& e) { this->onChannelError(e); });
+    channel_->sendKeyBindingResponse(response, std::move(promise));
     channel_->receive(shared_from_this());
 }
 

@@ -1272,7 +1272,7 @@ void JniSession::buildServiceDiscoveryResponse(
     { auto* svc = response.add_channels();
       svc->set_id(static_cast<int32_t>(aasdk::messenger::ChannelId::INPUT_SOURCE));
       auto* is = svc->mutable_input_source_service();
-      for (int kc : {84, 85, 86, 87, 88, 89, 90, 126, 127}) {
+      for (int kc : {5, 6, 19, 20, 21, 22, 23, 84, 85, 86, 87, 88, 89, 90, 126, 127}) {
           is->add_keycodes_supported(kc);
       }
       auto* ts = is->add_touchscreen();
@@ -1425,10 +1425,10 @@ void JniSession::sendMultiTouchEvent(int action, int actionIndex,
     });
 }
 
-void JniSession::sendKeyEvent(int keyCode, bool isDown)
+void JniSession::sendKeyEvent(int keyCode, bool isDown, int metastate, bool longpress)
 {
     if (!streaming_ || !inputChannel_) return;
-    ioService_->post([this, keyCode, isDown]() {
+    ioService_->post([this, keyCode, isDown, metastate, longpress]() {
         aap_protobuf::service::inputsource::message::InputReport report;
 
         auto now = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1439,8 +1439,8 @@ void JniSession::sendKeyEvent(int keyCode, bool isDown)
         auto* key = keyEvent->add_keys();
         key->set_keycode(static_cast<uint32_t>(keyCode));
         key->set_down(isDown);
-        key->set_metastate(0);
-        key->set_longpress(false);
+        key->set_metastate(static_cast<uint32_t>(metastate));
+        key->set_longpress(longpress);
 
         auto promise = aasdk::channel::SendPromise::defer(*strand_);
         promise->then([]() {}, [](const auto&) {});

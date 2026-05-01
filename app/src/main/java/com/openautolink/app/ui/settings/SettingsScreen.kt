@@ -1703,6 +1703,8 @@ private val mappableActions = listOf(
     MappableAction(87, "Next Track", "Skip to next track"),
     MappableAction(88, "Previous Track", "Go to previous track"),
     MappableAction(86, "Stop", "Stop media playback"),
+    MappableAction(89, "Rewind", "Rewind media playback"),
+    MappableAction(90, "Fast Forward", "Fast-forward media playback"),
     MappableAction(126, "Play", "Start media playback"),
     MappableAction(127, "Pause", "Pause media playback"),
     MappableAction(84, "Voice Assistant", "Activate Google Assistant"),

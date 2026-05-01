@@ -208,6 +208,12 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
 
+        viewModelScope.launch {
+            preferences.keyRemap.collect { keyRemapJson ->
+                steeringWheelController.customKeyMap = parseKeyRemap(keyRemapJson)
+            }
+        }
+
         // Collect video and audio stats when streaming
         viewModelScope.launch {
             sessionManager.sessionState.collect { state ->
@@ -347,18 +353,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
 
             // Load key remap from preferences
             val keyRemapJson = preferences.keyRemap.first()
-            if (keyRemapJson.isNotBlank()) {
-                try {
-                    val map = mutableMapOf<Int, Int>()
-                    val json = org.json.JSONObject(keyRemapJson)
-                    for (key in json.keys()) {
-                        map[key.toInt()] = json.getInt(key)
-                    }
-                    steeringWheelController.customKeyMap = map
-                } catch (_: Exception) {
-                    steeringWheelController.customKeyMap = emptyMap()
-                }
-            }
+            steeringWheelController.customKeyMap = parseKeyRemap(keyRemapJson)
 
             // Load volume offsets
             val volMedia = preferences.volumeOffsetMedia.first()
@@ -462,6 +457,20 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
 
     fun disconnect() {
         sessionManager.stop()
+    }
+
+    private fun parseKeyRemap(jsonString: String): Map<Int, Int> {
+        if (jsonString.isBlank()) return emptyMap()
+        return try {
+            val json = org.json.JSONObject(jsonString)
+            buildMap {
+                for (key in json.keys()) {
+                    put(key.toInt(), json.getInt(key))
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
     }
 
     // --- Multi-phone: Phone Chooser ---

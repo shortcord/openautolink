@@ -117,12 +117,12 @@ class SteeringWheelController(
             ControlMessage.Button(
                 keycode = aaKeycode,
                 down = down,
-                metastate = 0,
+                metastate = event.metaState,
                 longpress = longpress
             )
         )
-        Log.d(TAG, "button → bridge: keycode=$aaKeycode down=$down longpress=$longpress")
-        DiagnosticLog.d("input", "KeyEvent intercepted: keycode=$aaKeycode down=$down longpress=$longpress")
+        Log.d(TAG, "button → bridge: keycode=$aaKeycode down=$down meta=${event.metaState} longpress=$longpress")
+        DiagnosticLog.d("input", "KeyEvent intercepted: keycode=$aaKeycode down=$down meta=${event.metaState} longpress=$longpress")
     }
 
     private fun handleVolume(keycode: Int, isDown: Boolean) {

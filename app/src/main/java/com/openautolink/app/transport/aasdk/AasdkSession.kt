@@ -255,8 +255,8 @@ class AasdkSession(
         AasdkNative.nativeSendMultiTouchEvent(action, actionIndex, ids, xs, ys)
     }
 
-    fun sendKeyEvent(keyCode: Int, isDown: Boolean) {
-        AasdkNative.nativeSendKeyEvent(keyCode, isDown)
+    fun sendKeyEvent(keyCode: Int, isDown: Boolean, metastate: Int = 0, longpress: Boolean = false) {
+        AasdkNative.nativeSendKeyEvent(keyCode, isDown, metastate, longpress)
     }
 
     fun sendGpsLocation(lat: Double, lon: Double, alt: Double,

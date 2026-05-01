@@ -33,6 +33,7 @@ class SteeringWheelControllerTest {
         every { event.action } returns action
         every { event.keyCode } returns keyCode
         every { event.repeatCount } returns repeatCount
+        every { event.metaState } returns 0
         return event
     }
 
@@ -125,6 +126,16 @@ class SteeringWheelControllerTest {
 
         assertEquals(1, sentMessages.size)
         assertTrue(sentMessages[0].longpress)
+    }
+
+    @Test
+    fun `metastate is preserved when forwarding key`() {
+        val event = mockKeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT)
+        every { event.metaState } returns KeyEvent.META_SHIFT_ON
+
+        assertTrue(controller.onKeyEvent(event))
+
+        assertEquals(KeyEvent.META_SHIFT_ON, sentMessages[0].metastate)
     }
 
     @Test

@@ -56,7 +56,7 @@ object AasdkNative {
     )
 
     @JvmStatic
-    external fun nativeSendKeyEvent(keyCode: Int, isDown: Boolean)
+    external fun nativeSendKeyEvent(keyCode: Int, isDown: Boolean, metastate: Int, longpress: Boolean)
 
     @JvmStatic
     external fun nativeSendGpsLocation(
