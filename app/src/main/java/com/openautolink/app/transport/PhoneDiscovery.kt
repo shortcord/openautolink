@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.EnumSet
@@ -569,9 +572,136 @@ class PhoneDiscovery private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Send a single UDP broadcast `OAL?` packet and listen for replies.
+     *
+     * Useful when mDNS is unavailable (AAOS 12/13 NSD often returns only
+     * IPv6 link-local) but the AP still allows broadcast between clients.
+     * Each running companion responds once with the same identity payload
+     * the TCP probe returns. Sub-50ms typical wall time, so this layer
+     * sits between mDNS and the /24 sweep in the connect pipeline.
+     *
+     * Source IPs of replies become the discovered hosts — no DHCP scope
+     * assumption, no IP cache. Caller is expected to call this on each
+     * usable broadcast interface (sweep already enumerates them via
+     * [currentIpv4Addresses]).
+     *
+     * @param broadcastAddress dotted-quad broadcast for the target /24
+     *   (e.g. `10.220.23.255`). If null, falls back to `255.255.255.255`
+     *   which most APs forward but a few drop.
+     * @param listenWindowMs how long to keep the socket open for late
+     *   replies. 600ms is generous for any LAN; bump for higher-latency
+     *   APs.
+     * @return number of distinct phones added to the discovery flow.
+     */
+    suspend fun udpBroadcast(
+        broadcastAddress: String? = null,
+        listenWindowMs: Long = 600L,
+    ): Int = withContext(Dispatchers.IO) {
+        val target = try {
+            if (broadcastAddress != null) InetAddress.getByName(broadcastAddress)
+            else InetAddress.getByName("255.255.255.255")
+        } catch (e: Exception) {
+            OalLog.w(TAG, "udpBroadcast: bad target $broadcastAddress: ${e.message}")
+            return@withContext 0
+        }
+        var socket: DatagramSocket? = null
+        try {
+            socket = DatagramSocket().apply {
+                broadcast = true
+                soTimeout = 200 // per-receive timeout; loop until window elapses
+            }
+            val payload = OalProtocol.IDENTITY_PROBE_REQUEST.toByteArray(Charsets.UTF_8)
+            val outPacket = DatagramPacket(payload, payload.size, target, OalProtocol.UDP_DISCOVERY_PORT)
+            socket.send(outPacket)
+            OalLog.d(TAG, "udpBroadcast: sent ${payload.size}B to ${target.hostAddress}:${OalProtocol.UDP_DISCOVERY_PORT}")
+
+            val deadline = System.currentTimeMillis() + listenWindowMs
+            val seenIds = HashSet<String>()
+            val recvBuf = ByteArray(512)
+            while (System.currentTimeMillis() < deadline) {
+                val recvPacket = DatagramPacket(recvBuf, recvBuf.size)
+                try {
+                    socket.receive(recvPacket)
+                } catch (_: java.net.SocketTimeoutException) {
+                    continue
+                }
+                val replyHost = recvPacket.address?.hostAddress ?: continue
+                val replyText = String(
+                    recvPacket.data, recvPacket.offset, recvPacket.length, Charsets.UTF_8,
+                ).trimEnd('\n', '\r')
+                if (!replyText.startsWith(OalProtocol.IDENTITY_PROBE_RESPONSE_PREFIX)) {
+                    continue
+                }
+                val parts = replyText
+                    .removePrefix(OalProtocol.IDENTITY_PROBE_RESPONSE_PREFIX)
+                    .split('\t', limit = 2)
+                val replyId = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: continue
+                if (!seenIds.add(replyId)) continue
+                OalLog.i(
+                    TAG,
+                    "udpBroadcast: ${parts.getOrNull(1) ?: replyId.take(8)} @ $replyHost replied",
+                )
+                addOrUpdate(
+                    phoneId = replyId,
+                    friendlyName = parts.getOrNull(1)?.takeIf { it.isNotBlank() },
+                    host = replyHost,
+                    port = AA_PORT,
+                    mdnsServiceName = null,
+                    // Tag as SWEEP — same fast / direct-connect semantics
+                    // as a TCP-probe hit. Source label in the chooser will
+                    // read "via sweep"; that's fine, broadcast is just a
+                    // faster sweep of the same address space.
+                    viaSource = SourceBit.SWEEP,
+                )
+            }
+            seenIds.size
+        } catch (e: Exception) {
+            OalLog.d(TAG, "udpBroadcast failed: ${e.javaClass.simpleName}: ${e.message}")
+            0
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Convenience: derive the broadcast address for a /24 subnet given any
+     * IPv4 address inside it. Returns null on bad input.
+     */
+    private fun broadcastFor24(ip: String): String? {
+        val parts = ip.split('.')
+        if (parts.size != 4) return null
+        return "${parts[0]}.${parts[1]}.${parts[2]}.255"
+    }
+
+    /**
+     * Run a UDP broadcast on every usable /24 we have a local address on.
+     * Mirrors the sweep's interface-enumeration logic but completes in a
+     * fraction of the time. Returns total number of phones found across
+     * all interfaces.
+     */
+    suspend fun udpBroadcastAllInterfaces(listenWindowMs: Long = 600L): Int {
+        val ifaces = currentIpv4Addresses()
+        if (ifaces.isEmpty()) return 0
+        // Prefer AP-bridge interfaces first (GM `ap_br_swlan0` etc.) — same
+        // ordering rationale as the sweep.
+        val preferred = ifaces.filter { it.iface.startsWithAny(PREFERRED_AP_INTERFACES) }
+        val rest = ifaces.filter { it !in preferred }
+        var found = 0
+        for (entry in preferred + rest) {
+            val bcast = broadcastFor24(entry.ip) ?: continue
+            found += udpBroadcast(broadcastAddress = bcast, listenWindowMs = listenWindowMs)
+            if (found > 0 && entry in preferred) {
+                // Got hits on a preferred interface; don't bother
+                // broadcasting on the fallback ones (USB, etc.).
+                break
+            }
+        }
+        return found
+    }
+
     /** (interface name, IPv4 address) pair for sweep planning. */
     private data class IfaceAddress(val iface: String, val ip: String)
-
     /**
      * Enumerate every plausible non-loopback IPv4 address the device has,
      * paired with its interface name. AAOS head units have lots of virtual

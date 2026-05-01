@@ -698,8 +698,14 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     if (!haveDefault) continue     // no default → chooser path handles it
                     if (connectInFlight) continue
                     if (phoneDiscovery.isSweeping.value) continue
-                    OalLog.d(TAG, "Periodic idle sweep (Car Hotspot, default set, no session)")
-                    kickSweep()
+                    OalLog.d(TAG, "Periodic idle probe (Car Hotspot, default set, no session)")
+                    // Cheap-first: a single UDP broadcast costs ~1 packet
+                    // and ~600ms wall time. Only escalate to the full /24
+                    // sweep if broadcast comes back empty.
+                    val hits = try { phoneDiscovery.udpBroadcastAllInterfaces(listenWindowMs = 600L) } catch (_: Exception) { 0 }
+                    if (hits == 0) {
+                        kickSweep()
+                    }
                 } catch (_: Exception) { /* keep loop alive */ }
             }
         }
@@ -1016,7 +1022,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         } catch (_: Exception) { null }
 
         // Phase 1: mDNS-only grace. Cheapest, fastest, no socket pressure.
-        OalLog.i(TAG, "Resolving phone — mDNS grace ${MDNS_GRACE_MS}ms, then sweep on miss")
+        OalLog.i(TAG, "Resolving phone — mDNS grace ${MDNS_GRACE_MS}ms")
         val mdnsHit = kotlinx.coroutines.withTimeoutOrNull(MDNS_GRACE_MS) {
             phoneDiscovery.phones
                 .map { list -> pickBestPhone(list, defaultId) }
@@ -1027,11 +1033,23 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             return mdnsHit
         }
 
-        // Phase 2: kick /24 sweep and keep watching the same flow.
-        // Whichever (mDNS or sweep) fills in the host first wins.
-        OalLog.i(TAG, "mDNS grace expired — kicking sweep")
+        // Phase 2: UDP broadcast. ~50ms when the AP allows it. Sits
+        // between mDNS (often broken on AAOS 12/13) and the full /24
+        // sweep (always works, ~400ms wall time).
+        OalLog.i(TAG, "mDNS grace expired — trying UDP broadcast")
+        val broadcastHits = phoneDiscovery.udpBroadcastAllInterfaces(listenWindowMs = 600L)
+        if (broadcastHits > 0) {
+            val picked = pickBestPhone(phoneDiscovery.phones.value, defaultId)
+            if (picked != null) {
+                OalLog.i(TAG, "Resolved via UDP broadcast ($broadcastHits hit(s))")
+                return picked
+            }
+        }
+
+        // Phase 3: full /24 TCP sweep. Always works on cooperative APs.
+        OalLog.i(TAG, "UDP broadcast empty — kicking /24 sweep")
         kickSweep()
-        val remaining = (timeoutMs - MDNS_GRACE_MS).coerceAtLeast(2_000L)
+        val remaining = (timeoutMs - MDNS_GRACE_MS - 600L).coerceAtLeast(2_000L)
         return kotlinx.coroutines.withTimeoutOrNull(remaining) {
             phoneDiscovery.phones
                 .map { list -> pickBestPhone(list, defaultId) }
