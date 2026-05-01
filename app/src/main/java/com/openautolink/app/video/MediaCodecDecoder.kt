@@ -142,9 +142,10 @@ class MediaCodecDecoder(
         Log.i(TAG, "Surface attached: ${width}x${height} (surfaceChanged=$surfaceChanged, codecActive=${codec != null}, receivedIdr=$receivedIdr, renderingEnabled=$renderingEnabled)")
         DiagnosticLog.i("video", "Surface attached: ${width}x${height} surfaceChanged=$surfaceChanged codecActive=${codec != null} renderGate=$renderingEnabled")
 
-        // Only reconfigure codec if the Surface object itself changed (e.g., after surfaceDestroyed).
+        // Reconfigure when the Surface object changed (e.g., after surfaceDestroyed)
+        // or when the codec was released while the same Surface object survived.
         // Size-only changes don't require codec reset — MediaCodec renders to whatever size the surface is.
-        if (surfaceChanged) {
+        if (surfaceChanged || codec == null) {
             codecConfigData?.let { config ->
                 configureCodec(config)
                 // Codec configured from cached SPS/PPS, but the IDR that arrived with it
@@ -160,6 +161,9 @@ class MediaCodecDecoder(
                     _needsKeyframe = false
                     _needsKeyframeFlow.value = true  // Signal caller to request IDR
                 }
+            } ?: run {
+                _needsKeyframe = false
+                _needsKeyframeFlow.value = true  // Signal caller to request stream config + IDR
             }
         }
     }
@@ -167,8 +171,13 @@ class MediaCodecDecoder(
     override fun detach() {
         Log.i(TAG, "Detaching surface")
         releaseCodec()
-        cachedIdrFrame = null  // Prevent stale IDR replay on reattach (e.g. phone switch)
-        codecConfigData = null // Force fresh SPS/PPS from new phone
+        // Surface detach is a display lifecycle event, not a stream reset. Keep
+        // SPS/PPS/VPS so a fresh IDR without inline config can be decoded after
+        // returning from another AAOS app. Do not replay an old IDR, though:
+        // request a fresh one once a new Surface is attached.
+        cachedIdrFrame = null
+        _needsKeyframe = false
+        _needsKeyframeFlow.value = false
         surface = null
         surfaceWidth = 0
         surfaceHeight = 0
@@ -240,6 +249,7 @@ class MediaCodecDecoder(
     override fun release() {
         releaseCodec()
         cachedIdrFrame = null
+        codecConfigData = null
         _decoderState.value = DecoderState.IDLE
     }
 
