@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.openautolink.app.video.AaVideoCodec.normalizedPreference
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -226,7 +227,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
     }
 
     val videoCodec: Flow<String> = dataStore.data.map { prefs ->
-        prefs[VIDEO_CODEC] ?: DEFAULT_VIDEO_CODEC
+        (prefs[VIDEO_CODEC] ?: DEFAULT_VIDEO_CODEC).normalizedPreference()
     }
 
     val videoFps: Flow<Int> = dataStore.data.map { prefs ->
@@ -423,7 +424,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
     }
 
     suspend fun setVideoCodec(codec: String) {
-        dataStore.edit { it[VIDEO_CODEC] = codec }
+        dataStore.edit { it[VIDEO_CODEC] = codec.normalizedPreference() }
     }
 
     suspend fun setVideoFps(fps: Int) {

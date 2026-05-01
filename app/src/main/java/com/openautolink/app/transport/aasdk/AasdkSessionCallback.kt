@@ -19,7 +19,7 @@ interface AasdkSessionCallback {
 
     /**
      * Video frame received from phone.
-     * @param data Raw codec data (H.264/H.265/VP9 NAL units)
+     * @param data Raw codec data (H.264/H.265 Annex-B or VP9 frame data)
      * @param timestampUs Presentation timestamp in microseconds
      * @param width Video width (from setup)
      * @param height Video height (from setup)
@@ -28,7 +28,7 @@ interface AasdkSessionCallback {
 
     /**
      * Phone negotiated a video codec during channel setup.
-     * @param codecType aasdk MediaCodecType: 3=H.264, 5=H.264_BP, 7=H.265
+     * @param codecType aasdk MediaCodecType: 3=H.264, 5=VP9, 6=AV1, 7=H.265
      */
     fun onVideoCodecConfigured(codecType: Int)
 

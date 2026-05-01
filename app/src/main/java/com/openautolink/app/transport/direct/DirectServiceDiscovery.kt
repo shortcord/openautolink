@@ -5,6 +5,7 @@ import com.openautolink.app.proto.Control
 import com.openautolink.app.proto.Media
 import com.openautolink.app.proto.Sensors
 import com.openautolink.app.diagnostics.OalLog
+import com.openautolink.app.video.AaVideoCodec.normalizedPreference
 
 /**
  * Builds the AA ServiceDiscoveryResponse protobuf for direct mode.
@@ -20,7 +21,7 @@ object DirectServiceDiscovery {
         val height: Int = 1080,
         val fps: Int = 60,
         val dpi: Int = 160,
-        val codec: String = "auto",  // "auto", "H.264", "H.265", or "VP9"
+        val codec: String = "auto",  // "auto", "h264", "h265", or "vp9"
         val marginWidth: Int = 0,
         val marginHeight: Int = 0,
         val pixelAspectE4: Int = 0,  // 0 = auto-compute from display/video AR, >0 = manual override (10000 = 1:1)
@@ -240,6 +241,11 @@ object DirectServiceDiscovery {
             Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1280x720,
             Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._800x480,
         )
+        val highTiers = listOf(
+            Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._3840x2160,
+            Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._2560x1440,
+            Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._1920x1080,
+        )
 
         // Map selected resolution to a tier
         val selectedTier = when {
@@ -250,17 +256,20 @@ object DirectServiceDiscovery {
             else -> Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._800x480
         }
 
-        when (config.codec) {
+        when (config.codec.normalizedPreference()) {
             "auto" -> {
-                // Auto-negotiate: offer H.265 at all tiers, then H.264 at ≤1080p as fallback.
+                // Auto-negotiate: offer H.265 at all tiers, VP9 at high tiers, then H.264 fallback.
                 for (tier in tiers) {
                     addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265)
+                }
+                for (tier in highTiers) {
+                    addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_VP9)
                 }
                 for (tier in lowTiers) {
                     addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP)
                 }
             }
-            "H.265" -> {
+            "h265" -> {
                 // Match bridge: offer at configured + alternative tiers, plus H.264 fallback
                 addVideoConfig(selectedTier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265)
                 for (tier in listOf(
@@ -274,7 +283,7 @@ object DirectServiceDiscovery {
                     addVideoConfig(tier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP)
                 }
             }
-            "VP9" -> {
+            "vp9" -> {
                 addVideoConfig(selectedTier, Media.MediaCodecType.MEDIA_CODEC_VIDEO_VP9)
                 for (tier in listOf(
                     Control.Service.MediaSinkService.VideoConfiguration.VideoCodecResolutionType._3840x2160,
@@ -302,9 +311,9 @@ object DirectServiceDiscovery {
         }
 
         // Set the primary available type to the preferred codec
-        val primaryCodec = when (config.codec) {
-            "H.265" -> Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265
-            "VP9" -> Media.MediaCodecType.MEDIA_CODEC_VIDEO_VP9
+        val primaryCodec = when (config.codec.normalizedPreference()) {
+            "h265" -> Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265
+            "vp9" -> Media.MediaCodecType.MEDIA_CODEC_VIDEO_VP9
             "auto" -> Media.MediaCodecType.MEDIA_CODEC_VIDEO_H265
             else -> Media.MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP
         }
@@ -314,6 +323,21 @@ object DirectServiceDiscovery {
             .setId(AaChannel.VIDEO)
             .setMediaSinkService(sink.build())
             .build()
+    }
+
+    fun videoConfigCount(config: VideoConfig): Int {
+        val selectedTier = when {
+            config.width >= 3840 -> 5
+            config.width >= 2560 -> 4
+            config.width >= 1920 -> 3
+            config.width >= 1280 -> 2
+            else -> 1
+        }
+        return when (config.codec.normalizedPreference()) {
+            "auto" -> 11
+            "h265", "vp9" -> 1 + listOf(5, 4, 3).count { it != selectedTier } + 3
+            else -> minOf(selectedTier, 3)
+        }
     }
 
     private fun buildInputService(width: Int, height: Int): Control.Service {

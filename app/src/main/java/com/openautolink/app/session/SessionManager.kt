@@ -64,6 +64,9 @@ class SessionManager(
 
     companion object {
         private const val TAG = "SessionManager"
+        private const val KEYFRAME_FAST_RETRY_MS = 250L
+        private const val KEYFRAME_FAST_RETRY_ATTEMPTS = 12
+        private const val KEYFRAME_SLOW_RETRY_MS = 1000L
 
         @Volatile
         private var instance: SessionManager? = null
@@ -1216,7 +1219,13 @@ class SessionManager(
                         _remoteDiagnostics?.log(DiagnosticLevel.WARN, "video",
                             "Keyframe re-request #$attempt")
                     }
-                    delay(2000)
+                    delay(
+                        if (attempt < KEYFRAME_FAST_RETRY_ATTEMPTS) {
+                            KEYFRAME_FAST_RETRY_MS
+                        } else {
+                            KEYFRAME_SLOW_RETRY_MS
+                        }
+                    )
                 }
             }
         }

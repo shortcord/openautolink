@@ -65,14 +65,10 @@ class MediaCodecDecoder(
     /**
      * Set the negotiated codec type from the AA protocol (video setup response).
      * Must be called before video frames arrive.
-     * @param aaCodecType aasdk MediaCodecType: 3=H.264, 5=H.264_BP, 7=H.265
+     * @param aaCodecType aasdk MediaCodecType: 3=H.264, 5=VP9, 6=AV1, 7=H.265
      */
     fun setNegotiatedCodec(aaCodecType: Int) {
-        val newCodec = when (aaCodecType) {
-            7 -> "h265"
-            3, 5 -> "h264"
-            else -> return
-        }
+        val newCodec = AaVideoCodec.aaTypeToPreference(aaCodecType) ?: return
         if (newCodec != detectedCodec) {
             val newMime = CodecSelector.codecToMime(newCodec)
             Log.i(TAG, "Negotiated codec from AA protocol: $newCodec ($newMime) — was $detectedCodec ($mimeType)")
@@ -417,8 +413,9 @@ class MediaCodecDecoder(
                 DiagnosticLog.i("video", "Seed warmup done (${elapsed}ms), render enabled")
                 renderingEnabled = true
                 seedIdrTimeMs = 0  // Clear — warmup is done
-                _needsKeyframe = false
-                _needsKeyframeFlow.value = false
+                // Keep requesting a real IDR. The seed IDR is good enough to
+                // resume rendering after warmup, but only a real IDR fully
+                // resets the decoder's reference picture.
             }
         }
         queueFrame(frame)
@@ -834,7 +831,7 @@ class MediaCodecDecoder(
             height = pendingHeight ?: current.height,
             codecResets = codecResetCount,
             bitrateKbps = currentBitrateKbps,
-            waitingForKeyframe = _needsKeyframe,
+            waitingForKeyframe = _needsKeyframe && !renderingEnabled,
         )
     }
 }

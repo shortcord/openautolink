@@ -7,6 +7,7 @@ import com.openautolink.app.proto.Media
 import com.openautolink.app.transport.AudioPurpose
 import com.openautolink.app.transport.ConnectionState
 import com.openautolink.app.transport.ControlMessage
+import com.openautolink.app.video.AaVideoCodec.normalizedPreference
 import com.openautolink.app.video.VideoFrame
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -306,9 +307,13 @@ class DirectAaSession(
             _connectionState.value = ConnectionState.CONNECTED
 
             // 5. Start read loop
+            val codecPreference = videoConfig.codec.normalizedPreference()
             videoAssembler = AaVideoAssembler(
-                bufferSize = if (videoConfig.codec == "H.265") AaVideoAssembler.H265_BUFFER_SIZE
-                             else AaVideoAssembler.DEFAULT_BUFFER_SIZE,
+                codec = codecPreference,
+                bufferSize = when (codecPreference) {
+                    "h265", "vp9", "auto" -> AaVideoAssembler.LARGE_BUFFER_SIZE
+                    else -> AaVideoAssembler.DEFAULT_BUFFER_SIZE
+                },
                 onFrameCorrupted = { scope.launch { sendVideoFocusNotification() } },
             )
 
@@ -516,13 +521,18 @@ class DirectAaSession(
             AaMsgType.MEDIA_SETUP -> {
                 OalLog.i(TAG, "MediaSetup on ${AaChannel.name(msg.channel)}")
                 // Respond with proper Config protobuf — status=HEADUNIT, maxUnacked=30
-                val configResponse = Media.Config.newBuilder()
+                val configBuilder = Media.Config.newBuilder()
                     .setStatus(Media.Config.ConfigStatus.HEADUNIT)
                     .setMaxUnacked(MAX_UNACKED)
-                    .addConfigurationIndices(0)
-                    .build()
+                val configCount = if (msg.channel == AaChannel.VIDEO) {
+                    DirectServiceDiscovery.videoConfigCount(videoConfig)
+                } else {
+                    1
+                }
+                repeat(configCount) { configBuilder.addConfigurationIndices(it) }
+                val configResponse = configBuilder.build()
                 sendMessage(AaMessage.fromProto(msg.channel, AaMsgType.MEDIA_CONFIG, configResponse))
-                OalLog.i(TAG, "MediaConfig sent on ${AaChannel.name(msg.channel)} (maxUnacked=$MAX_UNACKED)")
+                OalLog.i(TAG, "MediaConfig sent on ${AaChannel.name(msg.channel)} (maxUnacked=$MAX_UNACKED configs=$configCount)")
 
                 // After video setup, send VideoFocusNotification to tell the phone to start streaming
                 if (msg.channel == AaChannel.VIDEO) {
