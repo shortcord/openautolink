@@ -52,7 +52,14 @@ class PhoneDiscovery private constructor(private val context: Context) {
 
         private const val SWEEP_CONNECT_TIMEOUT_MS = 400
         private const val SWEEP_READ_TIMEOUT_MS = 300
-        private const val SWEEP_PARALLELISM = 32
+        /**
+         * Sockets in flight per chunk. We do one chunk per /24 since the
+         * goal is to minimize wall time, and Android's fd limit (1024+)
+         * easily handles 254 simultaneous short-lived TCP connects. With
+         * this set to ~254 the whole /24 sweep collapses to the per-probe
+         * timeout (~400ms) rather than `chunks × timeout`.
+         */
+        private const val SWEEP_PARALLELISM = 128
 
         /**
          * Interfaces tried first on the phone-discovery sweep. On GM AAOS
@@ -511,53 +518,6 @@ class PhoneDiscovery private constructor(private val context: Context) {
         sweepJob = null
         _isSweeping.value = false
     }
-
-    /**
-     * Probe a small set of last-known IPs in parallel via the identity
-     * port. Used as a "warm cache" path before mDNS / sweep — if the AP's
-     * DHCP server re-leased the same IP to a known phone (very common on
-     * automotive APs), this completes in well under a second.
-     *
-     * Results that match an [expectedIds] entry are added to the discovery
-     * state with [Source.SWEEP] so the chooser shows them. Mismatches (a
-     * different phone now answering at that IP) are silently dropped — the
-     * regular sweep / mDNS will re-find the phones at their new addresses.
-     *
-     * Returns true if at least one expected phone was confirmed alive.
-     */
-    suspend fun probeKnown(targets: List<KnownTarget>): Boolean {
-        if (targets.isEmpty()) return false
-        OalLog.i(TAG, "probeKnown: trying ${targets.size} cached IPs (${targets.joinToString { "${it.expectedPhoneId.take(8)}@${it.host}" }})")
-        return kotlinx.coroutines.coroutineScope {
-            val deferreds = targets.map { t ->
-                async(Dispatchers.IO) {
-                    val ident = probeHost(t.host) ?: return@async false
-                    if (!ident.phoneId.isNullOrBlank() && ident.phoneId == t.expectedPhoneId) {
-                        addOrUpdate(
-                            phoneId = ident.phoneId,
-                            friendlyName = ident.friendlyName,
-                            host = t.host,
-                            port = AA_PORT,
-                            mdnsServiceName = null,
-                            viaSource = SourceBit.SWEEP,
-                        )
-                        true
-                    } else {
-                        OalLog.d(
-                            TAG,
-                            "probeKnown: ${t.host} answered with ${ident.phoneId?.take(8)} not the expected ${t.expectedPhoneId.take(8)}",
-                        )
-                        false
-                    }
-                }
-            }
-            val results = deferreds.awaitAll()
-            results.any { it }
-        }
-    }
-
-    /** Target for [probeKnown] — a host believed to belong to [expectedPhoneId]. */
-    data class KnownTarget(val expectedPhoneId: String, val host: String)
 
     private data class IdentityResult(val phoneId: String?, val friendlyName: String?)
 

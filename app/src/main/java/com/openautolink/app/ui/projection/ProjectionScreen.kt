@@ -646,16 +646,6 @@ private fun CarHotspotPhoneChooserOverlay(
                     color = darkScheme.onSurfaceVariant,
                 )
 
-                // Static-IP tip — avoids slow reconnects when the car AP
-                // hands the phone a different DHCP lease each drive.
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "Tip: for fastest reconnects, set a static IP on your phone for this car's WiFi. " +
-                        "Use an address inside the AP's DHCP range (check the IP your phone got the first time).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = darkScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                )
-
                 if (!chooserMessage.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Box(
