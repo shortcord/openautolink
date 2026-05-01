@@ -116,7 +116,7 @@ The phone is the access point; the car is a client. Single-phone optimized — s
 
 Native AAOS Google Maps has a private, per-vehicle EV profile (charge curves, aerodynamics, real DCFC power) it uses to predict battery-on-arrival. Apps cannot read that profile. OpenAutoLink builds the next best thing: a tunable energy model from real VHAL data plus an EPA-derived profile database, sent to Maps as the standard `VehicleEnergyModel` sensor.
 
-Open it from **Settings → Diagnostics → Tweak EV Range Estimates**.
+Open it from **Settings → EV** (its own tab in the Settings screen).
 
 - **Detected vehicle card** — looks up `Make|Model|Year` from VHAL against a bundled database of 46 popular EVs (Blazer EV, Lyriq, Hummer EV, Mach-E, F-150 Lightning, Model 3/Y, IONIQ 5/6, EV6, EV9, ID.4, Rivian R1T/R1S, Polestar 2/3/4, Volvo EX30/EX90, BMW i4/iX, Mercedes EQE/EQS, Honda Prologue, Acura ZDX, and more). When matched, one tap applies EPA Wh/km and DCFC kW.
 - **Four driving-rate modes**:
