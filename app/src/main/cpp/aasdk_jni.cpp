@@ -270,9 +270,13 @@ SENSOR_JNI(Fuel, jint levelPct, jint rangeM, jboolean lowFuel) {
     if (gSession) gSession->sendFuelSensor(levelPct, rangeM, lowFuel);
 }
 
-SENSOR_JNI(EnergyModel, jint batteryLevelWh, jint batteryCapacityWh, jint rangeM, jint chargeRateW) {
+SENSOR_JNI(EnergyModel, jint batteryLevelWh, jint batteryCapacityWh, jint rangeM, jint chargeRateW,
+                       jfloat drivingWhPerKm, jfloat auxWhPerKm, jfloat aeroCoef,
+                       jfloat reservePct, jint maxChargeW, jint maxDischargeW) {
     std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendEnergyModelSensor(batteryLevelWh, batteryCapacityWh, rangeM, chargeRateW);
+    if (gSession) gSession->sendEnergyModelSensor(
+        batteryLevelWh, batteryCapacityWh, rangeM, chargeRateW,
+        drivingWhPerKm, auxWhPerKm, aeroCoef, reservePct, maxChargeW, maxDischargeW);
 }
 
 SENSOR_JNI(Accelerometer, jint xE3, jint yE3, jint zE3) {

@@ -274,8 +274,18 @@ class AasdkSession(
     fun sendNightMode(night: Boolean) = AasdkNative.nativeSendNightMode(night)
     fun sendDrivingStatus(moving: Boolean) = AasdkNative.nativeSendDrivingStatus(moving)
     fun sendFuel(levelPct: Int, rangeM: Int, lowFuel: Boolean) = AasdkNative.nativeSendFuel(levelPct, rangeM, lowFuel)
-    fun sendEnergyModel(batteryLevelWh: Int, batteryCapacityWh: Int, rangeM: Int, chargeRateW: Int) =
-        AasdkNative.nativeSendEnergyModel(batteryLevelWh, batteryCapacityWh, rangeM, chargeRateW)
+    /**
+     * Send VEM sensor batch. Override args with `< 0` (or `Float.NaN`) mean
+     * "derive on the C++ side from the legacy formula / hardcoded value".
+     */
+    fun sendEnergyModel(
+        batteryLevelWh: Int, batteryCapacityWh: Int, rangeM: Int, chargeRateW: Int,
+        drivingWhPerKm: Float = -1f, auxWhPerKm: Float = -1f, aeroCoef: Float = -1f,
+        reservePct: Float = -1f, maxChargeW: Int = -1, maxDischargeW: Int = -1,
+    ) = AasdkNative.nativeSendEnergyModel(
+        batteryLevelWh, batteryCapacityWh, rangeM, chargeRateW,
+        drivingWhPerKm, auxWhPerKm, aeroCoef, reservePct, maxChargeW, maxDischargeW,
+    )
     fun sendAccelerometer(xE3: Int, yE3: Int, zE3: Int) = AasdkNative.nativeSendAccelerometer(xE3, yE3, zE3)
     fun sendGyroscope(rxE3: Int, ryE3: Int, rzE3: Int) = AasdkNative.nativeSendGyroscope(rxE3, ryE3, rzE3)
     fun sendCompass(bearingE6: Int, pitchE6: Int, rollE6: Int) = AasdkNative.nativeSendCompass(bearingE6, pitchE6, rollE6)

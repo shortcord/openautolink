@@ -86,7 +86,24 @@ object AasdkNative {
     external fun nativeSendFuel(levelPct: Int, rangeM: Int, lowFuel: Boolean)
 
     @JvmStatic
-    external fun nativeSendEnergyModel(batteryLevelWh: Int, batteryCapacityWh: Int, rangeM: Int, chargeRateW: Int)
+    /**
+     * Send VEM (vehicle_energy_model_data) sensor batch.
+     *
+     * @param drivingWhPerKm  override driving consumption rate; pass `< 0`
+     *                        to fall back to the derived
+     *                        `(currentEnergy / rangeRemaining) * 1000` formula.
+     * @param auxWhPerKm      auxiliary consumption rate (Wh/km).
+     * @param aeroCoef        aerodynamic coefficient contribution.
+     * @param reservePct      battery reserve as percent of capacity (0..100).
+     * @param maxChargeW      max charge power (W); pass `< 0` to fall back
+     *                        to live charge rate (or 150 kW if absent).
+     * @param maxDischargeW   max discharge power (W); pass `< 0` for default 150 kW.
+     */
+    external fun nativeSendEnergyModel(
+        batteryLevelWh: Int, batteryCapacityWh: Int, rangeM: Int, chargeRateW: Int,
+        drivingWhPerKm: Float, auxWhPerKm: Float, aeroCoef: Float,
+        reservePct: Float, maxChargeW: Int, maxDischargeW: Int,
+    )
 
     @JvmStatic
     external fun nativeSendAccelerometer(xE3: Int, yE3: Int, zE3: Int)

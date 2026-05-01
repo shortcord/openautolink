@@ -182,6 +182,87 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         SettingsUiState()
     )
 
+    // ── Multi-phone (Car Hotspot mode) ─────────────────────────────────
+    // Exposed as separate flows rather than baked into [SettingsUiState] —
+    // [combine] is already at its max-arg limit and the multi-phone settings
+    // change independently of the rest.
+
+    private val knownPhonesStore = com.openautolink.app.data.KnownPhonesStore(preferences)
+
+    val connectionMode: StateFlow<String> = preferences.connectionMode.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        AppPreferences.DEFAULT_CONNECTION_MODE,
+    )
+
+    val defaultPhoneId: StateFlow<String> = preferences.defaultPhoneId.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        AppPreferences.DEFAULT_DEFAULT_PHONE_ID,
+    )
+
+    val knownPhones: StateFlow<List<com.openautolink.app.data.KnownPhone>> =
+        knownPhonesStore.phones.stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            emptyList(),
+        )
+
+    val alwaysAskPhone: StateFlow<Boolean> = preferences.alwaysAskPhone.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        AppPreferences.DEFAULT_ALWAYS_ASK_PHONE,
+    )
+
+    fun updateConnectionMode(mode: String) {
+        viewModelScope.launch { preferences.setConnectionMode(mode) }
+    }
+
+    fun setDefaultPhoneId(id: String) {
+        viewModelScope.launch { preferences.setDefaultPhoneId(id) }
+    }
+
+    fun forgetKnownPhone(id: String) {
+        viewModelScope.launch { knownPhonesStore.remove(id) }
+    }
+
+    fun setAlwaysAskPhone(enabled: Boolean) {
+        viewModelScope.launch { preferences.setAlwaysAskPhone(enabled) }
+    }
+
+    val carHotspotAutoInterface: StateFlow<Boolean> =
+        preferences.carHotspotAutoInterface.stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            AppPreferences.DEFAULT_CAR_HOTSPOT_AUTO_INTERFACE,
+        )
+
+    val carHotspotInterfaceName: StateFlow<String> =
+        preferences.carHotspotInterfaceName.stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            AppPreferences.DEFAULT_CAR_HOTSPOT_INTERFACE_NAME,
+        )
+
+    fun setCarHotspotAutoInterface(enabled: Boolean) {
+        viewModelScope.launch { preferences.setCarHotspotAutoInterface(enabled) }
+    }
+
+    fun setCarHotspotInterfaceName(name: String) {
+        viewModelScope.launch { preferences.setCarHotspotInterfaceName(name) }
+    }
+
+    /**
+     * Snapshot of currently-up, non-virtual interfaces from
+     * [com.openautolink.app.transport.PhoneDiscovery]. Used by the dropdown
+     * when the user disables auto-detection.
+     */
+    fun listCarHotspotInterfaces(): List<Pair<String, String>> {
+        return com.openautolink.app.transport.PhoneDiscovery
+            .getInstance(getApplication())
+            .listRealInterfaces()
+    }
+
     fun updateDirectTransport(transport: String) {
         viewModelScope.launch { preferences.setDirectTransport(transport) }
     }

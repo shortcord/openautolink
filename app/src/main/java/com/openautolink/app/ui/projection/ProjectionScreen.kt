@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -51,6 +52,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -68,12 +70,26 @@ import com.openautolink.app.video.VideoStats
 fun ProjectionScreen(
     viewModel: ProjectionViewModel = viewModel(),
     onNavigateToSettings: () -> Unit = {},
-    settingsOverlay: @Composable (onBack: () -> Unit) -> Unit = {},
+    settingsOverlay: @Composable (onBack: () -> Unit, onShowDiagnostics: () -> Unit) -> Unit = { _, _ -> },
+    diagnosticsOverlay: @Composable (onBack: () -> Unit) -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val connectionMode by viewModel.connectionMode.collectAsStateWithLifecycle()
+    val isCarHotspotMode = connectionMode == com.openautolink.app.data.AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
+    val carHotspotPhones by viewModel.carHotspotPhones.collectAsStateWithLifecycle()
+    val carHotspotSweeping by viewModel.carHotspotSweepActive.collectAsStateWithLifecycle()
+    val carHotspotSweepProgress by viewModel.carHotspotSweepProgress.collectAsStateWithLifecycle()
+    val knownPhones by viewModel.knownPhones.collectAsStateWithLifecycle()
+    val defaultPhoneId by viewModel.defaultPhoneId.collectAsStateWithLifecycle()
+    val carHotspotSwitching by viewModel.carHotspotSwitching.collectAsStateWithLifecycle()
+    val activePhoneId by viewModel.activePhoneId.collectAsStateWithLifecycle()
 
     // Settings overlay state
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    // Diagnostics overlay state — rendered as overlay (not nav destination) so the
+    // projection Surface stays alive underneath. Returning to projection avoids
+    // a codec/Surface re-init and the black frames that come with it.
+    var showDiagnostics by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(showSettings) {
         viewModel.setSettingsOpen(showSettings)
@@ -246,18 +262,30 @@ fun ProjectionScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Switch Phone button — hidden for now; multi-phone UX is incomplete
-            // and the bridge-mode switching flow doesn't apply to the direct/JNI
-            // path. Re-enable once a single coherent flow exists.
-            // DraggableOverlayButton(
-            //     icon = Icons.Default.PhoneAndroid,
-            //     contentDescription = "Switch Phone",
-            //     onClick = { viewModel.showPhoneChooser() },
-            //     positionKey = "overlay_switch_phone",
-            //     modifier = Modifier.testTag("switchPhoneButton"),
-            // )
-            //
-            // Spacer(modifier = Modifier.height(8.dp))
+            // Switch Phone button — Car Hotspot mode only. Tapping opens a
+            // centered chooser overlay; the underlying AA session keeps
+            // streaming until the user explicitly picks a different phone.
+            if (isCarHotspotMode) {
+                DraggableOverlayButton(
+                    icon = Icons.Default.PhoneAndroid,
+                    contentDescription = "Switch Phone",
+                    onClick = { viewModel.showCarHotspotChooser() },
+                    positionKey = "overlay_switch_phone",
+                    containerColor = if (carHotspotSwitching) {
+                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
+                    } else {
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    },
+                    tint = if (carHotspotSwitching) {
+                        MaterialTheme.colorScheme.onTertiary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    modifier = Modifier.testTag("switchPhoneButton"),
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             // Stats button — draggable
             DraggableOverlayButton(
@@ -331,23 +359,86 @@ fun ProjectionScreen(
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.85f))
             ) {
-                settingsOverlay { showSettings = false }
+                settingsOverlay(
+                    { showSettings = false },
+                    {
+                        // Open diagnostics on top of settings; closing diagnostics
+                        // returns the user to the settings overlay rather than
+                        // straight to projection.
+                        showDiagnostics = true
+                    },
+                )
             }
         }
 
-        // Phone chooser overlay — slides in from right
-        val showChooser by viewModel.showPhoneChooser.collectAsStateWithLifecycle()
-        val endpoints by viewModel.discoveredEndpoints.collectAsStateWithLifecycle()
+        // Diagnostics overlay — same pattern as Settings. Projection keeps
+        // rendering underneath so closing the overlay shows live video, not
+        // a recreated Surface.
         AnimatedVisibility(
-            visible = showChooser,
-            enter = slideInHorizontally { it }, // slide in from right
-            exit = slideOutHorizontally { it },  // slide out to right
+            visible = showDiagnostics,
+            enter = slideInHorizontally { -it },
+            exit = slideOutHorizontally { -it },
         ) {
-            PhoneChooserOverlay(
-                endpoints = endpoints,
-                onSelect = { id, name -> viewModel.selectPhone(id, name) },
-                onDismiss = { viewModel.dismissPhoneChooser() },
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.85f))
+            ) {
+                diagnosticsOverlay { showDiagnostics = false }
+            }
+        }
+
+        // Phone chooser overlay — Car Hotspot mode uses the centered overlay
+        // backed by PhoneDiscovery (mDNS + sweep). Legacy Nearby mode falls
+        // through to the slide-in version.
+        val showChooser by viewModel.showPhoneChooser.collectAsStateWithLifecycle()
+        if (isCarHotspotMode) {
+            // Fade-in centered modal — independent of the floating button's
+            // movable position. Tapping outside the card dismisses without
+            // disconnecting the active AA session.
+            AnimatedVisibility(
+                visible = showChooser,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut(),
+            ) {
+                CarHotspotPhoneChooserOverlay(
+                    discovered = carHotspotPhones,
+                    knownPhones = knownPhones,
+                    defaultPhoneId = defaultPhoneId,
+                    activePhoneId = activePhoneId,
+                    sweeping = carHotspotSweeping,
+                    sweepProgress = carHotspotSweepProgress,
+                    switching = carHotspotSwitching,
+                    onSelect = { viewModel.selectCarHotspotPhone(it) },
+                    onSelectKnown = { kp ->
+                        // Selecting a known-but-not-currently-discovered phone:
+                        // build a synthetic DiscoveredPhone and ask the VM to
+                        // dial. If it can't reach, the existing reconnect
+                        // backoff handles it.
+                        val match = carHotspotPhones.firstOrNull { it.phoneId == kp.phoneId }
+                        if (match != null) {
+                            viewModel.selectCarHotspotPhone(match)
+                        }
+                    },
+                    onSetDefault = { viewModel.setDefaultPhoneId(it) },
+                    onForget = { viewModel.forgetKnownPhone(it) },
+                    onRescan = { viewModel.rescanCarHotspotPhones() },
+                    onDismiss = { viewModel.dismissPhoneChooser() },
+                )
+            }
+        } else {
+            val endpoints by viewModel.discoveredEndpoints.collectAsStateWithLifecycle()
+            AnimatedVisibility(
+                visible = showChooser,
+                enter = slideInHorizontally { it }, // slide in from right
+                exit = slideOutHorizontally { it },  // slide out to right
+            ) {
+                PhoneChooserOverlay(
+                    endpoints = endpoints,
+                    onSelect = { id, name -> viewModel.selectPhone(id, name) },
+                    onDismiss = { viewModel.dismissPhoneChooser() },
+                )
+            }
         }
 
     }
@@ -434,6 +525,364 @@ private fun PhoneChooserOverlay(
                 Text("Cancel")
             }
         }
+    }
+}
+
+/**
+ * Centered, modal phone chooser for Car Hotspot mode.
+ *
+ * Layout requirements:
+ *  - Centered on the screen, NOT anchored to the floating button (which is
+ *    user-draggable).
+ *  - Tap outside the card to dismiss without disconnecting the active session.
+ *  - Tap inside the card does not propagate to the dismissable scrim.
+ *
+ * Sections:
+ *  - Currently active phone (highlighted, no-op when tapped).
+ *  - Known phones (persistent list); each shows online (mDNS+sweep visible)
+ *    or offline (greyed). Trailing "Set default" / "Forget" actions.
+ *  - "Other phones nearby" — discovered phones that aren't yet known.
+ *  - "Scan" button (re-fires sweep + nudges mDNS).
+ *  - "Cancel" / dismiss.
+ */
+@Composable
+private fun CarHotspotPhoneChooserOverlay(
+    discovered: List<com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone>,
+    knownPhones: List<com.openautolink.app.data.KnownPhone>,
+    defaultPhoneId: String,
+    activePhoneId: String?,
+    sweeping: Boolean,
+    sweepProgress: String,
+    switching: Boolean,
+    onSelect: (com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone) -> Unit,
+    onSelectKnown: (com.openautolink.app.data.KnownPhone) -> Unit,
+    onSetDefault: (String) -> Unit,
+    onForget: (String) -> Unit,
+    onRescan: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // Build a quick lookup of currently-discovered phones by phone_id.
+    val discoveredById: Map<String, com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone> =
+        remember(discovered) { discovered.mapNotNull { it.phoneId?.let { id -> id to it } }.toMap() }
+
+    // Discovered phones that are NOT in the known-phones list — shown
+    // separately as "new phones nearby".
+    val knownIds: Set<String> = remember(knownPhones) { knownPhones.map { it.phoneId }.toSet() }
+    val newlyDiscovered: List<com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone> =
+        remember(discovered, knownIds) {
+            discovered.filter { it.phoneId != null && it.phoneId !in knownIds && it.isResolved }
+        }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Force a fixed dark color scheme inside the chooser, regardless of
+        // whatever the AAOS theme is doing. The projection screen runs over a
+        // black surface (or a video stream), so a light card with dark text
+        // becomes unreadable when video is missing. Hardcoding the palette
+        // here keeps the chooser legible in every state.
+        val darkScheme = androidx.compose.material3.darkColorScheme(
+            surface = Color(0xFF1B1B1F),
+            onSurface = Color.White,
+            onSurfaceVariant = Color(0xFFCCCCCC),
+            primary = Color(0xFF4FC3F7),
+            onPrimary = Color.Black,
+            primaryContainer = Color(0xFF0D47A1),
+            onPrimaryContainer = Color.White,
+            secondaryContainer = Color(0xFF2C2C32),
+            onSecondaryContainer = Color.White,
+            tertiary = Color(0xFFFFB74D),
+            tertiaryContainer = Color(0xFF3E2723),
+            onTertiaryContainer = Color.White,
+            surfaceVariant = Color(0xFF2A2A30),
+            onError = Color.White,
+            error = Color(0xFFEF5350),
+        )
+        androidx.compose.material3.MaterialTheme(colorScheme = darkScheme) {
+            // Inner card — centered. `clickable(enabled = false)` blocks the
+            // outer scrim's dismiss when tapping inside the card.
+            Column(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(darkScheme.surface)
+                    .clickable(enabled = false) {}
+                    .padding(24.dp)
+                    .widthIn(min = 360.dp, max = 520.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.PhoneAndroid,
+                        contentDescription = null,
+                        tint = darkScheme.primary,
+                        modifier = Modifier.size(28.dp),
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        "Switch Phone",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (switching) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = darkScheme.primary,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Active session keeps streaming until you pick a different phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = darkScheme.onSurfaceVariant,
+                )
+
+                // Static-IP tip — avoids slow reconnects when the car AP
+                // hands the phone a different DHCP lease each drive.
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Tip: for fastest reconnects, set a static IP on your phone for this car's WiFi. " +
+                        "Use an address inside the AP's DHCP range (check the IP your phone got the first time).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = darkScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                )
+
+                // ── Known phones ─────────────────────────────────────
+                if (knownPhones.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Text(
+                        "Your phones",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = darkScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    knownPhones.forEach { kp ->
+                    val online = kp.phoneId in discoveredById
+                    val isActive = activePhoneId != null && activePhoneId == kp.phoneId
+                    val isDefault = kp.phoneId == defaultPhoneId
+                    KnownPhoneRow(
+                        phone = kp,
+                        online = online,
+                        isActive = isActive,
+                        isDefault = isDefault,
+                        onTap = {
+                            if (online && !isActive) onSelectKnown(kp)
+                        },
+                        onSetDefault = { onSetDefault(kp.phoneId) },
+                        onForget = { onForget(kp.phoneId) },
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+            }
+
+            // ── New phones nearby ────────────────────────────────
+            if (newlyDiscovered.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    "New phones nearby",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                newlyDiscovered.forEach { phone ->
+                    DiscoveredPhoneRow(phone = phone, onTap = { onSelect(phone) })
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+            }
+
+            // ── Empty state ──────────────────────────────────────
+            if (knownPhones.isEmpty() && newlyDiscovered.isEmpty()) {
+                Spacer(modifier = Modifier.height(20.dp))
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (sweeping) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                strokeWidth = 2.5.dp,
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                        }
+                        Text(
+                            if (sweeping) "Searching for phones…"
+                            else "No phones found yet. Make sure the companion app is running on your phone and that the phone is connected to this car's WiFi.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            }
+
+            // ── Sweep progress (when running with results already shown) ──
+            if (sweeping && (knownPhones.isNotEmpty() || newlyDiscovered.isNotEmpty())) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    sweepProgress.ifEmpty { "Scanning…" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            // ── Bottom actions ───────────────────────────────────
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.OutlinedButton(
+                    onClick = onRescan,
+                    enabled = !sweeping,
+                ) {
+                    Text(if (sweeping) "Scanning…" else "Scan")
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                androidx.compose.material3.TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KnownPhoneRow(
+    phone: com.openautolink.app.data.KnownPhone,
+    online: Boolean,
+    isActive: Boolean,
+    isDefault: Boolean,
+    onTap: () -> Unit,
+    onSetDefault: () -> Unit,
+    onForget: () -> Unit,
+) {
+    val containerColor = when {
+        isActive -> MaterialTheme.colorScheme.primaryContainer
+        online -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(containerColor)
+            .clickable(enabled = online && !isActive, onClick = onTap)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Online indicator dot.
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .background(
+                    if (online) Color(0xFF4CAF50) else Color(0xFF9E9E9E)
+                ),
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    phone.friendlyName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                )
+                if (isActive) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "ACTIVE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                if (isDefault) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "DEFAULT",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Text(
+                if (online) "Online — id ${phone.phoneId.take(8)}"
+                else "Not on car WiFi",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // Trailing actions (compact). Always available so the user can mark
+        // a phone as default or forget it without it being currently online.
+        if (!isDefault) {
+            androidx.compose.material3.TextButton(onClick = onSetDefault) {
+                Text("Default", fontSize = 12.sp)
+            }
+        }
+        androidx.compose.material3.TextButton(onClick = onForget) {
+            Text("Forget", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+private fun DiscoveredPhoneRow(
+    phone: com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone,
+    onTap: () -> Unit,
+) {
+    val sourceLabel = when (phone.source) {
+        com.openautolink.app.transport.PhoneDiscovery.Source.MDNS -> "via mDNS"
+        com.openautolink.app.transport.PhoneDiscovery.Source.SWEEP -> "via sweep"
+        com.openautolink.app.transport.PhoneDiscovery.Source.BOTH -> "via mDNS + sweep"
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f))
+            .clickable(onClick = onTap)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.PhoneAndroid,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.tertiary,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                phone.friendlyName ?: phone.serviceName,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                buildString {
+                    phone.host?.let { append(it) }
+                    if (phone.port > 0) append(":").append(phone.port)
+                    append("  ").append(sourceLabel)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            "Connect",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

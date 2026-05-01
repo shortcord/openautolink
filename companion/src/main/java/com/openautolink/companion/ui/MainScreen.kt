@@ -3,6 +3,8 @@ package com.openautolink.companion.ui
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -43,6 +46,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -51,10 +55,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.openautolink.companion.BuildConfig
+import androidx.core.content.ContextCompat
+import com.openautolink.companion.R
 import com.openautolink.companion.CompanionPrefs
 import com.openautolink.companion.autostart.WifiJobService
 import com.openautolink.companion.service.CompanionService
@@ -86,14 +98,14 @@ fun MainScreen(
     var stopOnBtDisconnect by remember {
         mutableStateOf(prefs.getBoolean(CompanionPrefs.BT_DISCONNECT_STOP, false))
     }
-    var autoReconnect by remember {
-        mutableStateOf(prefs.getBoolean(CompanionPrefs.BT_AUTO_RECONNECT, false))
-    }
-    var wifiSsids by remember {
+    var selectedSsids by remember {
         mutableStateOf(
             prefs.getStringSet(CompanionPrefs.AUTO_START_WIFI_SSIDS, emptySet())
-                ?.joinToString(", ") ?: ""
+                ?.toSet() ?: emptySet()
         )
+    }
+    var stopOnWifiDisconnect by remember {
+        mutableStateOf(prefs.getBoolean(CompanionPrefs.WIFI_DISCONNECT_STOP, false))
     }
 
     fun saveAutoStartMode(mode: Int) {
@@ -119,22 +131,38 @@ fun MainScreen(
         ) {
             // ── Header ─────────────────────────────────────────────
             Spacer(Modifier.height(24.dp))
-            Icon(
-                imageVector = Icons.Default.DirectionsCar,
+            Image(
+                painter = painterResource(id = R.drawable.app_logo),
                 contentDescription = null,
-                modifier = Modifier.size(48.dp),
-                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .size(120.dp)
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithCache {
+                        // Soft feathered edge: fully opaque through ~85% of the
+                        // half-extent, then fade to transparent at the corners
+                        // so the square crop dissolves rather than hard-cuts.
+                        val halfExtent = size.minDimension / 2f
+                        val center = Offset(size.width / 2f, size.height / 2f)
+                        val mask = Brush.radialGradient(
+                            colorStops = arrayOf(
+                                0.0f to androidx.compose.ui.graphics.Color.Black,
+                                0.85f to androidx.compose.ui.graphics.Color.Black,
+                                1.0f to androidx.compose.ui.graphics.Color.Transparent,
+                            ),
+                            center = center,
+                            radius = halfExtent * 1.35f,
+                        )
+                        onDrawWithContent {
+                            drawContent()
+                            drawRect(brush = mask, blendMode = BlendMode.DstIn)
+                        }
+                    },
             )
             Spacer(Modifier.height(8.dp))
             Text(
                 text = "OpenAutoLink",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "Companion v${BuildConfig.VERSION_NAME}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Spacer(Modifier.height(24.dp))
@@ -169,80 +197,102 @@ fun MainScreen(
             HorizontalDivider()
             Spacer(Modifier.height(20.dp))
 
-            // ── Transport Mode ─────────────────────────────────────
+            // ── Connection Mode ─────────────────────────────────────
             Text(
-                text = "Transport Mode",
+                text = "Connection Mode",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))
-
-            var transportMode by remember {
+            var connectionMode by remember {
                 mutableStateOf(
-                    prefs.getString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.DEFAULT_TRANSPORT)
-                        ?: CompanionPrefs.DEFAULT_TRANSPORT
+                    prefs.getString(
+                        CompanionPrefs.CONNECTION_MODE,
+                        CompanionPrefs.DEFAULT_CONNECTION_MODE,
+                    ) ?: CompanionPrefs.DEFAULT_CONNECTION_MODE
                 )
             }
-
-            // Nearby mode is hidden for now: on GM AAOS the car-side app can't
-            // get the system permissions needed to drive the BT→WiFi handoff,
-            // so users always have to pre-connect to the phone hotspot anyway.
-            // That makes Hotspot mode the only working path. We migrate any
-            // existing "nearby" pref to "tcp" here so the service starts in
-            // the right mode. Code is kept intact for a future revisit.
-            if (transportMode != CompanionPrefs.TRANSPORT_TCP) {
-                transportMode = CompanionPrefs.TRANSPORT_TCP
-                prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_TCP).apply()
-            }
-
-            Text(
-                text = "Transport: WiFi Hotspot",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
-
-            /*
-            // Disabled — see comment above.
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier.fillMaxWidth(),
-            ) {
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 SegmentedButton(
-                    selected = transportMode == CompanionPrefs.TRANSPORT_TCP,
+                    selected = connectionMode == CompanionPrefs.MODE_PHONE_HOTSPOT,
                     onClick = {
-                        transportMode = CompanionPrefs.TRANSPORT_TCP
-                        prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_TCP).apply()
+                        connectionMode = CompanionPrefs.MODE_PHONE_HOTSPOT
+                        prefs.edit().putString(
+                            CompanionPrefs.CONNECTION_MODE,
+                            CompanionPrefs.MODE_PHONE_HOTSPOT,
+                        ).apply()
                     },
                     shape = SegmentedButtonDefaults.itemShape(0, 2),
-                ) { Text("WiFi Hotspot") }
+                ) { Text("Phone Hotspot") }
                 SegmentedButton(
-                    selected = transportMode == CompanionPrefs.TRANSPORT_NEARBY,
+                    selected = connectionMode == CompanionPrefs.MODE_CAR_HOTSPOT,
                     onClick = {
-                        transportMode = CompanionPrefs.TRANSPORT_NEARBY
-                        prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_NEARBY).apply()
+                        connectionMode = CompanionPrefs.MODE_CAR_HOTSPOT
+                        prefs.edit().putString(
+                            CompanionPrefs.CONNECTION_MODE,
+                            CompanionPrefs.MODE_CAR_HOTSPOT,
+                        ).apply()
                     },
                     shape = SegmentedButtonDefaults.itemShape(1, 2),
-                ) { Text("Nearby") }
+                ) { Text("Car Hotspot") }
             }
-            */
-
             Text(
-                text = "Car connects to this phone's hotspot via TCP. Enable your phone's WiFi hotspot and connect the car to it.",
+                text = when (connectionMode) {
+                    CompanionPrefs.MODE_PHONE_HOTSPOT ->
+                        "This phone hosts the WiFi hotspot. The car connects to this phone."
+                    CompanionPrefs.MODE_CAR_HOTSPOT ->
+                        "Connect this phone to the car's WiFi hotspot. Multiple phones can be connected at once; the car-side app picks the active phone via the floating switcher button."
+                    else -> ""
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 4.dp),
             )
 
+            // Phone identity — visible so users know what they look like to
+            // the car app. Friendly name is editable; phone_id is read-only.
+            Spacer(Modifier.height(12.dp))
+            val phoneIdShort = remember {
+                CompanionPrefs.getOrCreatePhoneId(prefs).take(8)
+            }
+            var friendlyName by remember {
+                mutableStateOf(CompanionPrefs.getFriendlyName(prefs))
+            }
+            Text("Phone identity", style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.height(4.dp))
+            androidx.compose.material3.OutlinedTextField(
+                value = friendlyName,
+                onValueChange = {
+                    friendlyName = it
+                    prefs.edit().putString(CompanionPrefs.PHONE_FRIENDLY_NAME, it).apply()
+                },
+                label = { Text("Friendly name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
             Text(
-                text = "⚠ Restart the service after changing transport mode.",
+                text = "ID: $phoneIdShort  (auto-generated, used by the car app to remember this phone)",
                 style = MaterialTheme.typography.bodySmall,
-                color = OalOrange,
-                modifier = Modifier.padding(vertical = 2.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 4.dp),
             )
 
             Spacer(Modifier.height(20.dp))
             HorizontalDivider()
             Spacer(Modifier.height(20.dp))
+
+            // Migrate any legacy "nearby" transport pref to TCP. The Nearby
+            // path is broken on GM AAOS (the car-side app can't get the
+            // permissions needed for the BT→WiFi handoff), so TCP is the
+            // only working transport. Done silently — the user has no
+            // choice to make here.
+            run {
+                val current = prefs.getString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.DEFAULT_TRANSPORT)
+                if (current != CompanionPrefs.TRANSPORT_TCP) {
+                    prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_TCP).apply()
+                }
+            }
 
             // ── Auto-Start Section ─────────────────────────────────
             Text(
@@ -274,28 +324,24 @@ fun MainScreen(
                             .putBoolean(CompanionPrefs.BT_DISCONNECT_STOP, v)
                             .apply()
                     },
-                    autoReconnect = autoReconnect,
-                    onAutoReconnectChanged = { v ->
-                        autoReconnect = v
-                        prefs.edit()
-                            .putBoolean(CompanionPrefs.BT_AUTO_RECONNECT, v)
-                            .apply()
-                    },
                 )
             }
 
             // ── WiFi Config ────────────────────────────────────────
             if (autoStartMode == CompanionPrefs.AUTO_START_WIFI) {
                 WifiAutoStartConfig(
-                    ssids = wifiSsids,
-                    onSsidsChanged = { text ->
-                        wifiSsids = text
-                        val ssidSet = text.split(",")
-                            .map { it.trim() }
-                            .filter { it.isNotBlank() }
-                            .toSet()
+                    selectedSsids = selectedSsids,
+                    onSsidsChanged = { ssids ->
+                        selectedSsids = ssids
                         prefs.edit()
-                            .putStringSet(CompanionPrefs.AUTO_START_WIFI_SSIDS, ssidSet)
+                            .putStringSet(CompanionPrefs.AUTO_START_WIFI_SSIDS, ssids)
+                            .apply()
+                    },
+                    stopOnDisconnect = stopOnWifiDisconnect,
+                    onStopOnDisconnectChanged = { v ->
+                        stopOnWifiDisconnect = v
+                        prefs.edit()
+                            .putBoolean(CompanionPrefs.WIFI_DISCONNECT_STOP, v)
                             .apply()
                     },
                 )
@@ -426,8 +472,6 @@ private fun BtAutoStartConfig(
     onMacsChanged: (Set<String>) -> Unit,
     stopOnDisconnect: Boolean,
     onStopOnDisconnectChanged: (Boolean) -> Unit,
-    autoReconnect: Boolean,
-    onAutoReconnectChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     var showDevicePicker by remember { mutableStateOf(false) }
@@ -484,7 +528,6 @@ private fun BtAutoStartConfig(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             SwitchRow("Stop on BT disconnect", stopOnDisconnect, onStopOnDisconnectChanged)
-            SwitchRow("Auto-reconnect", autoReconnect, onAutoReconnectChanged)
         }
     }
 
@@ -548,8 +591,56 @@ private fun BtDevicePickerDialog(
 
 // ── WiFi Auto-Start Config ─────────────────────────────────────────────
 
+@SuppressLint("MissingPermission")
+private fun currentSsid(context: Context): String? {
+    return try {
+        val wm = context.applicationContext
+            .getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+        @Suppress("DEPRECATION")
+        val raw = wm.connectionInfo?.ssid?.replace("\"", "") ?: return null
+        if (raw.isBlank() || raw == "<unknown ssid>") null else raw
+    } catch (_: Exception) {
+        null
+    }
+}
+
+@SuppressLint("MissingPermission")
+private fun scanSsids(context: Context): List<String> {
+    return try {
+        val wm = context.applicationContext
+            .getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+        @Suppress("DEPRECATION")
+        wm.scanResults
+            ?.mapNotNull { it.SSID?.takeIf { s -> s.isNotBlank() } }
+            ?.distinct()
+            ?.sorted()
+            ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+@SuppressLint("MissingPermission")
+private fun triggerWifiScan(context: Context) {
+    try {
+        val wm = context.applicationContext
+            .getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+        @Suppress("DEPRECATION")
+        wm.startScan()
+    } catch (_: Exception) {
+    }
+}
+
 @Composable
-private fun WifiAutoStartConfig(ssids: String, onSsidsChanged: (String) -> Unit) {
+private fun WifiAutoStartConfig(
+    selectedSsids: Set<String>,
+    onSsidsChanged: (Set<String>) -> Unit,
+    stopOnDisconnect: Boolean,
+    onStopOnDisconnectChanged: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    var showPicker by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -563,29 +654,182 @@ private fun WifiAutoStartConfig(ssids: String, onSsidsChanged: (String) -> Unit)
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.height(8.dp))
-            Icon(
-                Icons.Default.Wifi, null,
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.primary,
-            )
+
+            if (selectedSsids.isEmpty()) {
+                Text(
+                    text = "No networks selected",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                selectedSsids.forEach { ssid ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Wifi, null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(ssid, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = ssids,
-                onValueChange = onSsidsChanged,
-                label = { Text("WiFi network names") },
-                placeholder = { Text("HomeWiFi, CarWiFi") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = false,
-                maxLines = 3,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Comma-separated SSIDs. Service starts when phone joins any of these networks.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            TextButton(onClick = { showPicker = true }) {
+                Text("Select Networks")
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            SwitchRow(
+                "Stop 30s after WiFi disconnect",
+                stopOnDisconnect,
+                onStopOnDisconnectChanged,
             )
         }
     }
+
+    if (showPicker) {
+        WifiSsidPickerDialog(
+            context = context,
+            initialSelection = selectedSsids,
+            onDismiss = { showPicker = false },
+            onConfirm = {
+                onSsidsChanged(it)
+                showPicker = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun WifiSsidPickerDialog(
+    context: Context,
+    initialSelection: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<String>) -> Unit,
+) {
+    var selection by remember { mutableStateOf(initialSelection) }
+    var hasLocationPerm by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var scanned by remember { mutableStateOf(scanSsids(context)) }
+    val connected = remember { currentSsid(context) }
+
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasLocationPerm = granted
+        if (granted) {
+            triggerWifiScan(context)
+            scanned = scanSsids(context)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasLocationPerm) {
+            permLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        } else {
+            triggerWifiScan(context)
+            // scanResults are populated async; re-read after a short delay
+            kotlinx.coroutines.delay(1500)
+            scanned = scanSsids(context)
+        }
+    }
+
+    // Combined SSID list: saved ∪ connected ∪ scanned (deduped, sorted)
+    val displaySsids = remember(scanned, selection) {
+        val all = mutableSetOf<String>()
+        all.addAll(selection)
+        connected?.let { all.add(it) }
+        all.addAll(scanned)
+        all.toList().sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it })
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Select WiFi Networks") },
+        text = {
+            Column {
+                if (!hasLocationPerm) {
+                    Text(
+                        "Location permission required to scan nearby networks. " +
+                            "Already-saved networks are still shown.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (hasLocationPerm) "Nearby & saved networks"
+                        else "Saved networks",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = {
+                        if (!hasLocationPerm) {
+                            permLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                        } else {
+                            triggerWifiScan(context)
+                            scanned = scanSsids(context)
+                        }
+                    }) {
+                        Text("Refresh")
+                    }
+                }
+
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    if (displaySsids.isEmpty()) {
+                        Text(
+                            "No networks visible. Connect to a WiFi network or tap Refresh.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        displaySsids.forEach { ssid ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Checkbox(
+                                    checked = selection.contains(ssid),
+                                    onCheckedChange = { checked ->
+                                        selection = if (checked) selection + ssid
+                                        else selection - ssid
+                                    },
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(ssid, style = MaterialTheme.typography.bodyMedium)
+                                    if (ssid == connected) {
+                                        Text(
+                                            "Connected",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(selection) }) { Text("OK") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────

@@ -348,6 +348,185 @@ private fun NetworkTab(info: NetworkInfo, probe: NetworkProbeState, viewModel: D
             )
         }
 
+        // Local-Only Hotspot probe — tests if head unit can act as AP for phones
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Local-Only Hotspot (Head-Unit-as-AP test)")
+        Text(
+            "Attempts to start a SoftAP on this device. If it works, phones can join the head unit's WiFi instead of the other way around. SSID may be randomized per session.",
+            color = Color(0xFF808080),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (probe.localHotspotActive) "Active" else "Stopped",
+                color = if (probe.localHotspotActive) Color(0xFF4CAF50) else Color.Gray,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { viewModel.toggleLocalHotspot() },
+                modifier = Modifier.height(36.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+            ) {
+                Text(
+                    if (probe.localHotspotActive) "Stop" else "Start Hotspot",
+                    fontSize = 12.sp,
+                )
+            }
+        }
+        if (probe.localHotspotStatus.isNotEmpty()) {
+            val color = when {
+                probe.localHotspotStatus.startsWith("✓") -> Color(0xFF4CAF50)
+                probe.localHotspotStatus.startsWith("✗") -> Color(0xFFFF5722)
+                else -> Color(0xFFB0BEC5)
+            }
+            DiagRow("Status", probe.localHotspotStatus, valueColor = color)
+        }
+        probe.localHotspotSsid?.let { DiagRow("SSID", it, valueColor = Color(0xFF90CAF9)) }
+        probe.localHotspotPassword?.let { DiagRow("Password", it, valueColor = Color(0xFF90CAF9)) }
+
+        // WiFi Direct (P2P) probe — does Nearby's preferred medium work here?
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("WiFi Direct / P2P (Nearby preferred medium)")
+        Text(
+            "Tries to create a WiFi Direct group. This is the medium Nearby Connections prefers; if it fails here, that's why Nearby mode never created its own network.",
+            color = Color(0xFF808080),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (probe.p2pActive) "Active" else "Stopped",
+                color = if (probe.p2pActive) Color(0xFF4CAF50) else Color.Gray,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { viewModel.toggleP2pProbe() },
+                modifier = Modifier.height(36.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+            ) {
+                Text(if (probe.p2pActive) "Stop" else "Create P2P Group", fontSize = 12.sp)
+            }
+        }
+        probe.p2pSupported?.let {
+            DiagRow("Supported", if (it) "yes" else "NO", valueColor = if (it) Color(0xFF4CAF50) else Color(0xFFFF5722))
+        }
+        if (probe.p2pStatus.isNotEmpty()) {
+            val color = when {
+                probe.p2pStatus.startsWith("✓") -> Color(0xFF4CAF50)
+                probe.p2pStatus.startsWith("✗") -> Color(0xFFFF5722)
+                else -> Color(0xFFB0BEC5)
+            }
+            DiagRow("Status", probe.p2pStatus, valueColor = color)
+        }
+        probe.p2pSsid?.let { DiagRow("SSID", it, valueColor = Color(0xFF90CAF9)) }
+        probe.p2pPassphrase?.let { DiagRow("Passphrase", it, valueColor = Color(0xFF90CAF9)) }
+        probe.p2pOwnerIp?.let { DiagRow("Owner IP", it, valueColor = Color(0xFF90CAF9)) }
+        for (log in probe.p2pLog) {
+            val color = when {
+                log.startsWith("✓") -> Color(0xFF4CAF50)
+                log.startsWith("✗") -> Color(0xFFFF5722)
+                else -> Color(0xFFB0BEC5)
+            }
+            Text(
+                log,
+                color = color,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 1.dp),
+            )
+        }
+
+        // Phone Discovery (Car Hotspot mode) — finds companion apps via mDNS + sweep
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Phone Discovery (Car Hotspot mode)")
+        Text(
+            "Discovers companion apps on the current network. Runs mDNS (passive, preferred) and a TCP subnet sweep (active, fallback) in parallel. Each discovered phone shows its source so you can tell which mechanism worked.",
+            color = Color(0xFF808080),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (probe.phoneDiscoveryActive) "Scanning…" else "Stopped",
+                color = if (probe.phoneDiscoveryActive) Color(0xFF4CAF50) else Color.Gray,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            if (probe.phoneDiscoveryActive) {
+                androidx.compose.material3.FilledTonalButton(
+                    onClick = { viewModel.rescanPhones() },
+                    enabled = !probe.phoneSweepActive,
+                    modifier = Modifier.height(36.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
+                ) {
+                    Text(if (probe.phoneSweepActive) "Sweeping…" else "Re-sweep", fontSize = 12.sp)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { viewModel.togglePhoneDiscovery() },
+                modifier = Modifier.height(36.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+            ) {
+                Text(if (probe.phoneDiscoveryActive) "Stop" else "Scan for Phones", fontSize = 12.sp)
+            }
+        }
+        if (probe.phoneSweepProgress.isNotEmpty()) {
+            DiagRow("Sweep", probe.phoneSweepProgress, valueColor = Color(0xFF90CAF9))
+        }
+        if (probe.discoveredPhones.isEmpty()) {
+            DiagRow("Phones", if (probe.phoneDiscoveryActive) "(searching…)" else "(none)")
+        } else {
+            for (phone in probe.discoveredPhones) {
+                val sourceTag = when (phone.source) {
+                    com.openautolink.app.transport.PhoneDiscovery.Source.MDNS -> "mDNS"
+                    com.openautolink.app.transport.PhoneDiscovery.Source.SWEEP -> "sweep"
+                    com.openautolink.app.transport.PhoneDiscovery.Source.BOTH -> "mDNS+sweep"
+                }
+                val sourceColor = when (phone.source) {
+                    com.openautolink.app.transport.PhoneDiscovery.Source.MDNS -> Color(0xFF4CAF50)
+                    com.openautolink.app.transport.PhoneDiscovery.Source.SWEEP -> Color(0xFFFFA726)
+                    com.openautolink.app.transport.PhoneDiscovery.Source.BOTH -> Color(0xFF64B5F6)
+                }
+                val display = buildString {
+                    append(phone.friendlyName ?: phone.serviceName)
+                    phone.host?.let { append("  ").append(it).append(":").append(phone.port) }
+                    phone.phoneId?.let { append("  id=").append(it.take(8)) }
+                    if (!phone.isResolved) append("  (resolving…)")
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 1.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "[$sourceTag]",
+                        color = sourceColor,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.width(96.dp).padding(horizontal = 4.dp),
+                    )
+                    Text(
+                        display,
+                        color = if (phone.isResolved) Color(0xFFE0E0E0) else Color(0xFFB0BEC5),
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
         // Port Scanner
         Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Port Scanner")
@@ -471,103 +650,7 @@ private fun DebugTab(debug: DebugProbeState, viewModel: DiagnosticsViewModel) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        // Remote Log Server
-        SectionHeader("Remote Log Server (TCP)")
-        Text(
-            "Stream app logs to your laptop over the network",
-            color = Color(0xFF808080),
-            fontSize = 11.sp,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-        )
-
-        var logHost by remember { mutableStateOf("") }
-
-        // Inbound mode (laptop connects to car) — only works if hotspot allows it
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    if (debug.logServerRunning) "Running -- ${debug.logServerClients} client(s)"
-                    else "Stopped",
-                    color = if (debug.logServerRunning) Color(0xFF4CAF50) else Color.Gray,
-                    fontSize = 13.sp,
-                )
-            }
-            androidx.compose.material3.FilledTonalButton(
-                onClick = { viewModel.toggleLogServer() },
-                enabled = !debug.logServerRunning || logHost.isBlank(),
-                modifier = Modifier.height(36.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
-            ) {
-                Text(
-                    if (debug.logServerRunning) "Stop" else "Listen :6555",
-                    fontSize = 12.sp,
-                )
-            }
-        }
-
-        // Outbound mode (car connects to laptop) — works through hotspot
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            androidx.compose.material3.OutlinedTextField(
-                value = logHost,
-                onValueChange = { logHost = it },
-                label = { Text("Laptop IP", fontSize = 12.sp) },
-                singleLine = true,
-                enabled = !debug.logServerRunning,
-                modifier = Modifier.weight(1f).height(56.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = Color.White),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            androidx.compose.material3.FilledTonalButton(
-                onClick = {
-                    if (debug.logServerRunning) {
-                        viewModel.connectLogServerOutbound(logHost.trim()) // stop via toggle
-                    } else {
-                        viewModel.connectLogServerOutbound(logHost.trim())
-                    }
-                },
-                enabled = debug.logServerRunning || logHost.isNotBlank(),
-                modifier = Modifier.height(36.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
-            ) {
-                Text(
-                    if (debug.logServerRunning) "Stop" else "Connect Out",
-                    fontSize = 12.sp,
-                )
-            }
-        }
-
-        if (!debug.logServerRunning) {
-            Text(
-                "Outbound: laptop runs nc -l -p 6555, enter laptop IP above",
-                color = Color(0xFF808080),
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-            )
-        }
-
-        for (log in debug.logServerLog) {
-            Text(
-                log,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                color = when {
-                    log.contains("Connected") -> Color(0xFF4CAF50)
-                    log.contains("error", ignoreCase = true) -> Color(0xFFFF5722)
-                    else -> Color(0xFFB0BEC5)
-                },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 1.dp),
-            )
-        }
-
         // ADB / Debug Port Scan
-        Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("ADB Port Scan (localhost)")
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -729,154 +812,6 @@ private fun DebugTab(debug: DebugProbeState, viewModel: DiagnosticsViewModel) {
                     }
                 }
             }
-        }
-
-        // Reverse ADB Tunnel
-        Spacer(modifier = Modifier.height(24.dp))
-        SectionHeader("Reverse ADB Tunnel")
-        Text(
-            "Tunnel ADB through an outbound connection to your laptop relay",
-            color = Color(0xFF808080),
-            fontSize = 11.sp,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-        )
-
-        val tunnel = debug.tunnel
-        var tunnelHost by remember { mutableStateOf(tunnel.relayHost) }
-        var tunnelPort by remember { mutableStateOf(tunnel.relayPort.toString()) }
-        var localPort by remember { mutableStateOf(tunnel.localPort.toString()) }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            androidx.compose.material3.OutlinedTextField(
-                value = tunnelHost,
-                onValueChange = { tunnelHost = it },
-                label = { Text("Laptop IP", fontSize = 12.sp) },
-                singleLine = true,
-                enabled = !tunnel.running,
-                modifier = Modifier.weight(1f).height(56.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = Color.White),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            androidx.compose.material3.OutlinedTextField(
-                value = tunnelPort,
-                onValueChange = { tunnelPort = it },
-                label = { Text("Relay", fontSize = 12.sp) },
-                singleLine = true,
-                enabled = !tunnel.running,
-                modifier = Modifier.width(70.dp).height(56.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = Color.White),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            androidx.compose.material3.OutlinedTextField(
-                value = localPort,
-                onValueChange = { localPort = it },
-                label = { Text("Local", fontSize = 12.sp) },
-                singleLine = true,
-                enabled = !tunnel.running,
-                modifier = Modifier.width(70.dp).height(56.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = Color.White),
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                val statusText = when {
-                    tunnel.connected -> "Connected — ${formatBytes(tunnel.bytesForwarded)} forwarded"
-                    tunnel.running -> "Connecting..."
-                    else -> "Stopped"
-                }
-                val statusColor = when {
-                    tunnel.connected -> Color(0xFF4CAF50)
-                    tunnel.running -> Color(0xFF64B5F6)
-                    else -> Color.Gray
-                }
-                Text(statusText, color = statusColor, fontSize = 13.sp)
-                if (tunnel.connected) {
-                    Text(
-                        "Bridged: relay <-> 127.0.0.1:${tunnel.localPort}",
-                        color = Color(0xFF64B5F6),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-            }
-            androidx.compose.material3.FilledTonalButton(
-                onClick = {
-                    if (tunnel.running) {
-                        viewModel.stopTunnel()
-                    } else {
-                        val rPort = tunnelPort.toIntOrNull() ?: 6556
-                        val lPort = localPort.toIntOrNull() ?: 5555
-                        viewModel.startTunnel(tunnelHost.trim(), rPort, lPort)
-                    }
-                },
-                enabled = tunnel.running || tunnelHost.isNotBlank(),
-                modifier = Modifier.height(36.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
-            ) {
-                Text(
-                    if (tunnel.running) "Disconnect" else "Connect Tunnel",
-                    fontSize = 12.sp,
-                )
-            }
-        }
-
-        // Enable ADB TCP button
-        if (!tunnel.running) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    "ADB TCP not listening? Try to enable it:",
-                    color = Color(0xFF808080),
-                    fontSize = 11.sp,
-                )
-                androidx.compose.material3.FilledTonalButton(
-                    onClick = { viewModel.tryEnableAdbTcp() },
-                    modifier = Modifier.height(32.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
-                ) {
-                    Text("Enable ADB TCP", fontSize = 11.sp)
-                }
-            }
-        }
-
-        // Tunnel instructions
-        if (!tunnel.running) {
-            Text(
-                "1. On laptop: .\\scripts\\adb-relay.ps1\n" +
-                    "2. Enter laptop IP above, tap Connect\n" +
-                    "3. On laptop: adb connect localhost:15555",
-                color = Color(0xFF808080),
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-        }
-
-        // Tunnel log
-        for (log in tunnel.statusLog) {
-            val color = when {
-                log.startsWith("✓") -> Color(0xFF4CAF50)
-                log.startsWith("✗") -> Color(0xFFFF5722)
-                log.contains("Reconnecting") -> Color(0xFFFFC107)
-                else -> Color(0xFFB0BEC5)
-            }
-            Text(
-                log,
-                color = color,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 1.dp),
-            )
         }
 
         // USB Devices

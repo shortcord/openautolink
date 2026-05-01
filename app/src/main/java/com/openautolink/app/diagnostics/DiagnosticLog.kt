@@ -53,10 +53,6 @@ object DiagnosticLog {
     @Volatile
     var instance: RemoteDiagnostics? = null
 
-    /** Remote log server for TCP streaming to laptop. Set by DiagnosticsViewModel. */
-    @Volatile
-    var remoteLogServer: RemoteLogServer? = null
-
     /** File log writer for USB stick logging. Set by ProjectionViewModel. */
     @Volatile
     var fileLogWriter: FileLogWriter? = null
@@ -108,9 +104,10 @@ object DiagnosticLog {
             ring.addLast(entry)
             _localLogs.value = ring.toList()
         }
-        // Stream to TCP clients if remote log server is active
-        remoteLogServer?.broadcast(entry)
-        // Write to file if file logging is active
+        // Stream entry to file log writer if active. The other historical
+        // streaming targets (TCP log server, reverse ADB tunnel) were
+        // removed — file + the in-app diagnostics screen are the only
+        // sinks now.
         fileLogWriter?.write(entry)
     }
 }

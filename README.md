@@ -10,6 +10,7 @@
 
 [![CI](https://github.com/mossyhub/openautolink/actions/workflows/ci.yml/badge.svg)](https://github.com/mossyhub/openautolink/actions/workflows/ci.yml)
 [![Release](https://github.com/mossyhub/openautolink/actions/workflows/release-apk.yml/badge.svg)](https://github.com/mossyhub/openautolink/releases/latest)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow?logo=buymeacoffee&logoColor=white)](https://buymeacoffee.com/mossyhub)
 
 OpenAutoLink runs the full Android Auto protocol stack natively on an AAOS head unit using the [aasdk](https://github.com/opencardev/aasdk) C++ library via JNI. No SBC, no USB adapter, no extra hardware — the car and phone talk directly over WiFi.
 
@@ -40,6 +41,7 @@ See the full installation and setup walkthrough video on YouTube:
 - [Why This Exists](#why-this-exists)
 - [How It Works](#how-it-works)
 - [Features](#features)
+- [EV Range Estimates](#ev-range-estimates)
 - [What You Need](#what-you-need)
 - [Quick Start](#quick-start)
 - [Video and Display](#video-and-display)
@@ -59,19 +61,28 @@ Starting with the 2024 model year, GM dropped Apple CarPlay and Android Auto fro
 
 OpenAutoLink embeds the [aasdk](https://github.com/opencardev/aasdk) v1.6 C++ library directly into the AAOS app via JNI. The native layer handles the full AA protocol pipeline — SSL handshake, encryption, message framing, and channel multiplexing — while the Kotlin layer manages transport, video rendering, audio playback, and UI.
 
-Two connection methods:
+### Connection Modes
 
-**Wireless (phone hotspot):** The user gets the car onto the phones wifi hotspot within the cars won Wifi setting pages. User presses Start on the phone companion app (or uses automatic modes available in the app). The companion app on the phone then starts mDNS and a TCP server. The OpenAutoLink car app finds the phones TCP server, connects then runs the AA session over that TCP connection.
+OpenAutoLink supports two connection modes. Pick one in Settings → Connection on **both** apps (they must match).
 
-**USB (AOA v2):** Plug the phone directly into the head unit's USB port. The app performs the Android Open Accessory handshake and runs the AA session over bulk USB endpoints. Not that you will get multiple USB access prompts every time. This is a GM bug.
+**Car Hotspot mode (default, recommended):**
+The car's built-in WiFi hotspot is the network. One or more phones join it as clients. The companion app on each phone advertises itself via mDNS and a tiny identity probe; the car app discovers all connected phones, picks the preferred one (or shows a picker), and dials it directly over TCP.
+
+- ✅ **Multi-phone**: two drivers' phones can be connected to the car at once. Switch active phone with one tap.
+- ✅ **Zero hotspot toggling**: phones treat the car's WiFi like home WiFi — saved once, auto-rejoins forever.
+- ✅ **Fast cold-start**: car wakes → AP comes up immediately → phones auto-rejoin → projection resumes.
+- Requires a vehicle with a built-in WiFi hotspot (most modern GM EVs include one).
+
+**Phone Hotspot mode:**
+The phone is the access point; the car is a client. Single-phone optimized — simpler if your car doesn't have a built-in hotspot or if you don't want to use it.
 
 ```
 ┌─────────────────┐                              ┌──────────────────────────────┐
 │   Android Phone  │                              │   Car Head Unit (AAOS)       │
 │                  │                              │                              │
-│  OAL Companion   │◀── Nearby (discovery) ─────▶│   Kotlin: transport, UI,     │
-│  + phone hotspot │◀── WiFi (hotspot) ─────────▶│   video, audio, sensors      │
-│  (wireless)      │◀── AA protocol (TCP) ──────▶│          ▼                    │
+│  OAL Companion   │◀── mDNS / identity probe ──▶│   Kotlin: transport, UI,     │
+│  joins car AP    │◀── AA protocol (TCP) ──────▶│   video, audio, sensors      │
+│  (Car Hotspot)   │                              │          ▼                    │
 │                  │                              │   C++ JNI: aasdk v1.6        │
 │         or       │                              │   SSL → Cryptor → Messenger  │
 │                  │                              │   → AA channels              │
@@ -82,7 +93,8 @@ Two connection methods:
 
 ## Features
 
-- **Zero hardware (wireless)** — phone hotspot → car joins WiFi → AA over TCP, no cables or router needed
+- **Car Hotspot mode (default)** — phones join the car's built-in WiFi like home WiFi. Multi-phone support: switch the active phone with one tap, no hotspot toggling
+- **Phone Hotspot mode** — phone is the AP, car is the client. Simpler single-phone fallback for cars without a built-in hotspot
 - **USB cable support** — AOA v2 direct connection for wired setups
 - **aasdk v1.6 native protocol** — battle-tested C++ AA library via JNI, not a reimplementation
 - **EV battery data in Android Auto** — battery %, range, fuel type, charge port forwarded from VHAL into AA. Google Maps shows battery level alongside navigation
@@ -99,6 +111,25 @@ Two connection methods:
 - **Stats overlay** — codec, resolution, FPS, bitrate, WiFi band, decoder info
 - **Automatic reconnect** — car sleep → wake → projection resumes with no user interaction
 - **Built-in diagnostics** — USB device scanner, network probe, remote log server (TCP 6555), VHAL browser
+
+## EV Range Estimates
+
+Native AAOS Google Maps has a private, per-vehicle EV profile (charge curves, aerodynamics, real DCFC power) it uses to predict battery-on-arrival. Apps cannot read that profile. OpenAutoLink builds the next best thing: a tunable energy model from real VHAL data plus an EPA-derived profile database, sent to Maps as the standard `VehicleEnergyModel` sensor.
+
+Open it from **Settings → Diagnostics → Tweak EV Range Estimates**.
+
+- **Detected vehicle card** — looks up `Make|Model|Year` from VHAL against a bundled database of 46 popular EVs (Blazer EV, Lyriq, Hummer EV, Mach-E, F-150 Lightning, Model 3/Y, IONIQ 5/6, EV6, EV9, ID.4, Rivian R1T/R1S, Polestar 2/3/4, Volvo EX30/EX90, BMW i4/iX, Mercedes EQE/EQS, Honda Prologue, Acura ZDX, and more). When matched, one tap applies EPA Wh/km and DCFC kW.
+- **Four driving-rate modes**:
+  - **Derived** *(default)* — uses the dashboard's range estimate. Behaves identically to previous releases.
+  - **Multiplier** — scale the derived value 0.50× – 1.50× to nudge Maps optimistic or pessimistic.
+  - **Manual** — set Wh/km directly with a slider (80–300).
+  - **Learned** — auto-tunes from real driving. Computes a rolling Wh/km from `Δbattery ÷ Δdistance` (distance integrated from VHAL speed, since GM blocks `PERF_ODOMETER`). Per-vehicle state persists across car-off and reconnects. Skips ticks while charging or regenerating; rejects outliers; resets after long gaps.
+- **Other tunable fields** — auxiliary load, aerodynamic coefficient, reserve %, max charge / discharge power.
+- **Live readout** — shows current battery, range, charging power, derived rate, and the effective rate that will reach Maps.
+- **Send Now** — push the updated model immediately so changes show up in Maps within seconds.
+- **Profile database refresh** *(opt-in)* — fetch the latest profile JSON from network with a 4-second timeout, validated and cached locally. Defaults to OFF so the head unit doesn't depend on internet.
+
+> The bundled profiles ship with the APK and work fully offline. Updates land via app releases or the manual refresh button — never as a silent background fetch.
 
 ## What You Need
 
@@ -171,26 +202,53 @@ Because this is an AAOS app, installation on the car goes through your own Googl
 
 ### 3. Connect
 
-**Wireless Hotspot (preferred method):**
-1. **Turn on your phone's WiFi hotspot** (Settings → Hotspot / Tethering).
-2. **Connect the car to the hotspot.** On the head unit, go to Settings → Network & Internet → WiFi and join the phone's hotspot network. The car needs an active WiFi connection to the phone before OpenAutoLink can stream.
-3. Open the **Companion app** on the phone and tap **Start**.
-4. Open **OpenAutoLink** on the car — the car app discovers the phones IP, connects via TCP, then the companion app starts AA directly pointing it to the car app through the existing WiFi connection over TCP.
+OpenAutoLink defaults to **Car Hotspot mode** on both apps. Pick a mode in Settings → Connection (the choice must match on both ends).
 
-> **Hotspot reconnect note:** When the car wakes from sleep, it should automatically rejoin the phone's hotspot — but in practice this can take 30+ seconds or occasionally fail to reconnect on its own. This appears to be a GM / AAOS WiFi behavior. If the car doesn't reconnect, toggle the phone hotspot off and back on, or manually reconnect from the car's WiFi settings. Once WiFi is back, OpenAutoLink should reconnect automatically if you have pressed the "Start" button or have one of the auto connect options configured.
+#### Car Hotspot mode (recommended)
 
-**USB:**
+One-time setup:
+1. **Enable the car's WiFi hotspot.** On the head unit: Settings → Network & Internet → Hotspot (or your manufacturer's equivalent). Note the SSID and password — you'll need them once on each phone.
+2. **Connect each phone to the car's WiFi.** On the phone: Settings → WiFi → join the car's hotspot. Android remembers it like any home network, so this is a one-time tap per phone.
+3. **Open the Companion app** and tap **Start** (or configure auto-start under Auto-Start → WiFi and pick the car's SSID from the multi-select list).
+4. **Open OpenAutoLink on the car.** The phone chooser appears with every phone the car can see. Tap your phone to connect — that phone is now saved as your default and future drives auto-connect to it.
+
+Day-to-day:
+- Get in the car. Phone auto-rejoins the car WiFi. Companion auto-starts (if configured). Car app connects to your default phone automatically. Projection appears.
+- **Multiple drivers?** Both phones can be on the car's WiFi at the same time. The car connects to your default and ignores the others. Tap the floating phone icon on the projection screen to switch — the chooser shows every visible phone with online/offline status.
+- **Changing the default.** Tap a different phone in the chooser to switch to it for this drive, or use Settings → Connection → Known Phones → "Set Default" to change it permanently. Turn on "Always ask which phone to use" if you'd rather pick every time (useful for shared cars).
+- **Forgetting a phone.** Settings → Connection → Known Phones → "Forget" removes a phone. If it was your default, the chooser will appear on the next connect so you can pick a new one.
+
+> **Tip — assign a static IP to your phone for fastest reconnects.** The car app caches the last IP it saw the phone on so future reconnects skip discovery entirely (sub-second). If the car's DHCP server hands the phone a different IP next time, the cached IP is stale and the car has to fall back to mDNS / TCP sweep (still works, just slower — usually 3–10 seconds). Avoid that by giving your phone a static IP for the car's WiFi:
+>
+> - On the phone: Settings → WiFi → long-press the car's network → Modify network → IP settings → **Static**.
+> - Pick an address **inside the AP's DHCP range** — easiest way is to look at the IP the phone got the first time (e.g. `10.220.23.232` on a GM Blazer EV) and reuse that exact value.
+> - Keep the same gateway / DNS the AP gave you.
+>
+> One-time setup; after this, every drive reconnects in well under a second.
+
+#### Phone Hotspot mode
+
+1. In Settings → Connection on both apps, switch to **Phone Hotspot**.
+2. Turn on your phone's WiFi hotspot (Settings → Hotspot / Tethering).
+3. On the head unit: Settings → Network & Internet → WiFi → join the phone's hotspot.
+4. Open the Companion app and tap **Start**.
+5. Open OpenAutoLink on the car.
+
+> **Hotspot reconnect note:** When the car wakes from sleep, it should automatically rejoin the phone's hotspot — but in practice this can take 30+ seconds or occasionally fail. If the car doesn't reconnect, toggle the phone hotspot off and back on.
+
+#### USB
+
 1. Plug the phone into the head unit's USB port.
 2. OpenAutoLink detects the device and performs the AOA v2 handshake.
 3. Android Auto projection starts over the USB connection.
 
-> **GM AAOS USB permission note:** On GM head units, the system will ask for USB connection permission every time you plug in, even if you check "Always allow." This is a known GM AAOS limitation — the permission preference is not persisted. There is no workaround; just tap Allow each time.
+> **GM AAOS USB permission note:** GM head units ask for USB connection permission every time, even with "Always allow" checked. Known GM AAOS bug — there is no workaround.
 
 ### 4. Recommended Settings
 
 - **Uninstall or disable music apps on the head unit.** If Spotify, YouTube Music, or another music app is installed on both the AAOS head unit and the phone, media controls (steering wheel buttons, play/pause, skip) can get confused — the car may try to control the AAOS app and the AA app simultaneously. Uninstall or disable the AAOS versions (Settings → Apps) so media controls go exclusively to the phone's AA session.
 - **Disable the car's "Hey Google" detection.** The AAOS built-in Google Assistant and Android Auto's assistant will both try to respond to "Hey Google," causing conflicts. Turn off "Hey Google" detection in the car's Settings → Google → Google Assistant. The steering wheel voice button will still trigger the car's built-in assistant (this can't be changed), but "Hey Google" will go exclusively to the AA session on the phone.
-- You can either unpaid your phone entirely from the car BT, or what I do is leave it paired, but if you do: go into your phones BT setting for the car specific connection and toggle off Media and Phone Calls. those now flow through AA natively. leaving them on will cause GM's built in apps to take over rather than AA.
+- You can either unpair your phone entirely from the car BT, or what I do is leave it paired, but if you do: go into your phones BT settings for the car specific connection and toggle off Media and Phone Calls. those now flow through AA natively. leaving them on will cause GM's built in apps to take over rather than AA.
 
 ### Video and Display
 
@@ -231,7 +289,6 @@ The original architecture used an SBC (single-board computer) running a C++ brid
 ## Known Issues
 
 - **H.265 video may appear green-tinted** on first connection for 30–45 seconds. May be Qualcomm-specific — not yet confirmed on other SoCs
-- **Connection/Reconnecting** this is still buggy. sometimes it will just work, sometimes the app may freeze and require somewhat of a dance to get connected. WIP.
 
 If you encounter other problems, please [open an issue](https://github.com/mossyhub/openautolink/issues).
 

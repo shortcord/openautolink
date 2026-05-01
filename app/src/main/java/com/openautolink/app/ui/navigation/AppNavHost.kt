@@ -41,7 +41,7 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                 onNavigateToSettings = {
                     // Legacy — no longer used, settings are an overlay now
                 },
-                settingsOverlay = { onBack ->
+                settingsOverlay = { onBack, onShowDiagnostics ->
                     SettingsScreen(
                         viewModel = settingsViewModel,
                         sessionState = projectionUiState.sessionState,
@@ -50,19 +50,15 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                             onBack()
                         },
                         onBack = onBack,
-                        onNavigateToDiagnostics = {
-                            navController.navigate(AppDestinations.DIAGNOSTICS)
-                        },
+                        onNavigateToDiagnostics = onShowDiagnostics,
                         onNavigateToSafeAreaEditor = {
                             navController.navigate(AppDestinations.SAFE_AREA_EDITOR)
                         },
                     )
                 },
-            )
-        }
-        composable(AppDestinations.DIAGNOSTICS) {
-            DiagnosticsScreen(
-                onBack = { navController.popBackStack() }
+                diagnosticsOverlay = { onBack ->
+                    DiagnosticsScreen(onBack = onBack)
+                },
             )
         }
         composable(AppDestinations.SAFE_AREA_EDITOR) {

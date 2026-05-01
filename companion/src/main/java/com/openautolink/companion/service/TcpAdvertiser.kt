@@ -32,6 +32,14 @@ class TcpAdvertiser(
     companion object {
         private const val TAG = "OAL_TcpAdv"
         const val PORT = 5277
+        /**
+         * Dedicated single-purpose port for the identity probe. The companion
+         * answers `OAL?\n` with `OAL!{phone_id}\t{friendly_name}\n`. Used by
+         * the car's subnet sweep + last-known-IP fallback when mDNS is
+         * unavailable. Kept separate from [PORT] so we never risk consuming
+         * bytes from a real AA stream.
+         */
+        const val IDENTITY_PORT = 5278
         const val NSD_SERVICE_TYPE = "_openautolink._tcp"
         const val NSD_SERVICE_NAME = "OpenAutoLink"
 
@@ -43,6 +51,7 @@ class TcpAdvertiser(
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var serverSocket: ServerSocket? = null
+    private var identityServerSocket: ServerSocket? = null
     private var activeProxy: AaProxy? = null
     private var activeCarSocket: Socket? = null
     private var nsdManager: NsdManager? = null
@@ -73,10 +82,12 @@ class TcpAdvertiser(
                 CompanionLog.i(TAG, "Listening on 0.0.0.0:$PORT")
 
                 registerNsd()
+                startIdentityServer()
 
                 while (isRunning) {
                     val carSocket = server.accept()
-                    CompanionLog.i(TAG, "Car connected from ${carSocket.inetAddress.hostAddress}")
+                    val remoteIp = carSocket.inetAddress?.hostAddress ?: "unknown"
+                    CompanionLog.i(TAG, "Car connected from $remoteIp")
                     stateListener.onConnecting()
                     handleCarConnection(carSocket)
                 }
@@ -85,6 +96,79 @@ class TcpAdvertiser(
                     CompanionLog.e(TAG, "TCP server error: ${e.message}")
                 }
             }
+        }
+    }
+
+    /**
+     * Run a tiny dedicated server on [IDENTITY_PORT] that answers identity
+     * probes. Each connection: peer sends `OAL?\n`, we reply with
+     * `OAL!{phone_id}\t{friendly_name}\n` and close. Single-purpose — never
+     * carries AA traffic. Used by the car-side subnet sweep + last-known-IP
+     * verification when mDNS is unavailable.
+     */
+    private fun startIdentityServer() {
+        scope.launch {
+            try {
+                val server = ServerSocket()
+                server.reuseAddress = true
+                server.bind(InetSocketAddress(IDENTITY_PORT))
+                identityServerSocket = server
+                CompanionLog.i(TAG, "Identity probe server listening on 0.0.0.0:$IDENTITY_PORT")
+                while (isRunning) {
+                    val client = server.accept()
+                    val remoteIp = client.inetAddress?.hostAddress ?: "unknown"
+                    // Bound the entire probe lifecycle (including the write
+                    // back) so a tarpitted peer can't pin a coroutine forever.
+                    scope.launch {
+                        kotlinx.coroutines.withTimeoutOrNull(2_000) {
+                            respondIdentityProbe(client, remoteIp)
+                        } ?: run {
+                            CompanionLog.d(TAG, "Identity probe timed out for $remoteIp")
+                            try { client.close() } catch (_: Exception) {}
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (isRunning) CompanionLog.w(TAG, "Identity server error: ${e.message}")
+            }
+        }
+    }
+
+    private fun respondIdentityProbe(socket: Socket, remoteIp: String) {
+        try {
+            socket.soTimeout = 1000
+            val input = socket.getInputStream()
+            val buf = ByteArray(5)
+            var read = 0
+            while (read < 5) {
+                val r = try { input.read(buf, read, 5 - read) } catch (_: Exception) { -1 }
+                if (r <= 0) break
+                read += r
+            }
+            val isProbe = read == 5 &&
+                buf[0] == 'O'.code.toByte() && buf[1] == 'A'.code.toByte() &&
+                buf[2] == 'L'.code.toByte() && buf[3] == '?'.code.toByte() &&
+                buf[4] == '\n'.code.toByte()
+            if (!isProbe) {
+                CompanionLog.d(TAG, "Identity probe from $remoteIp: bad/empty request ($read bytes)")
+                return
+            }
+            val prefs = context.getSharedPreferences(
+                com.openautolink.companion.CompanionPrefs.NAME,
+                Context.MODE_PRIVATE,
+            )
+            val phoneId = com.openautolink.companion.CompanionPrefs.getOrCreatePhoneId(prefs)
+            val friendlyName = com.openautolink.companion.CompanionPrefs.getFriendlyName(prefs)
+            val response = "OAL!$phoneId\t$friendlyName\n".toByteArray(Charsets.UTF_8)
+            socket.getOutputStream().apply {
+                write(response)
+                flush()
+            }
+            CompanionLog.d(TAG, "Identity probe answered for $remoteIp")
+        } catch (e: Exception) {
+            CompanionLog.d(TAG, "Identity probe failed for $remoteIp: ${e.message}")
+        } finally {
+            try { socket.close() } catch (_: Exception) {}
         }
     }
 
@@ -211,16 +295,35 @@ class TcpAdvertiser(
         activeCarSocket = null
         runCatching { serverSocket?.close() }
         serverSocket = null
+        runCatching { identityServerSocket?.close() }
+        identityServerSocket = null
         scope.cancel()
     }
 
     private fun registerNsd() {
         try {
             nsdManager = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
+            val prefs = context.getSharedPreferences(
+                com.openautolink.companion.CompanionPrefs.NAME,
+                Context.MODE_PRIVATE,
+            )
+            val phoneId = com.openautolink.companion.CompanionPrefs.getOrCreatePhoneId(prefs)
+            val friendlyName = com.openautolink.companion.CompanionPrefs.getFriendlyName(prefs)
+
+            // Per-phone unique service name so two phones on the same car AP don't
+            // collide. NSD will further disambiguate with " (1)" suffixes if needed.
+            val uniqueServiceName = "$NSD_SERVICE_NAME-${phoneId.take(8)}"
+
             val serviceInfo = NsdServiceInfo().apply {
-                serviceName = NSD_SERVICE_NAME
+                serviceName = uniqueServiceName
                 serviceType = NSD_SERVICE_TYPE
                 port = PORT
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                    setAttribute("phone_id", phoneId)
+                    setAttribute("friendly_name", friendlyName)
+                    setAttribute("version", android.os.Build.MODEL ?: "")
+                    setAttribute("proto", "1")
+                }
             }
             nsdRegistrationListener = object : NsdManager.RegistrationListener {
                 override fun onRegistrationFailed(si: NsdServiceInfo, errorCode: Int) {
@@ -230,7 +333,7 @@ class TcpAdvertiser(
                     CompanionLog.w(TAG, "mDNS unregistration failed: error $errorCode")
                 }
                 override fun onServiceRegistered(si: NsdServiceInfo) {
-                    CompanionLog.i(TAG, "mDNS registered: ${si.serviceName} on port $PORT")
+                    CompanionLog.i(TAG, "mDNS registered: ${si.serviceName} on port $PORT (phone_id=${phoneId.take(8)}, name=$friendlyName)")
                 }
                 override fun onServiceUnregistered(si: NsdServiceInfo) {
                     CompanionLog.d(TAG, "mDNS unregistered")

@@ -1,6 +1,8 @@
 package com.openautolink.app.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.DisplaySettings
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VideoSettings
 import androidx.compose.material3.Button
@@ -47,6 +50,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -63,10 +67,12 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 import com.openautolink.app.session.SessionState
+import com.openautolink.app.data.AppPreferences
 import androidx.compose.material3.FilterChip
 
 private enum class SettingsTab(
@@ -78,6 +84,7 @@ private enum class SettingsTab(
     VIDEO("Video", Icons.Default.VideoSettings),
     AUDIO("Audio", Icons.Default.Mic),
     INPUT("Input", Icons.Default.Keyboard),
+    EV("EV", Icons.Default.BatteryChargingFull),
     DIAGNOSTICS("Diagnostics", Icons.Default.BugReport),
 }
 
@@ -192,6 +199,7 @@ fun SettingsScreen(
                         SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
                         SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
                         SettingsTab.INPUT -> InputTab(viewModel, uiState)
+                        SettingsTab.EV -> EvEnergyModelTab()
                         SettingsTab.DIAGNOSTICS -> DiagnosticsSettingsTab(
                             viewModel, uiState, onNavigateToDiagnostics
                         )
@@ -273,39 +281,34 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        // --- Transport Method ---
-        SectionHeader("Transport Method")
+        // --- Connection Mode (phone-hotspot vs car-hotspot) ---
+        val connectionMode by viewModel.connectionMode.collectAsStateWithLifecycle()
+        val knownPhones by viewModel.knownPhones.collectAsStateWithLifecycle()
+        val defaultPhoneId by viewModel.defaultPhoneId.collectAsStateWithLifecycle()
 
+        SectionHeader("Connection Mode")
         Spacer(modifier = Modifier.height(8.dp))
-
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             listOf(
-                // Nearby mode is hidden for now: on GM AAOS the system-level
-                // permissions needed to drive the BT→WiFi handoff aren't
-                // grantable to a non-system app, so users always have to
-                // pre-connect to the phone hotspot manually anyway, which
-                // makes Hotspot mode the only working path. Code is kept
-                // intact for a future revisit.
-                // "nearby" to "Google Nearby",
-                "hotspot" to "Phone Hotspot",
-                "usb" to "USB Cable",
+                AppPreferences.CONNECTION_MODE_CAR_HOTSPOT to "Car Hotspot",
+                AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT to "Phone Hotspot",
             ).forEach { (mode, label) ->
                 FilterChip(
-                    selected = uiState.directTransport == mode,
-                    onClick = { viewModel.updateDirectTransport(mode) },
+                    selected = connectionMode == mode,
+                    onClick = { viewModel.updateConnectionMode(mode) },
                     label = { Text(label) },
                 )
             }
         }
-
         Text(
-            text = when (uiState.directTransport) {
-                "nearby" -> "Connect via Google Nearby Connections (Bluetooth → WiFi Direct). Requires companion app on phone. Supports multi-phone selection."
-                "hotspot" -> "Connect via phone's WiFi hotspot (TCP). Car must be on the phone's hotspot network. Companion app listens on port 5277."
-                "usb" -> "Connect via USB cable. Plug phone into car USB port and grant permission when prompted. No companion app or WiFi needed."
+            text = when (connectionMode) {
+                AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT ->
+                    "Phone is the WiFi access point; the car connects to it. Optimized for one phone."
+                AppPreferences.CONNECTION_MODE_CAR_HOTSPOT ->
+                    "Car's hotspot is the WiFi network; phones connect to it. Multiple phones can be online at once and the floating switcher button picks the active one."
                 else -> ""
             },
             style = MaterialTheme.typography.bodySmall,
@@ -313,80 +316,202 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // --- Default Phone (Nearby transport only) ---
-        if (uiState.directTransport == "nearby") {
-            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.5f))
-            Spacer(modifier = Modifier.height(16.dp))
-            SectionHeader("Default Phone")
-            Spacer(modifier = Modifier.height(4.dp))
-
-            val defaultPhone = uiState.defaultPhoneName
-            if (defaultPhone.isNotBlank()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
+        // Known phones list — only relevant in Car Hotspot mode.
+        if (connectionMode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+            val alwaysAsk by viewModel.alwaysAskPhone.collectAsStateWithLifecycle()
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Always ask which phone to use", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        defaultPhone,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium,
+                        "When on, the chooser appears on every connect even if a default phone is set. Useful for shared cars.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    FilledTonalButton(
-                        onClick = { viewModel.clearDefaultPhone() },
-                    ) {
-                        Text("Clear")
+                }
+                androidx.compose.material3.Switch(
+                    checked = alwaysAsk,
+                    onCheckedChange = { viewModel.setAlwaysAskPhone(it) },
+                )
+            }
+
+            // Network interface selector — auto by default, manual override
+            // for users on hardware where auto-detection picks the wrong NIC.
+            val autoIface by viewModel.carHotspotAutoInterface.collectAsStateWithLifecycle()
+            val manualIfaceName by viewModel.carHotspotInterfaceName.collectAsStateWithLifecycle()
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto-detect network interface", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "When on, the car app picks the right network interface automatically (works for most GM head units). Turn off to choose one yourself.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                androidx.compose.material3.Switch(
+                    checked = autoIface,
+                    onCheckedChange = { viewModel.setCarHotspotAutoInterface(it) },
+                )
+            }
+
+            if (!autoIface) {
+                // Snapshot the live interface list when the dropdown opens so
+                // we don't enumerate every recomposition. Pulled from the
+                // singleton PhoneDiscovery via the ViewModel.
+                var ifaceMenuOpen by remember { mutableStateOf(false) }
+                var interfaces by remember { mutableStateOf(viewModel.listCarHotspotInterfaces()) }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Network interface", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (manualIfaceName.isBlank()) "(none selected)" else manualIfaceName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Box {
+                        FilledTonalButton(
+                            onClick = {
+                                interfaces = viewModel.listCarHotspotInterfaces()
+                                ifaceMenuOpen = true
+                            },
+                        ) {
+                            Text("Choose")
+                        }
+                        androidx.compose.material3.DropdownMenu(
+                            expanded = ifaceMenuOpen,
+                            onDismissRequest = { ifaceMenuOpen = false },
+                        ) {
+                            if (interfaces.isEmpty()) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("No real interfaces found") },
+                                    onClick = { ifaceMenuOpen = false },
+                                    enabled = false,
+                                )
+                            } else {
+                                interfaces.forEach { (name, ip) ->
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = { Text("$name  ($ip)") },
+                                        onClick = {
+                                            viewModel.setCarHotspotInterfaceName(name)
+                                            ifaceMenuOpen = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.5f))
+            Spacer(modifier = Modifier.height(16.dp))
+            SectionHeader("Known Phones")
+            Spacer(modifier = Modifier.height(4.dp))
+            if (knownPhones.isEmpty()) {
                 Text(
-                    "Auto-connects to this phone when discovered. Use the Switch Phone button on the projection screen to change.",
+                    "No phones connected yet. The first phone that connects will be added here automatically and can be set as the default.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             } else {
-                Text(
-                    "No default phone set. Will connect to the first phone found.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    knownPhones.forEach { kp ->
+                        val isDefault = kp.phoneId == defaultPhoneId
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isDefault) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        kp.friendlyName,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                    if (isDefault) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "DEFAULT",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "id ${kp.phoneId.take(8)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (!isDefault) {
+                                androidx.compose.material3.TextButton(
+                                    onClick = { viewModel.setDefaultPhoneId(kp.phoneId) },
+                                ) {
+                                    Text("Set Default", fontSize = 12.sp)
+                                }
+                            }
+                            androidx.compose.material3.TextButton(
+                                onClick = { viewModel.forgetKnownPhone(kp.phoneId) },
+                            ) {
+                                Text("Forget", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
             }
-            Spacer(modifier = Modifier.height(16.dp))
         }
 
-        // --- Hotspot Credentials removed ---
-        // TCP transport connects to phone's WiFi gateway automatically.
-        // User connects to the phone's hotspot via Android WiFi settings.
+        Spacer(modifier = Modifier.height(20.dp))
+        HorizontalDivider(modifier = Modifier.fillMaxWidth(0.5f))
+        Spacer(modifier = Modifier.height(16.dp))
 
         // --- Manual IP (emulator/testing) ---
-        if (uiState.directTransport == "hotspot") {
-            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.5f))
-            Spacer(modifier = Modifier.height(16.dp))
-            SectionHeader("Manual IP Address")
-            Spacer(modifier = Modifier.height(4.dp))
+        SectionHeader("Manual IP Address")
+        Spacer(modifier = Modifier.height(4.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Checkbox(
-                    checked = uiState.manualIpEnabled,
-                    onCheckedChange = { viewModel.updateManualIpEnabled(it) },
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "Specify companion IP manually",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-            }
-
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(
+                checked = uiState.manualIpEnabled,
+                onCheckedChange = { viewModel.updateManualIpEnabled(it) },
+            )
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "For testing environments only (e.g., AAOS emulator on a PC). " +
-                        "In normal use, the car and phone find each other automatically via the hotspot gateway.",
-                style = MaterialTheme.typography.bodySmall,
+                "Specify companion IP manually",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+
+        Text(
+            text = "For testing environments only (e.g., AAOS emulator on a PC). " +
+                    "In normal use, the car and phone find each other automatically via discovery.",
+            style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
@@ -427,7 +552,6 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-        }
     }
 }
 
@@ -1707,26 +1831,25 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
     // Key capture dialog
     if (captureTarget != null) {
         val target = captureTarget!!
-        val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
-        LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+        // Subscribe to the global Activity-level key bus while the dialog is
+        // open. Compose `onKeyEvent` does NOT receive steering-wheel / remote
+        // keys inside an AlertDialog (different window, no focus), so we hook
+        // MainActivity.dispatchKeyEvent via KeyCaptureBus instead.
+        DisposableEffect(target) {
+            com.openautolink.app.input.KeyCaptureBus.listener = { code ->
+                val name = android.view.KeyEvent.keyCodeToString(code)
+                    .removePrefix("KEYCODE_")
+                lastDetectedKey = code to name
+            }
+            onDispose { com.openautolink.app.input.KeyCaptureBus.listener = null }
+        }
 
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { captureTarget = null },
+            onDismissRequest = { captureTarget = null; lastDetectedKey = null },
             title = { Text("Assign key to: ${target.label}") },
             text = {
-                Column(
-                    modifier = Modifier
-                        .focusRequester(focusRequester)
-                        .onKeyEvent { event ->
-                            if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_UP) {
-                                val code = event.nativeKeyEvent.keyCode
-                                val name = android.view.KeyEvent.keyCodeToString(code)
-                                    .removePrefix("KEYCODE_")
-                                lastDetectedKey = code to name
-                            }
-                            true // consume all key events
-                        }
-                ) {
+                Column {
                     Text("Press any physical button (steering wheel, remote, keyboard) now.")
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
