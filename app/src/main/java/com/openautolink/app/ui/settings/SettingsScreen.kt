@@ -289,8 +289,8 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             listOf(
-                AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT to "Phone Hotspot",
                 AppPreferences.CONNECTION_MODE_CAR_HOTSPOT to "Car Hotspot",
+                AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT to "Phone Hotspot",
             ).forEach { (mode, label) ->
                 FilterChip(
                     selected = connectionMode == mode,

@@ -130,6 +130,19 @@ class SessionManager(
     val vehicleData: StateFlow<ControlMessage.VehicleData>?
         get() = _vehicleDataForwarder?.latestVehicleData
 
+    /**
+     * Throttle state for [DiagnosticLog] energy-model spam. The vehicle
+     * data forwarder fires whenever any tracked VHAL property changes —
+     * with EV charging that can be many times per second per Wh tick.
+     * We only log when one of the headline numbers actually moved or at
+     * least [VEM_LOG_MIN_GAP_MS] elapsed.
+     */
+    private var lastVemLogMs: Long = 0L
+    private var lastVemBatteryWh: Int = Int.MIN_VALUE
+    private var lastVemRangeM: Int = Int.MIN_VALUE
+    private var lastVemChargeW: Int = Int.MIN_VALUE
+    private val VEM_LOG_MIN_GAP_MS: Long = 30_000L
+
     // IMU forwarder
     private var _imuForwarder: ImuForwarder? = null
 
@@ -308,13 +321,30 @@ class SessionManager(
                     }
                     vd.rpmE3?.let { session.sendRpm(it) }
                     if (vd.evBatteryLevelWh != null || vd.evBatteryCapacityWh != null) {
-                        DiagnosticLog.i("vem", "sendEnergyModel: level=${vd.evBatteryLevelWh?.toInt()}Wh cap=${vd.evBatteryCapacityWh?.toInt()}Wh range=${((vd.rangeKm ?: 0f) * 1000).toInt()}m charge=${vd.evChargeRateW?.toInt()}W")
-                        session.sendEnergyModel(
-                            vd.evBatteryLevelWh?.toInt() ?: 0,
-                            vd.evBatteryCapacityWh?.toInt() ?: 0,
-                            ((vd.rangeKm ?: 0f) * 1000).toInt(),
-                            vd.evChargeRateW?.toInt() ?: 0
-                        )
+                        val batteryWh = vd.evBatteryLevelWh?.toInt() ?: 0
+                        val capacityWh = vd.evBatteryCapacityWh?.toInt() ?: 0
+                        val rangeM = ((vd.rangeKm ?: 0f) * 1000).toInt()
+                        val chargeW = vd.evChargeRateW?.toInt() ?: 0
+                        val now = SystemClock.elapsedRealtime()
+                        // Suppress identical / near-identical emits — log only
+                        // when a value moved meaningfully or [VEM_LOG_MIN_GAP_MS]
+                        // elapsed. First emit always logs.
+                        val movedBattery = kotlin.math.abs(batteryWh - lastVemBatteryWh) >= 100
+                        val movedRange = kotlin.math.abs(rangeM - lastVemRangeM) >= 500
+                        val movedCharge = kotlin.math.abs(chargeW - lastVemChargeW) >= 100
+                        val firstEmit = lastVemLogMs == 0L
+                        val staleEnough = (now - lastVemLogMs) >= VEM_LOG_MIN_GAP_MS
+                        if (firstEmit || movedBattery || movedRange || movedCharge || staleEnough) {
+                            DiagnosticLog.i(
+                                "vem",
+                                "sendEnergyModel: level=${batteryWh}Wh cap=${capacityWh}Wh range=${rangeM}m charge=${chargeW}W",
+                            )
+                            lastVemLogMs = now
+                            lastVemBatteryWh = batteryWh
+                            lastVemRangeM = rangeM
+                            lastVemChargeW = chargeW
+                        }
+                        session.sendEnergyModel(batteryWh, capacityWh, rangeM, chargeW)
                     }
                 },
                 onIgnitionOn = { /* aasdk mode doesn't need ignition-based reconnect */ }

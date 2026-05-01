@@ -189,12 +189,13 @@ One-time setup:
 1. **Enable the car's WiFi hotspot.** On the head unit: Settings → Network & Internet → Hotspot (or your manufacturer's equivalent). Note the SSID and password — you'll need them once on each phone.
 2. **Connect each phone to the car's WiFi.** On the phone: Settings → WiFi → join the car's hotspot. Android remembers it like any home network, so this is a one-time tap per phone.
 3. **Open the Companion app** and tap **Start** (or configure auto-start under Auto-Start → WiFi and pick the car's SSID from the multi-select list).
-4. **Open OpenAutoLink on the car.** It auto-discovers the phone via mDNS + TCP and starts projecting.
+4. **Open OpenAutoLink on the car.** The phone chooser appears with every phone the car can see. Tap your phone to connect — that phone is now saved as your default and future drives auto-connect to it.
 
 Day-to-day:
-- Get in the car. Phone auto-rejoins the car WiFi. Companion auto-starts (if configured). Car app connects automatically. Projection appears.
-- **Multiple drivers?** Both phones can be on the car's WiFi at the same time. The car app picks the preferred phone (your "default") and ignores the others. Tap the floating phone icon on the projection screen to switch — the chooser shows every connected phone with online/offline status.
-- **First connection picks your default.** The first phone you successfully connect to is auto-promoted to "default" so future drives connect to it without prompting. Change it any time in Settings → Connection → Known Phones, or set "Always ask which phone to use" if you'd rather pick every time.
+- Get in the car. Phone auto-rejoins the car WiFi. Companion auto-starts (if configured). Car app connects to your default phone automatically. Projection appears.
+- **Multiple drivers?** Both phones can be on the car's WiFi at the same time. The car connects to your default and ignores the others. Tap the floating phone icon on the projection screen to switch — the chooser shows every visible phone with online/offline status.
+- **Changing the default.** Tap a different phone in the chooser to switch to it for this drive, or use Settings → Connection → Known Phones → "Set Default" to change it permanently. Turn on "Always ask which phone to use" if you'd rather pick every time (useful for shared cars).
+- **Forgetting a phone.** Settings → Connection → Known Phones → "Forget" removes a phone. If it was your default, the chooser will appear on the next connect so you can pick a new one.
 
 #### Phone Hotspot mode
 

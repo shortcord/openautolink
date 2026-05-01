@@ -118,13 +118,7 @@ data class DebugProbeState(
     val propsLoading: Boolean = false,
     val adbWifiStatus: String = "",
     val deviceInfo: Map<String, String> = emptyMap(),
-    val logServerRunning: Boolean = false,
-    val logServerClients: Int = 0,
-    val logServerLog: List<String> = emptyList(),
     val intentResults: List<Pair<String, Boolean>> = emptyList(),
-    // Reverse ADB tunnel
-    val tunnel: com.openautolink.app.diagnostics.ReverseTunnel.TunnelState =
-        com.openautolink.app.diagnostics.ReverseTunnel.TunnelState(),
     // USB devices
     val usbDevices: List<com.openautolink.app.diagnostics.DeviceDebugProbe.UsbDeviceInfo> = emptyList(),
     val sysfsDevices: List<Map<String, String>> = emptyList(),
@@ -220,12 +214,6 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
     private val _debugProbe = MutableStateFlow(DebugProbeState())
     private var tcpListenerJob: Job? = null
     private var tcpServerSocket: ServerSocket? = null
-
-    // Remote log server for TCP streaming — singleton, survives screen navigation
-    private val remoteLogServer = com.openautolink.app.diagnostics.RemoteLogServer.instance
-
-    // Reverse ADB tunnel — singleton, survives screen navigation
-    private val reverseTunnel = com.openautolink.app.diagnostics.ReverseTunnel.instance
 
     val uiState: StateFlow<DiagnosticsUiState> = combine(
         _system,
@@ -358,30 +346,6 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             adbWifiStatus = com.openautolink.app.diagnostics.DeviceDebugProbe.getAdbWifiStatus(application),
             deviceInfo = com.openautolink.app.diagnostics.DeviceDebugProbe.getDeviceInfo(),
         )
-
-        // Observe remote log server state
-        viewModelScope.launch {
-            remoteLogServer.isRunning.collect { running ->
-                _debugProbe.value = _debugProbe.value.copy(logServerRunning = running)
-            }
-        }
-        viewModelScope.launch {
-            remoteLogServer.clientCount.collect { count ->
-                _debugProbe.value = _debugProbe.value.copy(logServerClients = count)
-            }
-        }
-        viewModelScope.launch {
-            remoteLogServer.statusLog.collect { log ->
-                _debugProbe.value = _debugProbe.value.copy(logServerLog = log)
-            }
-        }
-
-        // Observe reverse tunnel state
-        viewModelScope.launch {
-            reverseTunnel.state.collect { tunnelState ->
-                _debugProbe.value = _debugProbe.value.copy(tunnel = tunnelState)
-            }
-        }
     }
 
     // ── Network Probe ─────────────────────────────────────────────────
@@ -663,26 +627,6 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
 
     // ── Debug Probe ─────────────────────────────────────────────────
 
-    fun toggleLogServer() {
-        if (remoteLogServer.isRunning.value) {
-            remoteLogServer.stop()
-            com.openautolink.app.diagnostics.DiagnosticLog.remoteLogServer = null
-        } else {
-            com.openautolink.app.diagnostics.DiagnosticLog.remoteLogServer = remoteLogServer
-            remoteLogServer.start()
-        }
-    }
-
-    fun connectLogServerOutbound(host: String, port: Int = 6555) {
-        if (remoteLogServer.isRunning.value) {
-            remoteLogServer.stop()
-            com.openautolink.app.diagnostics.DiagnosticLog.remoteLogServer = null
-        } else {
-            com.openautolink.app.diagnostics.DiagnosticLog.remoteLogServer = remoteLogServer
-            remoteLogServer.connectOutbound(host, port)
-        }
-    }
-
     fun scanAdbPorts() {
         _debugProbe.value = _debugProbe.value.copy(portScanInProgress = true)
         viewModelScope.launch {
@@ -724,28 +668,6 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             desc to canResolve
         }
         _debugProbe.value = _debugProbe.value.copy(intentResults = results)
-    }
-
-    // ── Reverse ADB Tunnel ─────────────────────────────────────────
-
-    fun startTunnel(relayHost: String, relayPort: Int = 6556, localPort: Int = 5555) {
-        reverseTunnel.start(relayHost, relayPort, localPort)
-    }
-
-    fun stopTunnel() {
-        reverseTunnel.stop()
-    }
-
-    fun tryEnableAdbTcp() {
-        val context = getApplication<Application>()
-        viewModelScope.launch {
-            val log = com.openautolink.app.diagnostics.DeviceDebugProbe.tryEnableAdbTcp(context)
-            val current = _debugProbe.value.tunnel.statusLog
-            val updated = _debugProbe.value.tunnel.copy(
-                statusLog = (current + listOf("--- Enable ADB TCP ---") + log).takeLast(30)
-            )
-            _debugProbe.value = _debugProbe.value.copy(tunnel = updated)
-        }
     }
 
     // ── USB Scanner ─────────────────────────────────────────────────
@@ -1087,9 +1009,6 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
         stopLocalHotspot()
         stopP2pProbe()
         stopPhoneDiscovery()
-        // Note: remoteLogServer and reverseTunnel are NOT stopped here —
-        // they are application-scoped singletons that survive screen navigation.
-        // User explicitly stops them via the UI.
         diagnosticVehicleForwarder?.stop()
         diagnosticVehicleForwarder = null
         com.openautolink.app.diagnostics.DiagnosticLog.stopLocalCapture()

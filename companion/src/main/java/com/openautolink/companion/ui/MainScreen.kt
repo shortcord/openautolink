@@ -222,17 +222,6 @@ fun MainScreen(
             }
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 SegmentedButton(
-                    selected = connectionMode == CompanionPrefs.MODE_PHONE_HOTSPOT,
-                    onClick = {
-                        connectionMode = CompanionPrefs.MODE_PHONE_HOTSPOT
-                        prefs.edit().putString(
-                            CompanionPrefs.CONNECTION_MODE,
-                            CompanionPrefs.MODE_PHONE_HOTSPOT,
-                        ).apply()
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(0, 2),
-                ) { Text("Phone Hotspot") }
-                SegmentedButton(
                     selected = connectionMode == CompanionPrefs.MODE_CAR_HOTSPOT,
                     onClick = {
                         connectionMode = CompanionPrefs.MODE_CAR_HOTSPOT
@@ -241,8 +230,19 @@ fun MainScreen(
                             CompanionPrefs.MODE_CAR_HOTSPOT,
                         ).apply()
                     },
-                    shape = SegmentedButtonDefaults.itemShape(1, 2),
+                    shape = SegmentedButtonDefaults.itemShape(0, 2),
                 ) { Text("Car Hotspot") }
+                SegmentedButton(
+                    selected = connectionMode == CompanionPrefs.MODE_PHONE_HOTSPOT,
+                    onClick = {
+                        connectionMode = CompanionPrefs.MODE_PHONE_HOTSPOT
+                        prefs.edit().putString(
+                            CompanionPrefs.CONNECTION_MODE,
+                            CompanionPrefs.MODE_PHONE_HOTSPOT,
+                        ).apply()
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(1, 2),
+                ) { Text("Phone Hotspot") }
             }
             Text(
                 text = when (connectionMode) {

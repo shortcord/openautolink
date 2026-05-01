@@ -19,7 +19,7 @@ import java.util.Locale
  * All files go under an `openautolink/logs/` directory.
  *
  * Each start creates a new file: `oal_2026-04-28_14-30-00.log`
- * Lines use the same format as [RemoteLogServer]:
+ * Lines use the format:
  *   `HH:mm:ss.SSS I/tag: message`
  *
  * Thread-safe: all writes go through a synchronized block.

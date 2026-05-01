@@ -237,6 +237,13 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     @Volatile private var hasConnected = false
+    /**
+     * Set while a [connect] coroutine is between claiming the slot and
+     * handing off to [SessionManager.start]. Prevents the parallel-connect
+     * storm we saw in early logs (21 simultaneous connect() invocations
+     * each running the full resolve pipeline).
+     */
+    @Volatile private var connectInFlight = false
     /** Throttle for the auto-reconnect collector (Car Hotspot mode). */
     @Volatile private var lastAutoReconnectAttemptMs: Long = 0L
     private val AUTO_RECONNECT_MIN_GAP_MS = 10_000L
@@ -267,29 +274,51 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      * by-value here so a concurrent caller can't race on a shared field.
      */
     fun connect(overrideIp: String?) {
-        // Behavior 2: when "Always ask" is on AND we don't have an explicit
-        // override (i.e. this is an auto-connect / startup path), pop the
-        // chooser instead of dialing. Explicit picks bypass this gate
-        // because the user has already made their choice.
+        // Open the chooser instead of auto-connecting when:
+        //   - "Always ask" is on (Behavior 2), OR
+        //   - No default phone is set yet (first-run or after Forget — the
+        //     user hasn't told us which phone to prefer, so don't guess).
+        // Explicit picks pass overrideIp and bypass this gate entirely.
         if (overrideIp == null) {
             val mode = connectionMode.value
-            if (mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT && alwaysAskPhone.value) {
-                OalLog.i(TAG, "Always-ask is on; opening chooser instead of auto-connecting")
-                _showPhoneChooser.value = true
-                phoneDiscovery.start()
-                // No sweep here — mDNS handles the common case; user taps
-                // Scan in the chooser if it doesn't surface their phone.
-                return
+            if (mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+                val noDefault = defaultPhoneId.value.isBlank()
+                val askMode = alwaysAskPhone.value
+                if (noDefault || askMode) {
+                    val reason = when {
+                        askMode && noDefault -> "always-ask + no default"
+                        askMode -> "always-ask is on"
+                        else -> "no default phone set"
+                    }
+                    OalLog.i(TAG, "Opening chooser instead of auto-connecting: $reason")
+                    _showPhoneChooser.value = true
+                    phoneDiscovery.start()
+                    // No sweep here — mDNS handles the common case; user taps
+                    // Scan in the chooser if it doesn't surface their phone.
+                    return
+                }
             }
         }
         synchronized(connectLock) {
+            // Reentrancy guard. Three states:
+            //   1. Already streaming/connecting → no-op.
+            //   2. A previous connect() coroutine hasn't finished its
+            //      resolve+start phase yet → no-op (otherwise N parallel
+            //      callers each run the full pipeline; observed 21x in logs).
+            //   3. Truly idle → claim the slot and proceed.
             if (hasConnected && sessionManager.sessionState.value != SessionState.IDLE) {
                 sessionManager.ensureClusterAlive()
                 return
             }
+            if (connectInFlight) {
+                OalLog.d(TAG, "connect() ignored — another connect coroutine is already in flight")
+                return
+            }
+            connectInFlight = true
             hasConnected = true
         }
         viewModelScope.launch {
+            try {
             val codec = preferences.videoCodec.first()
             val micSrc = preferences.micSource.first()
             val scalingMode = preferences.videoScalingMode.first()
@@ -365,17 +394,6 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     val pickedId = carHotspotPhone.phoneId
                     if (!pickedId.isNullOrBlank()) {
                         _activePhoneId.value = pickedId
-                        // Promote to default on first successful auto-connect
-                        // (Behavior 1 is "default sticks"). Idempotent — only
-                        // happens if no default is currently set.
-                        val currentDefault = preferences.defaultPhoneId.first()
-                        if (currentDefault.isBlank()) {
-                            preferences.setDefaultPhoneId(pickedId)
-                            OalLog.i(
-                                TAG,
-                                "Auto-promoted ${carHotspotPhone.friendlyName ?: pickedId.take(8)} to default phone",
-                            )
-                        }
                     }
                 }
             }
@@ -412,13 +430,72 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 safeAreaLeft = saLeft,
                 safeAreaRight = saRight,
             )
+            } finally {
+                // Release the in-flight slot once we hand off to SessionManager.
+                // sessionManager owns the post-start lifecycle from here; if it
+                // settles back to IDLE the auto-reconnect collector picks up.
+                connectInFlight = false
+            }
         }
     }
 
-    /** Force reconnect — used by "Save & Connect" button in Settings. */
+    /**
+     * Force reconnect — used by "Save & Connect" button in Settings and
+     * other manual reconnect triggers.
+     *
+     * In Car Hotspot mode, fast-paths through the warm-cache IP of the
+     * default phone (or any known phone) so the reconnect is as instant
+     * as picking the phone from the chooser. Without this, reconnect()
+     * would re-run the full 3-phase resolve while [SessionManager.start]
+     * also tears down + rebuilds, leading to a slow + flaky restart.
+     */
     fun reconnect() {
-        hasConnected = false
-        connect()
+        viewModelScope.launch {
+            // Stop cleanly so SessionManager isn't mid-stream when we kick
+            // a new connect — same pattern as the chooser pick.
+            sessionManager.stop()
+            hasConnected = false
+
+            val mode = try {
+                preferences.connectionMode.first()
+            } catch (_: Exception) {
+                AppPreferences.DEFAULT_CONNECTION_MODE
+            }
+            val overrideIp: String? = if (mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+                pickReconnectIp()
+            } else null
+
+            if (overrideIp != null) {
+                OalLog.i(TAG, "reconnect: using cached IP $overrideIp")
+            } else {
+                OalLog.i(TAG, "reconnect: no cached IP — running full discovery")
+            }
+            connect(overrideIp = overrideIp)
+        }
+    }
+
+    /**
+     * Best-effort IP for [reconnect]: prefer the default phone's last-known
+     * IP, then any known phone's last-known IP. Returns null if nothing is
+     * cached (caller falls back to full discovery).
+     */
+    private suspend fun pickReconnectIp(): String? {
+        return try {
+            val defaultId = preferences.defaultPhoneId.first().takeIf { it.isNotBlank() }
+            val known = knownPhonesStore.phones.first()
+            // Default phone first.
+            defaultId?.let { id ->
+                known.firstOrNull { it.phoneId == id }?.lastKnownIp
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { return it }
+            }
+            // Otherwise any known phone, most recently seen first.
+            known.sortedByDescending { it.lastSeenMs }
+                .firstNotNullOfOrNull { it.lastKnownIp?.takeIf { ip -> ip.isNotBlank() } }
+        } catch (e: Exception) {
+            OalLog.d(TAG, "pickReconnectIp failed: ${e.message}")
+            null
+        }
     }
 
     fun disconnect() {
@@ -553,11 +630,19 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     val mode = connectionMode.value
                     if (mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) return@collect
                     if (alwaysAskPhone.value) return@collect
+                    // No default phone set → don't auto-connect; the user
+                    // will pick from the chooser when they're ready.
+                    if (defaultPhoneId.value.isBlank()) return@collect
                     if (!anyResolved) return@collect
+                    // Bail before logging if a connect is already running or
+                    // the session is already past IDLE — saves logging spam
+                    // when discovery emits multiple times during sweep.
+                    if (connectInFlight) return@collect
                     if (sessionManager.sessionState.value != SessionState.IDLE) return@collect
                     val now = SystemClock.elapsedRealtime()
                     if (now - lastAutoReconnectAttemptMs < AUTO_RECONNECT_MIN_GAP_MS) {
-                        OalLog.d(TAG, "Auto-reconnect throttled (last attempt ${now - lastAutoReconnectAttemptMs}ms ago)")
+                        // Note: keep this at debug — under sweep flapping it
+                        // can fire dozens of times in a few ms.
                         return@collect
                     }
                     lastAutoReconnectAttemptMs = now
@@ -836,10 +921,24 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         sessionManager.connectToNearbyEndpoint(endpointId)
     }
 
-    /** Close the phone chooser without selecting — restore default and reconnect. */
+    /**
+     * Close the phone chooser without picking a new phone.
+     *
+     * In **Car Hotspot mode** this is purely a UI op — the chooser overlays
+     * a live session and should never tear it down on dismiss. The user's
+     * intent is "I changed my mind / closed the picker."
+     *
+     * In legacy **Nearby/phone-hotspot mode** the chooser was opened by
+     * actively disconnecting (so the user could pick from the discovery
+     * list), so dismissing has to restore the default phone and reconnect.
+     */
     fun dismissPhoneChooser() {
         _showPhoneChooser.value = false
-        // Restore the persisted default and restart auto-connect
+        if (connectionMode.value == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+            // Car Hotspot: chooser was opened over a live session. Do nothing.
+            return
+        }
+        // Legacy path: chooser was opened with the session torn down — restore.
         viewModelScope.launch {
             val savedDefault = preferences.defaultPhoneName.first()
             sessionManager.setDefaultPhoneName(savedDefault)
