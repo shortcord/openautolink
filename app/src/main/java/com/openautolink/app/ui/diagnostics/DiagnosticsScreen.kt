@@ -445,6 +445,88 @@ private fun NetworkTab(info: NetworkInfo, probe: NetworkProbeState, viewModel: D
             )
         }
 
+        // Phone Discovery (Car Hotspot mode) — finds companion apps via mDNS + sweep
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Phone Discovery (Car Hotspot mode)")
+        Text(
+            "Discovers companion apps on the current network. Runs mDNS (passive, preferred) and a TCP subnet sweep (active, fallback) in parallel. Each discovered phone shows its source so you can tell which mechanism worked.",
+            color = Color(0xFF808080),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (probe.phoneDiscoveryActive) "Scanning…" else "Stopped",
+                color = if (probe.phoneDiscoveryActive) Color(0xFF4CAF50) else Color.Gray,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            if (probe.phoneDiscoveryActive) {
+                androidx.compose.material3.FilledTonalButton(
+                    onClick = { viewModel.rescanPhones() },
+                    enabled = !probe.phoneSweepActive,
+                    modifier = Modifier.height(36.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
+                ) {
+                    Text(if (probe.phoneSweepActive) "Sweeping…" else "Re-sweep", fontSize = 12.sp)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { viewModel.togglePhoneDiscovery() },
+                modifier = Modifier.height(36.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+            ) {
+                Text(if (probe.phoneDiscoveryActive) "Stop" else "Scan for Phones", fontSize = 12.sp)
+            }
+        }
+        if (probe.phoneSweepProgress.isNotEmpty()) {
+            DiagRow("Sweep", probe.phoneSweepProgress, valueColor = Color(0xFF90CAF9))
+        }
+        if (probe.discoveredPhones.isEmpty()) {
+            DiagRow("Phones", if (probe.phoneDiscoveryActive) "(searching…)" else "(none)")
+        } else {
+            for (phone in probe.discoveredPhones) {
+                val sourceTag = when (phone.source) {
+                    com.openautolink.app.transport.PhoneDiscovery.Source.MDNS -> "mDNS"
+                    com.openautolink.app.transport.PhoneDiscovery.Source.SWEEP -> "sweep"
+                    com.openautolink.app.transport.PhoneDiscovery.Source.BOTH -> "mDNS+sweep"
+                }
+                val sourceColor = when (phone.source) {
+                    com.openautolink.app.transport.PhoneDiscovery.Source.MDNS -> Color(0xFF4CAF50)
+                    com.openautolink.app.transport.PhoneDiscovery.Source.SWEEP -> Color(0xFFFFA726)
+                    com.openautolink.app.transport.PhoneDiscovery.Source.BOTH -> Color(0xFF64B5F6)
+                }
+                val display = buildString {
+                    append(phone.friendlyName ?: phone.serviceName)
+                    phone.host?.let { append("  ").append(it).append(":").append(phone.port) }
+                    phone.phoneId?.let { append("  id=").append(it.take(8)) }
+                    if (!phone.isResolved) append("  (resolving…)")
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 1.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "[$sourceTag]",
+                        color = sourceColor,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.width(96.dp).padding(horizontal = 4.dp),
+                    )
+                    Text(
+                        display,
+                        color = if (phone.isResolved) Color(0xFFE0E0E0) else Color(0xFFB0BEC5),
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
         // Port Scanner
         Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Port Scanner")

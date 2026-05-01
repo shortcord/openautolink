@@ -45,6 +45,20 @@ class WifiJobService : JobService() {
         private const val TAG = "OAL_WifiJob"
         private const val JOB_ID = 2001
 
+        /**
+         * Re-check WiFi state. Used on each broadcast from [WifiReceiver]
+         * (PendingIntent NetworkCallback) and from the periodic JobScheduler
+         * tick. Idempotent — calling repeatedly is safe.
+         *
+         * Decisions:
+         *   - SSID matches a target → start the foreground service (no-op if
+         *     it's already running).
+         *   - SSID does NOT match (or no WiFi) AND user has enabled
+         *     [CompanionPrefs.WIFI_DISCONNECT_STOP] AND the service is
+         *     running → stop it. Mirrors the BT_DISCONNECT_STOP toggle.
+         *
+         * Always returns true if a state-change action was taken.
+         */
         @Suppress("DEPRECATION")
         fun checkWifiAndStart(context: Context): Boolean {
             val prefs = context.getSharedPreferences(CompanionPrefs.NAME, Context.MODE_PRIVATE)
@@ -57,13 +71,15 @@ class WifiJobService : JobService() {
 
             val wifiManager = context.applicationContext
                 .getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val ssid = wifiManager.connectionInfo.ssid?.replace("\"", "") ?: ""
+            val ssid = wifiManager.connectionInfo?.ssid?.replace("\"", "") ?: ""
             val currentSsid = if (ssid == "<unknown ssid>") "" else ssid
+            val matched = currentSsid.isNotBlank() &&
+                targetSsids.any { it.equals(currentSsid, ignoreCase = true) }
 
-            CompanionLog.d(TAG, "Current SSID='$currentSsid', targets=$targetSsids")
+            CompanionLog.d(TAG, "Current SSID='$currentSsid', targets=$targetSsids, match=$matched")
 
-            if (targetSsids.any { it.equals(currentSsid, ignoreCase = true) }) {
-                CompanionLog.i(TAG, "SSID match — starting service")
+            if (matched) {
+                CompanionLog.i(TAG, "SSID match — ensuring service is running")
                 val serviceIntent = Intent(context, CompanionService::class.java).apply {
                     action = CompanionService.ACTION_START
                 }
@@ -73,6 +89,24 @@ class WifiJobService : JobService() {
                 } catch (e: Exception) {
                     CompanionLog.e(TAG, "Start failed: ${e.message}")
                 }
+                return false
+            }
+
+            // No matching SSID. If the user opted in to "stop on disconnect"
+            // AND the service is currently running, stop it. The check runs
+            // even when the service isn't running (no-op in that case).
+            val stopOnDisconnect = prefs.getBoolean(CompanionPrefs.WIFI_DISCONNECT_STOP, false)
+            if (stopOnDisconnect && CompanionService.isRunning.value) {
+                CompanionLog.i(TAG, "Off target SSID + stop-on-disconnect — stopping service")
+                val stopIntent = Intent(context, CompanionService::class.java).apply {
+                    action = CompanionService.ACTION_STOP
+                }
+                try {
+                    context.startService(stopIntent)
+                    return true
+                } catch (e: Exception) {
+                    CompanionLog.e(TAG, "Stop failed: ${e.message}")
+                }
             }
             return false
         }
@@ -80,7 +114,8 @@ class WifiJobService : JobService() {
         fun schedule(context: Context) {
             CompanionLog.i(TAG, "Scheduling WiFi auto-start")
 
-            // Modern: ConnectivityManager callback via PendingIntent
+            // Modern: ConnectivityManager callback via PendingIntent. Fires
+            // on every WiFi network change (connect, disconnect, validate).
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val request = NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
@@ -96,7 +131,11 @@ class WifiJobService : JobService() {
                 CompanionLog.e(TAG, "NetworkCallback registration failed: ${e.message}")
             }
 
-            // Fallback: periodic JobScheduler
+            // Fallback: periodic JobScheduler. Android forces a 15-min
+            // minimum on periodic jobs (PeriodicJob.MIN_PERIOD_MILLIS), so
+            // this is the floor. The NetworkCallback above handles real-time
+            // events; this only rescues us from missed callbacks (process
+            // killed, reboot).
             val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
             val jobInfo = JobInfo.Builder(JOB_ID, ComponentName(context, WifiJobService::class.java))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_UNMETERED)

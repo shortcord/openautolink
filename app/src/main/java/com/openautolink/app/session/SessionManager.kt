@@ -579,7 +579,7 @@ class SessionManager(
                     SessionState.IDLE -> when (directTransport) {
                         "nearby" -> "Nearby: ${AaNearbyManager.status.value}"
                         "usb" -> "USB: ${UsbConnectionManager.status.value}"
-                        else -> "TCP: connecting to phone hotspot..."
+                        else -> "Searching for phone…"
                     }
                     SessionState.CONNECTING -> "Phone connecting..."
                     SessionState.CONNECTED -> "Handshake..."

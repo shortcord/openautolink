@@ -87,6 +87,29 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         // Multi-phone: default phone to auto-connect to
         val DEFAULT_PHONE_NAME = stringPreferencesKey("default_phone_name")
 
+        // Multi-phone (Car Hotspot mode):
+        // - CONNECTION_MODE: "phone_hotspot" (default, current single-phone flow)
+        //                    or "car_hotspot" (multi-phone over car AP).
+        // - DEFAULT_PHONE_ID: stable phone_id (UUID published by companion in
+        //   mDNS TXT) the car prefers when multiple phones are reachable.
+        // - KNOWN_PHONES_JSON: JSON array of `{phone_id, friendly_name,
+        //   last_seen_ms}` — the persistent list shown in the chooser even
+        //   when the phone isn't currently advertising.
+        // - ALWAYS_ASK_PHONE: when true, the car never auto-connects to the
+        //   default phone; the chooser is shown on every connect. (Behavior 2.)
+        // - CAR_HOTSPOT_AUTO_INTERFACE: when true (default), the discovery
+        //   sweep prefers known AP-bridge interfaces (e.g. ap_br_swlan0 on
+        //   GM AAOS) and falls back to other real interfaces. When false,
+        //   only [CAR_HOTSPOT_INTERFACE_NAME] is scanned.
+        // - CAR_HOTSPOT_INTERFACE_NAME: the explicit interface name to use
+        //   when auto-detection is disabled. Empty = first real iface.
+        val CONNECTION_MODE = stringPreferencesKey("connection_mode")
+        val DEFAULT_PHONE_ID = stringPreferencesKey("default_phone_id")
+        val KNOWN_PHONES_JSON = stringPreferencesKey("known_phones_json")
+        val ALWAYS_ASK_PHONE = booleanPreferencesKey("always_ask_phone")
+        val CAR_HOTSPOT_AUTO_INTERFACE = booleanPreferencesKey("car_hotspot_auto_interface")
+        val CAR_HOTSPOT_INTERFACE_NAME = stringPreferencesKey("car_hotspot_interface_name")
+
         const val DEFAULT_VIDEO_AUTO_NEGOTIATE = true
         const val DEFAULT_VIDEO_CODEC = "h264"
         const val DEFAULT_VIDEO_FPS = 60
@@ -129,6 +152,17 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_VOLUME_OFFSET_NAVIGATION = 0
         const val DEFAULT_VOLUME_OFFSET_ASSISTANT = 0
         const val DEFAULT_DEFAULT_PHONE_NAME = "" // empty = connect to first found
+
+        // Connection-mode constants. Kept as `const val` strings so call sites
+        // can `when (mode) { CONNECTION_MODE_PHONE_HOTSPOT -> ... }` cleanly.
+        const val CONNECTION_MODE_PHONE_HOTSPOT = "phone_hotspot"
+        const val CONNECTION_MODE_CAR_HOTSPOT = "car_hotspot"
+        const val DEFAULT_CONNECTION_MODE = CONNECTION_MODE_CAR_HOTSPOT
+        const val DEFAULT_DEFAULT_PHONE_ID = ""
+        const val DEFAULT_KNOWN_PHONES_JSON = "[]"
+        const val DEFAULT_ALWAYS_ASK_PHONE = false
+        const val DEFAULT_CAR_HOTSPOT_AUTO_INTERFACE = true
+        const val DEFAULT_CAR_HOTSPOT_INTERFACE_NAME = ""
     }
 
     val videoAutoNegotiate: Flow<Boolean> = dataStore.data.map { prefs ->
@@ -469,5 +503,60 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setDefaultPhoneName(name: String) {
         dataStore.edit { it[DEFAULT_PHONE_NAME] = name }
+    }
+
+    // ── Multi-phone (Car Hotspot mode) ──────────────────────────────
+
+    val connectionMode: Flow<String> = dataStore.data.map { prefs ->
+        prefs[CONNECTION_MODE] ?: DEFAULT_CONNECTION_MODE
+    }
+
+    suspend fun setConnectionMode(mode: String) {
+        // Sanitize unknown values to the default rather than persisting junk.
+        val sanitized = when (mode) {
+            CONNECTION_MODE_PHONE_HOTSPOT, CONNECTION_MODE_CAR_HOTSPOT -> mode
+            else -> DEFAULT_CONNECTION_MODE
+        }
+        dataStore.edit { it[CONNECTION_MODE] = sanitized }
+    }
+
+    val defaultPhoneId: Flow<String> = dataStore.data.map { prefs ->
+        prefs[DEFAULT_PHONE_ID] ?: DEFAULT_DEFAULT_PHONE_ID
+    }
+
+    suspend fun setDefaultPhoneId(id: String) {
+        dataStore.edit { it[DEFAULT_PHONE_ID] = id }
+    }
+
+    val knownPhonesJson: Flow<String> = dataStore.data.map { prefs ->
+        prefs[KNOWN_PHONES_JSON] ?: DEFAULT_KNOWN_PHONES_JSON
+    }
+
+    suspend fun setKnownPhonesJson(json: String) {
+        dataStore.edit { it[KNOWN_PHONES_JSON] = json }
+    }
+
+    val alwaysAskPhone: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[ALWAYS_ASK_PHONE] ?: DEFAULT_ALWAYS_ASK_PHONE
+    }
+
+    suspend fun setAlwaysAskPhone(enabled: Boolean) {
+        dataStore.edit { it[ALWAYS_ASK_PHONE] = enabled }
+    }
+
+    val carHotspotAutoInterface: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[CAR_HOTSPOT_AUTO_INTERFACE] ?: DEFAULT_CAR_HOTSPOT_AUTO_INTERFACE
+    }
+
+    suspend fun setCarHotspotAutoInterface(enabled: Boolean) {
+        dataStore.edit { it[CAR_HOTSPOT_AUTO_INTERFACE] = enabled }
+    }
+
+    val carHotspotInterfaceName: Flow<String> = dataStore.data.map { prefs ->
+        prefs[CAR_HOTSPOT_INTERFACE_NAME] ?: DEFAULT_CAR_HOTSPOT_INTERFACE_NAME
+    }
+
+    suspend fun setCarHotspotInterfaceName(name: String) {
+        dataStore.edit { it[CAR_HOTSPOT_INTERFACE_NAME] = name }
     }
 }

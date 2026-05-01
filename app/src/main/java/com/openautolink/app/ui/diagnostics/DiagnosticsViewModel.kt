@@ -186,6 +186,11 @@ data class NetworkProbeState(
     val p2pOwnerIp: String? = null,
     val p2pStatus: String = "",
     val p2pLog: List<String> = emptyList(),
+    // Phone discovery via mDNS — Car Hotspot mode
+    val phoneDiscoveryActive: Boolean = false,
+    val phoneSweepActive: Boolean = false,
+    val phoneSweepProgress: String = "",
+    val discoveredPhones: List<com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone> = emptyList(),
 )
 
 private data class CombinedInner(
@@ -1018,11 +1023,70 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
         com.openautolink.app.diagnostics.DiagnosticLog.i("P2pProbe", msg)
     }
 
+    // ── Phone Discovery (Car Hotspot mode) ──────────────────────────
+
+    private val phoneDiscovery = com.openautolink.app.transport.PhoneDiscovery.getInstance(application)
+    private var phoneDiscoveryJob: Job? = null
+
+    fun togglePhoneDiscovery() {
+        if (_networkProbe.value.phoneDiscoveryActive) stopPhoneDiscovery()
+        else startPhoneDiscovery()
+    }
+
+    private fun startPhoneDiscovery() {
+        // [phoneDiscovery] is a process-wide singleton shared with projection.
+        // Don't clear() it here — that'd nuke projection's discovered list.
+        // Just ensure mDNS is running and kick the sweep; the UI will see the
+        // current snapshot via the StateFlow.
+        phoneDiscovery.start()
+        phoneDiscovery.startSweep()
+        _networkProbe.value = _networkProbe.value.copy(phoneDiscoveryActive = true)
+        phoneDiscoveryJob?.cancel()
+        phoneDiscoveryJob = viewModelScope.launch {
+            launch {
+                phoneDiscovery.phones.collect { list ->
+                    _networkProbe.value = _networkProbe.value.copy(discoveredPhones = list)
+                }
+            }
+            launch {
+                phoneDiscovery.isSweeping.collect { sweeping ->
+                    _networkProbe.value = _networkProbe.value.copy(phoneSweepActive = sweeping)
+                }
+            }
+            launch {
+                phoneDiscovery.sweepProgress.collect { progress ->
+                    _networkProbe.value = _networkProbe.value.copy(phoneSweepProgress = progress)
+                }
+            }
+        }
+    }
+
+    fun rescanPhones() {
+        // Re-run the active sweep without stopping mDNS. mDNS keeps running
+        // continuously; this only re-fires the active TCP probe.
+        phoneDiscovery.startSweep()
+    }
+
+    private fun stopPhoneDiscovery() {
+        // Note: do NOT call phoneDiscovery.stop() — it's a process-wide
+        // singleton shared with the projection screen, and stopping it here
+        // would kill projection's mDNS too. We just stop our sweep + drop
+        // the local UI subscription; mDNS keeps running for projection.
+        phoneDiscovery.stopSweep()
+        phoneDiscoveryJob?.cancel()
+        phoneDiscoveryJob = null
+        _networkProbe.value = _networkProbe.value.copy(
+            phoneDiscoveryActive = false,
+            phoneSweepActive = false,
+        )
+    }
+
     override fun onCleared() {
         super.onCleared()
         stopTcpListener()
         stopLocalHotspot()
         stopP2pProbe()
+        stopPhoneDiscovery()
         // Note: remoteLogServer and reverseTunnel are NOT stopped here —
         // they are application-scoped singletons that survive screen navigation.
         // User explicitly stops them via the UI.

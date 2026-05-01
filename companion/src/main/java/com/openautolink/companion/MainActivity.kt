@@ -123,6 +123,7 @@ object CompanionPrefs {
     const val BT_DISCONNECT_STOP = "bt_disconnect_stop"
     const val BT_AUTO_RECONNECT = "bt_auto_reconnect"
     const val AUTO_START_WIFI_SSIDS = "auto_start_wifi_ssids"
+    const val WIFI_DISCONNECT_STOP = "wifi_disconnect_stop"
 
     const val AUTO_START_OFF = 0
     const val AUTO_START_BT = 1
@@ -133,4 +134,69 @@ object CompanionPrefs {
     const val TRANSPORT_NEARBY = "nearby"
     const val TRANSPORT_TCP = "tcp"
     const val DEFAULT_TRANSPORT = TRANSPORT_TCP
+
+    // Connection mode — distinguishes which side hosts the WiFi network.
+    // PHONE_HOTSPOT: phone is the AP, car is the client (current default).
+    // CAR_HOTSPOT:   car AP is the network, phone is one of N clients.
+    //                Multi-phone discovery via mDNS happens in this mode.
+    const val CONNECTION_MODE = "connection_mode"
+    const val MODE_PHONE_HOTSPOT = "phone_hotspot"
+    const val MODE_CAR_HOTSPOT = "car_hotspot"
+    const val DEFAULT_CONNECTION_MODE = MODE_CAR_HOTSPOT
+
+    // Phone identity — published in mDNS TXT records so the car can tell
+    // phones apart and remember a preferred default.
+    const val PHONE_ID = "phone_id"             // stable UUID, generated on first launch
+    const val PHONE_FRIENDLY_NAME = "phone_friendly_name"  // user-editable, defaults to Build.MODEL
+
+    /**
+     * Returns the persistent phone UUID, generating one on first call.
+     */
+    fun getOrCreatePhoneId(prefs: android.content.SharedPreferences): String {
+        val existing = prefs.getString(PHONE_ID, null)
+        if (!existing.isNullOrBlank()) return existing
+        val fresh = java.util.UUID.randomUUID().toString()
+        prefs.edit().putString(PHONE_ID, fresh).apply()
+        return fresh
+    }
+
+    /**
+     * Returns the user-friendly phone name. Defaults to the user-set device
+     * name (Settings → About phone → Device name, also used as the BT name)
+     * on first read, falling back to Build.MODEL if unavailable.
+     */
+    fun getFriendlyName(prefs: android.content.SharedPreferences): String {
+        val existing = prefs.getString(PHONE_FRIENDLY_NAME, null)
+        if (!existing.isNullOrBlank()) return existing
+        return resolveDefaultDeviceName() ?: (android.os.Build.MODEL ?: "Phone")
+    }
+
+    private fun resolveDefaultDeviceName(): String? {
+        // Best-effort, no exceptions: try multiple known sources for the
+        // user-customized device name.
+        return try {
+            // No Context here — caller's prefs already came from one. Use the
+            // application context indirectly via reflection on ActivityThread,
+            // which is reliable inside Android process. Falls back to null on
+            // any failure.
+            val app = Class.forName("android.app.ActivityThread")
+                .getMethod("currentApplication")
+                .invoke(null) as? android.content.Context ?: return null
+            val cr = app.contentResolver
+            val candidates = listOf(
+                android.provider.Settings.Global.DEVICE_NAME,
+                "device_name",
+                "bluetooth_name",
+            )
+            for (key in candidates) {
+                val v = runCatching { android.provider.Settings.Global.getString(cr, key) }.getOrNull()
+                if (!v.isNullOrBlank()) return v
+                val s = runCatching { android.provider.Settings.Secure.getString(cr, key) }.getOrNull()
+                if (!s.isNullOrBlank()) return s
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        }
+    }
 }

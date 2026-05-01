@@ -136,7 +136,17 @@ class TcpConnector(
                         }
 
                         override fun onServiceResolved(si: NsdServiceInfo) {
-                            val host = si.host?.hostAddress
+                            val rawHost = si.host
+                            // IPv6 link-local addresses (fe80::/10) need a
+                            // scope ID (e.g. %wlan0) to connect, which NSD
+                            // doesn't surface — connect() returns EINVAL.
+                            // Skip them; mDNS will (hopefully) deliver the
+                            // IPv4 address on a separate emit.
+                            if (rawHost is java.net.Inet6Address && rawHost.isLinkLocalAddress) {
+                                OalLog.d(TAG, "Ignoring IPv6 link-local from mDNS: ${rawHost.hostAddress}")
+                                return
+                            }
+                            val host = rawHost?.hostAddress
                             val port = si.port
                             OalLog.i(TAG, "mDNS resolved: $host:$port")
                             if (host != null && port > 0) {
