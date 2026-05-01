@@ -32,7 +32,7 @@ if [ ! -f "${_keystorePath}" ]; then
 fi
 
 echo "Cleaning up old build artifacts..."
-./gradlew clean --no-daemon
+# ./gradlew clean --no-daemon
 ./gradlew --stop
 
 for i in .gradle /tmp/oal-ndk-deps /tmp/oal-aasdk-android-build ./app/src/main/cpp/third_party/; do
