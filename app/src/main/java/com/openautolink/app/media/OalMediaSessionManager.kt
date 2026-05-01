@@ -10,6 +10,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Base64
 import android.util.Log
+import android.view.KeyEvent
 
 /**
  * Manages a MediaSession that publishes now-playing metadata from the bridge
@@ -52,19 +53,56 @@ class OalMediaSessionManager(private val context: Context) {
 
             mediaSession = MediaSessionCompat(context, "OpenAutoLinkMedia").apply {
                 setCallback(object : MediaSessionCompat.Callback() {
-                    override fun onPlay() { mediaControlCallback?.onPlay() }
-                    override fun onPause() { mediaControlCallback?.onPause() }
-                    override fun onSkipToNext() { mediaControlCallback?.onSkipToNext() }
-                    override fun onSkipToPrevious() { mediaControlCallback?.onSkipToPrevious() }
+                    override fun onPlay() {
+                        Log.i(TAG, "MediaSession command: play")
+                        com.openautolink.app.diagnostics.DiagnosticLog.i("input", "MediaSession command: play")
+                        mediaControlCallback?.onPlay()
+                    }
+
+                    override fun onPause() {
+                        Log.i(TAG, "MediaSession command: pause")
+                        com.openautolink.app.diagnostics.DiagnosticLog.i("input", "MediaSession command: pause")
+                        mediaControlCallback?.onPause()
+                    }
+
+                    override fun onSkipToNext() {
+                        Log.i(TAG, "MediaSession command: next")
+                        com.openautolink.app.diagnostics.DiagnosticLog.i("input", "MediaSession command: next")
+                        mediaControlCallback?.onSkipToNext()
+                    }
+
+                    override fun onSkipToPrevious() {
+                        Log.i(TAG, "MediaSession command: previous")
+                        com.openautolink.app.diagnostics.DiagnosticLog.i("input", "MediaSession command: previous")
+                        mediaControlCallback?.onSkipToPrevious()
+                    }
 
                     override fun onMediaButtonEvent(mediaButtonEvent: android.content.Intent): Boolean {
-                        val ke = mediaButtonEvent.getParcelableExtra<android.view.KeyEvent>(android.content.Intent.EXTRA_KEY_EVENT)
+                        val ke = mediaButtonEvent.getParcelableExtra<KeyEvent>(android.content.Intent.EXTRA_KEY_EVENT)
                         Log.i(TAG, "onMediaButtonEvent: keycode=${ke?.keyCode} (${ke?.let { android.view.KeyEvent.keyCodeToString(it.keyCode) }}) action=${ke?.action}")
                         com.openautolink.app.diagnostics.DiagnosticLog.i(
                             "input",
                             "MediaSession.onMediaButtonEvent: keycode=${ke?.keyCode} (${ke?.let { android.view.KeyEvent.keyCodeToString(it.keyCode) }}) action=${ke?.action}"
                         )
-                        return super.onMediaButtonEvent(mediaButtonEvent)
+                        if (ke?.action == KeyEvent.ACTION_DOWN) {
+                            when (ke.keyCode) {
+                                KeyEvent.KEYCODE_MEDIA_PLAY -> mediaControlCallback?.onPlay()
+                                KeyEvent.KEYCODE_MEDIA_PAUSE -> mediaControlCallback?.onPause()
+                                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                                    if (lastPushedPlaying == true) {
+                                        mediaControlCallback?.onPause()
+                                    } else {
+                                        mediaControlCallback?.onPlay()
+                                    }
+                                }
+                                KeyEvent.KEYCODE_MEDIA_NEXT -> mediaControlCallback?.onSkipToNext()
+                                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> mediaControlCallback?.onSkipToPrevious()
+                            }
+                        }
+                        // Always consume media-button events targeted at OAL. Falling through to
+                        // MediaSessionCompat's default handling can re-enter onPlay/onPause and
+                        // create duplicate toggles on some AAOS builds.
+                        return true
                     }
 
                     override fun onCommand(command: String, extras: android.os.Bundle?, cb: android.os.ResultReceiver?) {

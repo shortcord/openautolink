@@ -524,7 +524,17 @@ class AasdkSession(
     }
 
     override fun onAudioFocusRequest(focusType: Int) {
-        // Audio focus is handled by the native layer — always grants
+        val label = when (focusType) {
+            1 -> "GAIN"
+            2 -> "GAIN_TRANSIENT"
+            3 -> "GAIN_TRANSIENT_MAY_DUCK"
+            4 -> "RELEASE"
+            else -> "UNKNOWN"
+        }
+        com.openautolink.app.diagnostics.DiagnosticLog.d(
+            "audio",
+            "AA audio focus request: $label ($focusType)"
+        )
     }
 
     /** Coalesce native onError log spam: at most one log per second per message. */

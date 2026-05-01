@@ -525,23 +525,13 @@ void JniSession::onAudioFocusRequest(
 {
     auto focus_type = request.audio_focus_type();
     logProtoRaw("AudioFocusReq", request);
-    // Match bridge logic: map request type → response state
-    aap_protobuf::service::control::message::AudioFocusStateType state;
-    switch (focus_type) {
-        case aap_protobuf::service::control::message::AUDIO_FOCUS_GAIN:
-            state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_GAIN;
-            break;
-        case aap_protobuf::service::control::message::AUDIO_FOCUS_GAIN_TRANSIENT:
-        case aap_protobuf::service::control::message::AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK:
-            state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_GAIN_TRANSIENT;
-            break;
-        case aap_protobuf::service::control::message::AUDIO_FOCUS_RELEASE:
-            state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_LOSS;
-            break;
-        default:
-            state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_LOSS;
-            break;
-    }
+    // Be permissive here: the phone is the real media owner, and AAOS focus
+    // arbitration already happens locally through AudioFocusManager/AudioTrack
+    // usage attributes. Treating RELEASE as LOSS can make some phone players
+    // pause immediately after first connection, then bounce when focus is
+    // re-granted during audio setup. The old Kotlin direct session always
+    // responded with GAIN; mirror that behavior for the JNI path.
+    auto state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_GAIN;
     LOGI("Audio focus request: type=%d → state=%d", (int)focus_type, (int)state);
 
     aap_protobuf::service::control::message::AudioFocusNotification response;

@@ -3,6 +3,7 @@
 import android.content.Context
 import android.media.AudioManager
 import android.os.SystemClock
+import android.view.KeyEvent
 import com.openautolink.app.diagnostics.OalLog
 import com.openautolink.app.audio.AudioPlayer
 import com.openautolink.app.audio.AudioPlayerImpl
@@ -418,6 +419,12 @@ class SessionManager(
         _mediaSessionManager?.release()
         _mediaSessionManager = context?.let { OalMediaSessionManager(it) }
         _mediaSessionManager?.initialize()
+        _mediaSessionManager?.mediaControlCallback = object : OalMediaSessionManager.MediaControlCallback {
+            override fun onPlay() = sendMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+            override fun onPause() = sendMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+            override fun onSkipToNext() = sendMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+            override fun onSkipToPrevious() = sendMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+        }
         _mediaSessionManager?.getSessionToken()?.let { token ->
             OalMediaBrowserService.updateSessionToken(token)
         }
@@ -1303,6 +1310,16 @@ class SessionManager(
         }
     }
 
+    private fun sendMediaKey(keyCode: Int) {
+        val session = aasdkSession ?: run {
+            DiagnosticLog.w("input", "MediaSession command ignored: no AA session")
+            return
+        }
+        DiagnosticLog.i("input", "MediaSession command -> AA key=${KeyEvent.keyCodeToString(keyCode)}")
+        session.sendKeyEvent(keyCode, true)
+        session.sendKeyEvent(keyCode, false)
+    }
+
     // ── EV energy-model tuning ──────────────────────────────────────
 
     @Volatile private var evTuningObserverStarted = false
@@ -1472,4 +1489,3 @@ class SessionManager(
         )
     }
 }
-
