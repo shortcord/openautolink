@@ -348,6 +348,103 @@ private fun NetworkTab(info: NetworkInfo, probe: NetworkProbeState, viewModel: D
             )
         }
 
+        // Local-Only Hotspot probe — tests if head unit can act as AP for phones
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Local-Only Hotspot (Head-Unit-as-AP test)")
+        Text(
+            "Attempts to start a SoftAP on this device. If it works, phones can join the head unit's WiFi instead of the other way around. SSID may be randomized per session.",
+            color = Color(0xFF808080),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (probe.localHotspotActive) "Active" else "Stopped",
+                color = if (probe.localHotspotActive) Color(0xFF4CAF50) else Color.Gray,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { viewModel.toggleLocalHotspot() },
+                modifier = Modifier.height(36.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+            ) {
+                Text(
+                    if (probe.localHotspotActive) "Stop" else "Start Hotspot",
+                    fontSize = 12.sp,
+                )
+            }
+        }
+        if (probe.localHotspotStatus.isNotEmpty()) {
+            val color = when {
+                probe.localHotspotStatus.startsWith("✓") -> Color(0xFF4CAF50)
+                probe.localHotspotStatus.startsWith("✗") -> Color(0xFFFF5722)
+                else -> Color(0xFFB0BEC5)
+            }
+            DiagRow("Status", probe.localHotspotStatus, valueColor = color)
+        }
+        probe.localHotspotSsid?.let { DiagRow("SSID", it, valueColor = Color(0xFF90CAF9)) }
+        probe.localHotspotPassword?.let { DiagRow("Password", it, valueColor = Color(0xFF90CAF9)) }
+
+        // WiFi Direct (P2P) probe — does Nearby's preferred medium work here?
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("WiFi Direct / P2P (Nearby preferred medium)")
+        Text(
+            "Tries to create a WiFi Direct group. This is the medium Nearby Connections prefers; if it fails here, that's why Nearby mode never created its own network.",
+            color = Color(0xFF808080),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (probe.p2pActive) "Active" else "Stopped",
+                color = if (probe.p2pActive) Color(0xFF4CAF50) else Color.Gray,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            androidx.compose.material3.FilledTonalButton(
+                onClick = { viewModel.toggleP2pProbe() },
+                modifier = Modifier.height(36.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+            ) {
+                Text(if (probe.p2pActive) "Stop" else "Create P2P Group", fontSize = 12.sp)
+            }
+        }
+        probe.p2pSupported?.let {
+            DiagRow("Supported", if (it) "yes" else "NO", valueColor = if (it) Color(0xFF4CAF50) else Color(0xFFFF5722))
+        }
+        if (probe.p2pStatus.isNotEmpty()) {
+            val color = when {
+                probe.p2pStatus.startsWith("✓") -> Color(0xFF4CAF50)
+                probe.p2pStatus.startsWith("✗") -> Color(0xFFFF5722)
+                else -> Color(0xFFB0BEC5)
+            }
+            DiagRow("Status", probe.p2pStatus, valueColor = color)
+        }
+        probe.p2pSsid?.let { DiagRow("SSID", it, valueColor = Color(0xFF90CAF9)) }
+        probe.p2pPassphrase?.let { DiagRow("Passphrase", it, valueColor = Color(0xFF90CAF9)) }
+        probe.p2pOwnerIp?.let { DiagRow("Owner IP", it, valueColor = Color(0xFF90CAF9)) }
+        for (log in probe.p2pLog) {
+            val color = when {
+                log.startsWith("✓") -> Color(0xFF4CAF50)
+                log.startsWith("✗") -> Color(0xFFFF5722)
+                else -> Color(0xFFB0BEC5)
+            }
+            Text(
+                log,
+                color = color,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 1.dp),
+            )
+        }
+
         // Port Scanner
         Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Port Scanner")

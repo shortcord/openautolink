@@ -1,5 +1,6 @@
 package com.openautolink.app.ui.diagnostics
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
 import android.media.AudioManager
@@ -172,6 +173,19 @@ data class NetworkProbeState(
     val portScanRunning: Boolean = false,
     val portScanProgress: String = "",
     val portScanResults: List<PortScanEntry> = emptyList(),
+    // Local-only hotspot probe (head-unit-as-AP feasibility test)
+    val localHotspotActive: Boolean = false,
+    val localHotspotSsid: String? = null,
+    val localHotspotPassword: String? = null,
+    val localHotspotStatus: String = "",
+    // WiFi Direct / P2P probe (does this device support Nearby's preferred medium?)
+    val p2pActive: Boolean = false,
+    val p2pSupported: Boolean? = null,
+    val p2pSsid: String? = null,
+    val p2pPassphrase: String? = null,
+    val p2pOwnerIp: String? = null,
+    val p2pStatus: String = "",
+    val p2pLog: List<String> = emptyList(),
 )
 
 private data class CombinedInner(
@@ -744,9 +758,271 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    // ── Local-Only Hotspot Probe ────────────────────────────────────
+    // Tests whether AAOS allows a normal app to start a SoftAP. If this works
+    // and the SSID is stable across sessions, the "phones-as-clients-of-car-AP"
+    // architecture becomes viable as a multi-phone solution.
+
+    private var localHotspotReservation: android.net.wifi.WifiManager.LocalOnlyHotspotReservation? = null
+
+    fun toggleLocalHotspot() {
+        if (_networkProbe.value.localHotspotActive) stopLocalHotspot() else startLocalHotspot()
+    }
+
+    private fun startLocalHotspot() {
+        val app = getApplication<Application>()
+        val wifi = app.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+        if (wifi == null) {
+            _networkProbe.value = _networkProbe.value.copy(localHotspotStatus = "✗ WifiManager unavailable")
+            return
+        }
+        _networkProbe.value = _networkProbe.value.copy(
+            localHotspotStatus = "Starting local-only hotspot…",
+            localHotspotSsid = null,
+            localHotspotPassword = null,
+        )
+        try {
+            wifi.startLocalOnlyHotspot(
+                object : android.net.wifi.WifiManager.LocalOnlyHotspotCallback() {
+                    override fun onStarted(reservation: android.net.wifi.WifiManager.LocalOnlyHotspotReservation) {
+                        localHotspotReservation = reservation
+                        val (ssid, pass) = extractCredentials(reservation)
+                        _networkProbe.value = _networkProbe.value.copy(
+                            localHotspotActive = true,
+                            localHotspotSsid = ssid,
+                            localHotspotPassword = pass,
+                            localHotspotStatus = "✓ Hotspot active — connect a phone to test",
+                        )
+                        com.openautolink.app.diagnostics.DiagnosticLog.i(
+                            "HotspotProbe", "Local-only hotspot started ssid=$ssid"
+                        )
+                        viewModelScope.launch { refreshInterfaces() }
+                    }
+
+                    override fun onStopped() {
+                        _networkProbe.value = _networkProbe.value.copy(
+                            localHotspotActive = false,
+                            localHotspotStatus = "Hotspot stopped by system",
+                        )
+                        localHotspotReservation = null
+                    }
+
+                    override fun onFailed(reason: Int) {
+                        val msg = when (reason) {
+                            ERROR_NO_CHANNEL -> "no channel"
+                            ERROR_GENERIC -> "generic error"
+                            ERROR_INCOMPATIBLE_MODE -> "incompatible mode (STA+AP not supported?)"
+                            ERROR_TETHERING_DISALLOWED -> "tethering disallowed by policy"
+                            else -> "reason=$reason"
+                        }
+                        _networkProbe.value = _networkProbe.value.copy(
+                            localHotspotActive = false,
+                            localHotspotStatus = "✗ Failed: $msg",
+                        )
+                        com.openautolink.app.diagnostics.DiagnosticLog.w(
+                            "HotspotProbe", "Local-only hotspot failed: $msg"
+                        )
+                        localHotspotReservation = null
+                    }
+                },
+                null,
+            )
+        } catch (se: SecurityException) {
+            _networkProbe.value = _networkProbe.value.copy(
+                localHotspotStatus = "✗ SecurityException: ${se.message} (grant Location permission)"
+            )
+        } catch (e: Exception) {
+            _networkProbe.value = _networkProbe.value.copy(
+                localHotspotStatus = "✗ ${e.javaClass.simpleName}: ${e.message}"
+            )
+        }
+    }
+
+    private fun extractCredentials(
+        reservation: android.net.wifi.WifiManager.LocalOnlyHotspotReservation
+    ): Pair<String?, String?> {
+        // SoftApConfiguration is the modern API (Android 11+); WifiConfiguration is legacy.
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val cfg = reservation.softApConfiguration
+                cfg.ssid to cfg.passphrase
+            } else {
+                @Suppress("DEPRECATION")
+                val cfg = reservation.wifiConfiguration
+                @Suppress("DEPRECATION")
+                (cfg?.SSID to cfg?.preSharedKey)
+            }
+        } catch (_: Exception) {
+            null to null
+        }
+    }
+
+    private fun stopLocalHotspot() {
+        try { localHotspotReservation?.close() } catch (_: Exception) {}
+        localHotspotReservation = null
+        _networkProbe.value = _networkProbe.value.copy(
+            localHotspotActive = false,
+            localHotspotStatus = "Hotspot stopped",
+        )
+    }
+
+    // ── WiFi Direct (P2P) Probe ─────────────────────────────────────
+    // Tests whether the head unit can act as a WiFi Direct Group Owner.
+    // Nearby Connections prefers this medium when available; if it fails
+    // here, that's why "Nearby mode" never created its own network.
+
+    private var p2pManager: android.net.wifi.p2p.WifiP2pManager? = null
+    private var p2pChannel: android.net.wifi.p2p.WifiP2pManager.Channel? = null
+    private var p2pReceiver: android.content.BroadcastReceiver? = null
+
+    fun toggleP2pProbe() {
+        if (_networkProbe.value.p2pActive) stopP2pProbe() else startP2pProbe()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startP2pProbe() {
+        val app = getApplication<Application>()
+        val mgr = app.getSystemService(Context.WIFI_P2P_SERVICE) as? android.net.wifi.p2p.WifiP2pManager
+        if (mgr == null) {
+            _networkProbe.value = _networkProbe.value.copy(
+                p2pSupported = false,
+                p2pStatus = "✗ WIFI_P2P_SERVICE unavailable on this device",
+            )
+            return
+        }
+        p2pManager = mgr
+        appendP2pLog("Initializing P2P channel…")
+        val ch = mgr.initialize(app, app.mainLooper) {
+            appendP2pLog("Channel disconnected by framework")
+        }
+        if (ch == null) {
+            _networkProbe.value = _networkProbe.value.copy(
+                p2pSupported = false,
+                p2pStatus = "✗ initialize() returned null channel",
+            )
+            return
+        }
+        p2pChannel = ch
+        _networkProbe.value = _networkProbe.value.copy(
+            p2pActive = true,
+            p2pSupported = true,
+            p2pStatus = "Channel initialized — removing any old group…",
+            p2pSsid = null,
+            p2pPassphrase = null,
+            p2pOwnerIp = null,
+        )
+
+        // Listen for connection-changed to fetch group info
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context, intent: android.content.Intent) {
+                if (intent.action == android.net.wifi.p2p.WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION) {
+                    appendP2pLog("Broadcast: WIFI_P2P_CONNECTION_CHANGED")
+                    requestGroupInfo()
+                }
+            }
+        }
+        p2pReceiver = receiver
+        androidx.core.content.ContextCompat.registerReceiver(
+            app, receiver,
+            android.content.IntentFilter(android.net.wifi.p2p.WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+
+        // Tear down any pre-existing group, then create
+        mgr.removeGroup(ch, object : android.net.wifi.p2p.WifiP2pManager.ActionListener {
+            override fun onSuccess() { appendP2pLog("Old group removed; calling createGroup()"); doCreateGroup() }
+            override fun onFailure(reason: Int) { appendP2pLog("removeGroup failed (reason=$reason); calling createGroup() anyway"); doCreateGroup() }
+        })
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun doCreateGroup() {
+        val mgr = p2pManager ?: return
+        val ch = p2pChannel ?: return
+        mgr.createGroup(ch, object : android.net.wifi.p2p.WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                appendP2pLog("✓ createGroup() onSuccess — waiting for group info")
+                _networkProbe.value = _networkProbe.value.copy(p2pStatus = "✓ Group creation accepted")
+                // Some OEMs don't broadcast — poll once after a short delay
+                viewModelScope.launch {
+                    kotlinx.coroutines.delay(1500)
+                    requestGroupInfo()
+                }
+            }
+            override fun onFailure(reason: Int) {
+                val msg = when (reason) {
+                    android.net.wifi.p2p.WifiP2pManager.P2P_UNSUPPORTED -> "P2P_UNSUPPORTED (device or OEM blocks WiFi Direct)"
+                    android.net.wifi.p2p.WifiP2pManager.BUSY -> "BUSY (P2P framework in use)"
+                    android.net.wifi.p2p.WifiP2pManager.ERROR -> "ERROR (internal framework error)"
+                    else -> "reason=$reason"
+                }
+                appendP2pLog("✗ createGroup() onFailure: $msg")
+                _networkProbe.value = _networkProbe.value.copy(
+                    p2pActive = false,
+                    p2pStatus = "✗ createGroup failed: $msg",
+                )
+            }
+        })
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestGroupInfo() {
+        val mgr = p2pManager ?: return
+        val ch = p2pChannel ?: return
+        mgr.requestGroupInfo(ch) { group ->
+            if (group == null) {
+                appendP2pLog("requestGroupInfo: null (no group yet)")
+            } else {
+                val ssid = group.networkName
+                val pass = group.passphrase
+                appendP2pLog("✓ Group info: ssid=$ssid")
+                _networkProbe.value = _networkProbe.value.copy(
+                    p2pSsid = ssid,
+                    p2pPassphrase = pass,
+                    p2pStatus = "✓ Group active — connect a phone to test",
+                )
+            }
+        }
+        mgr.requestConnectionInfo(ch) { info ->
+            val ip = info?.groupOwnerAddress?.hostAddress
+            if (ip != null) {
+                _networkProbe.value = _networkProbe.value.copy(p2pOwnerIp = ip)
+                appendP2pLog("Group owner IP: $ip")
+            }
+        }
+    }
+
+    private fun stopP2pProbe() {
+        val mgr = p2pManager
+        val ch = p2pChannel
+        if (mgr != null && ch != null) {
+            try {
+                mgr.removeGroup(ch, null)
+            } catch (_: Exception) {}
+        }
+        p2pReceiver?.let {
+            try { getApplication<Application>().unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        p2pReceiver = null
+        p2pChannel = null
+        p2pManager = null
+        _networkProbe.value = _networkProbe.value.copy(
+            p2pActive = false,
+            p2pStatus = "Stopped",
+        )
+    }
+
+    private fun appendP2pLog(msg: String) {
+        val cur = _networkProbe.value.p2pLog
+        _networkProbe.value = _networkProbe.value.copy(p2pLog = (cur + msg).takeLast(20))
+        com.openautolink.app.diagnostics.DiagnosticLog.i("P2pProbe", msg)
+    }
+
     override fun onCleared() {
         super.onCleared()
         stopTcpListener()
+        stopLocalHotspot()
+        stopP2pProbe()
         // Note: remoteLogServer and reverseTunnel are NOT stopped here —
         // they are application-scoped singletons that survive screen navigation.
         // User explicitly stops them via the UI.
