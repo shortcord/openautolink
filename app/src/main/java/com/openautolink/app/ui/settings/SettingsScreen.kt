@@ -1787,7 +1787,14 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth(0.7f)
-                    .clickable { captureTarget = action }
+                    .clickable {
+                        com.openautolink.app.diagnostics.DiagnosticLog.i(
+                            "input",
+                            "Key binding requested: target=${action.label} aaKeycode=${action.aaKeycode} " +
+                                    "currentMap=${uiState.keyRemap.ifBlank { "{}" }}"
+                        )
+                        captureTarget = action
+                    }
                     .padding(vertical = 8.dp, horizontal = 4.dp)
                     .testTag("keyMap_${action.aaKeycode}"),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1820,7 +1827,13 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         // Reset all mappings button
         if (currentMap.isNotEmpty()) {
             FilledTonalButton(
-                onClick = { viewModel.updateKeyRemap("") },
+                onClick = {
+                    com.openautolink.app.diagnostics.DiagnosticLog.i(
+                        "input",
+                        "Key binding reset all mappings: previousMap=${uiState.keyRemap}"
+                    )
+                    viewModel.updateKeyRemap("")
+                },
                 modifier = Modifier.testTag("resetKeyMap"),
             ) {
                 Text("Reset All Mappings")
@@ -1839,16 +1852,40 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         // keys inside an AlertDialog (different window, no focus), so we hook
         // MainActivity.dispatchKeyEvent via KeyCaptureBus instead.
         DisposableEffect(target) {
+            com.openautolink.app.diagnostics.DiagnosticLog.i(
+                "input",
+                "Key binding capture subscribed: target=${target.label} aaKeycode=${target.aaKeycode}"
+            )
             com.openautolink.app.input.KeyCaptureBus.listener = { code ->
                 val name = android.view.KeyEvent.keyCodeToString(code)
                     .removePrefix("KEYCODE_")
+                com.openautolink.app.diagnostics.DiagnosticLog.i(
+                    "input",
+                    "Key binding detected: target=${target.label} aaKeycode=${target.aaKeycode} " +
+                            "hardwareKey=$code ($name)"
+                )
                 lastDetectedKey = code to name
             }
-            onDispose { com.openautolink.app.input.KeyCaptureBus.listener = null }
+            onDispose {
+                com.openautolink.app.diagnostics.DiagnosticLog.i(
+                    "input",
+                    "Key binding capture unsubscribed: target=${target.label} aaKeycode=${target.aaKeycode} " +
+                            "lastDetected=${lastDetectedKey?.let { "${it.second} (${it.first})" } ?: "none"}"
+                )
+                com.openautolink.app.input.KeyCaptureBus.listener = null
+            }
         }
 
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { captureTarget = null; lastDetectedKey = null },
+            onDismissRequest = {
+                com.openautolink.app.diagnostics.DiagnosticLog.i(
+                    "input",
+                    "Key binding dialog dismissed: target=${target.label} aaKeycode=${target.aaKeycode} " +
+                            "lastDetected=${lastDetectedKey?.let { "${it.second} (${it.first})" } ?: "none"}"
+                )
+                captureTarget = null
+                lastDetectedKey = null
+            },
             title = { Text("Assign key to: ${target.label}") },
             text = {
                 Column {
@@ -1874,11 +1911,17 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                 if (lastDetectedKey != null) {
                     Button(onClick = {
                         val hwKey = lastDetectedKey!!.first
+                        val hwName = lastDetectedKey!!.second
                         val newMap = currentMap.toMutableMap()
                         // Remove any existing mapping for this hardware key
                         newMap.keys.removeAll { it == hwKey }
                         newMap[hwKey] = target.aaKeycode
                         val json = org.json.JSONObject(newMap.mapKeys { it.key.toString() }).toString()
+                        com.openautolink.app.diagnostics.DiagnosticLog.i(
+                            "input",
+                            "Key binding saved: hardwareKey=$hwKey ($hwName) -> target=${target.label} " +
+                                    "aaKeycode=${target.aaKeycode} oldMap=${uiState.keyRemap.ifBlank { "{}" }} newMap=$json"
+                        )
                         viewModel.updateKeyRemap(json)
                         captureTarget = null
                         lastDetectedKey = null
@@ -1888,7 +1931,14 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                 }
             },
             dismissButton = {
-                Button(onClick = { captureTarget = null }) {
+                Button(onClick = {
+                    com.openautolink.app.diagnostics.DiagnosticLog.i(
+                        "input",
+                        "Key binding dialog canceled: target=${target.label} aaKeycode=${target.aaKeycode} " +
+                                "lastDetected=${lastDetectedKey?.let { "${it.second} (${it.first})" } ?: "none"}"
+                    )
+                    captureTarget = null
+                }) {
                     Text("Cancel")
                 }
             },

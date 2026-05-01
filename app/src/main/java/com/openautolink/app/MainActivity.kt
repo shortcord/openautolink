@@ -99,18 +99,37 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Log every KeyEvent for voice button investigation
-        if (event.action == KeyEvent.ACTION_DOWN) {
+        if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) {
             com.openautolink.app.diagnostics.DiagnosticLog.i(
                 "input",
-                "dispatchKeyEvent: keycode=${event.keyCode} (${KeyEvent.keyCodeToString(event.keyCode)}) action=DOWN source=0x${Integer.toHexString(event.source)}"
+                "dispatchKeyEvent: action=${keyActionName(event.action)} keycode=${event.keyCode} " +
+                        "(${KeyEvent.keyCodeToString(event.keyCode)}) repeat=${event.repeatCount} " +
+                        "source=0x${Integer.toHexString(event.source)} deviceId=${event.deviceId} " +
+                        "scanCode=${event.scanCode} flags=0x${Integer.toHexString(event.flags)} " +
+                        "meta=0x${Integer.toHexString(event.metaState)} " +
+                        "captureActive=${com.openautolink.app.input.KeyCaptureBus.isCapturing}"
             )
         }
         // Settings "Assign key" capture takes priority — steering wheel keys
         // don't reach Compose focus inside an AlertDialog, so we intercept here.
-        if (com.openautolink.app.input.KeyCaptureBus.handle(event)) return true
+        if (com.openautolink.app.input.KeyCaptureBus.handle(event)) {
+            com.openautolink.app.diagnostics.DiagnosticLog.i(
+                "input",
+                "dispatchKeyEvent consumed by KeyCaptureBus: action=${keyActionName(event.action)} " +
+                        "keycode=${event.keyCode} (${KeyEvent.keyCodeToString(event.keyCode)})"
+            )
+            return true
+        }
         val vm = ViewModelProvider(this)[ProjectionViewModel::class.java]
         if (vm.onKeyEvent(event)) return true
         return super.dispatchKeyEvent(event)
+    }
+
+    private fun keyActionName(action: Int): String = when (action) {
+        KeyEvent.ACTION_DOWN -> "DOWN"
+        KeyEvent.ACTION_UP -> "UP"
+        KeyEvent.ACTION_MULTIPLE -> "MULTIPLE"
+        else -> action.toString()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
