@@ -264,6 +264,7 @@ private:
     std::atomic<bool> sessionStoppedFired_{false};
     std::atomic<int> negotiatedCodecType_{0};
     std::atomic<int64_t> pingSentAtMs_{0};
+    std::atomic<int64_t> keyframeRequestedAtMs_{0};
 
     // Channel-error coalescing + escalation tracking (guarded by errorMu_)
     std::mutex errorMu_;

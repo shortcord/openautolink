@@ -931,6 +931,15 @@ void JniSession::onMediaWithTimestampIndication(
         LOGI("Video frame: combined config+keyframe detected (%zu bytes, codec=%d)",
              buffer.size, codec);
     }
+    if (isKeyFrame) {
+        const int64_t requestedAt = keyframeRequestedAtMs_.exchange(0);
+        if (requestedAt > 0) {
+            const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            LOGI("Video keyframe received %lld ms after request (%zu bytes, codec=%d)",
+                 static_cast<long long>(nowMs - requestedAt), buffer.size, codec);
+        }
+    }
 
     // Dispatch to Kotlin
     if (cbMethods_.onVideoFrame && callbackRef_) {
@@ -1531,11 +1540,14 @@ void JniSession::sendMicAudio(const uint8_t* data, size_t length)
 void JniSession::requestKeyframe()
 {
     if (!streaming_ || !videoChannel_) return;
+    const auto requestedAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    keyframeRequestedAtMs_.store(requestedAtMs);
     ioService_->post([this]() {
         LOGI("Requesting keyframe (VideoFocusIndication)");
         aap_protobuf::service::media::video::message::VideoFocusNotification focus;
         focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
-        focus.set_unsolicited(false);
+        focus.set_unsolicited(true);
         auto promise = aasdk::channel::SendPromise::defer(*strand_);
         promise->then([]() {}, [](const auto&) {});
         videoChannel_->sendVideoFocusIndication(focus, std::move(promise));

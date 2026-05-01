@@ -226,10 +226,8 @@ JNIEXPORT void JNICALL
 Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeRequestKeyframe(
     JNIEnv* /*env*/, jclass /*clazz*/)
 {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) {
-        gSession->requestKeyframe();
-    }
+    auto session = getSession();
+    if (session) session->requestKeyframe();
 }
 
 // Typed vehicle sensor JNI methods — each calls the corresponding C++ method
