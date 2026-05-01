@@ -1603,13 +1603,17 @@ void JniSession::sendFuelSensor(int levelPct, int rangeM, bool lowFuel)
 }
 
 void JniSession::sendEnergyModelSensor(int batteryLevelWh, int batteryCapacityWh,
-    int rangeM, int chargeRateW)
+    int rangeM, int chargeRateW,
+    float drivingWhPerKmOverride, float auxWhPerKmOverride, float aeroCoefOverride,
+    float reservePctOverride, int maxChargeWOverride, int maxDischargeWOverride)
 {
     if (!streaming_ || !sensorChannel_) return;
     // Guard: skip if values are invalid (matches bridge-mode logic)
     if (batteryCapacityWh <= 0 || batteryLevelWh <= 0 || rangeM <= 0) return;
 
-    ioService_->post([this, batteryLevelWh, batteryCapacityWh, rangeM, chargeRateW]() {
+    ioService_->post([this, batteryLevelWh, batteryCapacityWh, rangeM, chargeRateW,
+                      drivingWhPerKmOverride, auxWhPerKmOverride, aeroCoefOverride,
+                      reservePctOverride, maxChargeWOverride, maxDischargeWOverride]() {
         aap_protobuf::service::sensorsource::message::SensorBatch batch;
         aap_protobuf::service::sensorsource::message::VehicleEnergyModel vem;
 
@@ -1624,22 +1628,30 @@ void JniSession::sendEnergyModelSensor(int batteryLevelWh, int batteryCapacityWh
         batt->mutable_min_usable_capacity()->set_watt_hours(batteryLevelWh);
 
         // Reserve = small buffer below which Maps warns "low battery"
-        batt->mutable_reserve_energy()->set_watt_hours(static_cast<int>(batteryCapacityWh * 0.05));
+        float reservePct = (reservePctOverride >= 0.0f) ? reservePctOverride : 5.0f;
+        batt->mutable_reserve_energy()->set_watt_hours(
+            static_cast<int>(batteryCapacityWh * (reservePct / 100.0f)));
 
         batt->set_regen_braking_capable(true);
 
         // Charge/discharge power — needed for server-side EV routing computation
-        int chargePower = (chargeRateW > 0) ? chargeRateW : 150000;
+        int chargePower;
+        if (maxChargeWOverride > 0) {
+            chargePower = maxChargeWOverride;
+        } else {
+            chargePower = (chargeRateW > 0) ? chargeRateW : 150000;
+        }
         batt->set_max_charge_power_w(chargePower);
-        batt->set_max_discharge_power_w(150000);
+        batt->set_max_discharge_power_w(maxDischargeWOverride > 0 ? maxDischargeWOverride : 150000);
 
-        // Energy consumption derived from car's own range estimate
-        // consumption = currentEnergy / rangeRemaining (Wh/m) * 1000 (Wh/km)
+        // Energy consumption — derived from car range unless override provided
         auto* cons = vem.mutable_consumption();
-        float whPerKm = (static_cast<float>(batteryLevelWh) / static_cast<float>(rangeM)) * 1000.0f;
+        float derivedWhPerKm = (static_cast<float>(batteryLevelWh) /
+                                static_cast<float>(rangeM)) * 1000.0f;
+        float whPerKm = (drivingWhPerKmOverride >= 0.0f) ? drivingWhPerKmOverride : derivedWhPerKm;
         cons->mutable_driving()->set_rate(whPerKm);
-        cons->mutable_auxiliary()->set_rate(2.0f);    // typical aux consumption
-        cons->mutable_aerodynamic()->set_rate(0.36f);  // drag coefficient contribution
+        cons->mutable_auxiliary()->set_rate(auxWhPerKmOverride >= 0.0f ? auxWhPerKmOverride : 2.0f);
+        cons->mutable_aerodynamic()->set_rate(aeroCoefOverride >= 0.0f ? aeroCoefOverride : 0.36f);
 
         // Charging prefs
         vem.mutable_charging_prefs()->set_mode(1);  // standard

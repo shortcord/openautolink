@@ -15,12 +15,14 @@ import com.openautolink.app.ui.projection.ProjectionViewModel
 import com.openautolink.app.ui.settings.SettingsScreen
 import com.openautolink.app.ui.settings.SettingsViewModel
 import com.openautolink.app.ui.settings.SafeAreaEditorScreen
+import com.openautolink.app.ui.settings.EvEnergyModelScreen
 
 object AppDestinations {
     const val PROJECTION = "projection"
     const val SETTINGS = "settings"
     const val DIAGNOSTICS = "diagnostics"
     const val SAFE_AREA_EDITOR = "safe_area_editor"
+    const val EV_ENERGY_MODEL = "ev_energy_model"
 }
 
 @Composable
@@ -41,7 +43,7 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                 onNavigateToSettings = {
                     // Legacy — no longer used, settings are an overlay now
                 },
-                settingsOverlay = { onBack ->
+                settingsOverlay = { onBack, onShowDiagnostics ->
                     SettingsScreen(
                         viewModel = settingsViewModel,
                         sessionState = projectionUiState.sessionState,
@@ -50,19 +52,18 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                             onBack()
                         },
                         onBack = onBack,
-                        onNavigateToDiagnostics = {
-                            navController.navigate(AppDestinations.DIAGNOSTICS)
-                        },
+                        onNavigateToDiagnostics = onShowDiagnostics,
                         onNavigateToSafeAreaEditor = {
                             navController.navigate(AppDestinations.SAFE_AREA_EDITOR)
                         },
+                        onNavigateToEvEnergyModel = {
+                            navController.navigate(AppDestinations.EV_ENERGY_MODEL)
+                        },
                     )
                 },
-            )
-        }
-        composable(AppDestinations.DIAGNOSTICS) {
-            DiagnosticsScreen(
-                onBack = { navController.popBackStack() }
+                diagnosticsOverlay = { onBack ->
+                    DiagnosticsScreen(onBack = onBack)
+                },
             )
         }
         composable(AppDestinations.SAFE_AREA_EDITOR) {
@@ -77,6 +78,11 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                     settingsViewModel.updateSafeAreaInsets(top, bottom, left, right)
                     navController.popBackStack()
                 },
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(AppDestinations.EV_ENERGY_MODEL) {
+            EvEnergyModelScreen(
                 onBack = { navController.popBackStack() },
             )
         }

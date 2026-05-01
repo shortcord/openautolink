@@ -41,6 +41,7 @@ See the full installation and setup walkthrough video on YouTube:
 - [Why This Exists](#why-this-exists)
 - [How It Works](#how-it-works)
 - [Features](#features)
+- [EV Range Estimates](#ev-range-estimates)
 - [What You Need](#what-you-need)
 - [Quick Start](#quick-start)
 - [Video and Display](#video-and-display)
@@ -110,6 +111,25 @@ The phone is the access point; the car is a client. Single-phone optimized — s
 - **Stats overlay** — codec, resolution, FPS, bitrate, WiFi band, decoder info
 - **Automatic reconnect** — car sleep → wake → projection resumes with no user interaction
 - **Built-in diagnostics** — USB device scanner, network probe, remote log server (TCP 6555), VHAL browser
+
+## EV Range Estimates
+
+Native AAOS Google Maps has a private, per-vehicle EV profile (charge curves, aerodynamics, real DCFC power) it uses to predict battery-on-arrival. Apps cannot read that profile. OpenAutoLink builds the next best thing: a tunable energy model from real VHAL data plus an EPA-derived profile database, sent to Maps as the standard `VehicleEnergyModel` sensor.
+
+Open it from **Settings → Diagnostics → Tweak EV Range Estimates**.
+
+- **Detected vehicle card** — looks up `Make|Model|Year` from VHAL against a bundled database of 46 popular EVs (Blazer EV, Lyriq, Hummer EV, Mach-E, F-150 Lightning, Model 3/Y, IONIQ 5/6, EV6, EV9, ID.4, Rivian R1T/R1S, Polestar 2/3/4, Volvo EX30/EX90, BMW i4/iX, Mercedes EQE/EQS, Honda Prologue, Acura ZDX, and more). When matched, one tap applies EPA Wh/km and DCFC kW.
+- **Four driving-rate modes**:
+  - **Derived** *(default)* — uses the dashboard's range estimate. Behaves identically to previous releases.
+  - **Multiplier** — scale the derived value 0.50× – 1.50× to nudge Maps optimistic or pessimistic.
+  - **Manual** — set Wh/km directly with a slider (80–300).
+  - **Learned** — auto-tunes from real driving. Computes a rolling Wh/km from `Δbattery ÷ Δdistance` (distance integrated from VHAL speed, since GM blocks `PERF_ODOMETER`). Per-vehicle state persists across car-off and reconnects. Skips ticks while charging or regenerating; rejects outliers; resets after long gaps.
+- **Other tunable fields** — auxiliary load, aerodynamic coefficient, reserve %, max charge / discharge power.
+- **Live readout** — shows current battery, range, charging power, derived rate, and the effective rate that will reach Maps.
+- **Send Now** — push the updated model immediately so changes show up in Maps within seconds.
+- **Profile database refresh** *(opt-in)* — fetch the latest profile JSON from network with a 4-second timeout, validated and cached locally. Defaults to OFF so the head unit doesn't depend on internet.
+
+> The bundled profiles ship with the APK and work fully offline. Updates land via app releases or the manual refresh button — never as a silent background fetch.
 
 ## What You Need
 
@@ -261,7 +281,6 @@ The original architecture used an SBC (single-board computer) running a C++ brid
 ## Known Issues
 
 - **H.265 video may appear green-tinted** on first connection for 30–45 seconds. May be Qualcomm-specific — not yet confirmed on other SoCs
-- **Connection/Reconnecting** this is still buggy. sometimes it will just work, sometimes the app may freeze and require somewhat of a dance to get connected. WIP.
 
 If you encounter other problems, please [open an issue](https://github.com/mossyhub/openautolink/issues).
 

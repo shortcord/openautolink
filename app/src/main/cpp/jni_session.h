@@ -125,7 +125,9 @@ public:
     void sendNightModeSensor(bool night);
     void sendDrivingStatusSensor(bool moving);
     void sendFuelSensor(int levelPct, int rangeM, bool lowFuel);
-    void sendEnergyModelSensor(int batteryLevelWh, int batteryCapacityWh, int rangeM, int chargeRateW);
+    void sendEnergyModelSensor(int batteryLevelWh, int batteryCapacityWh, int rangeM, int chargeRateW,
+        float drivingWhPerKm = -1.0f, float auxWhPerKm = -1.0f, float aeroCoef = -1.0f,
+        float reservePct = -1.0f, int maxChargeW = -1, int maxDischargeW = -1);
     void sendAccelerometerSensor(int xE3, int yE3, int zE3);
     void sendGyroscopeSensor(int rxE3, int ryE3, int rzE3);
     void sendCompassSensor(int bearingE6, int pitchE6, int rollE6);

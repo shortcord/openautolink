@@ -49,6 +49,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -112,6 +113,7 @@ fun SettingsScreen(
     onBack: () -> Unit = {},
     onNavigateToDiagnostics: () -> Unit = {},
     onNavigateToSafeAreaEditor: () -> Unit = {},
+    onNavigateToEvEnergyModel: () -> Unit = {},
 ) {
     val uiState by viewModel.settingsState.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableStateOf(SettingsTab.CONNECTION) }
@@ -197,7 +199,7 @@ fun SettingsScreen(
                         SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
                         SettingsTab.INPUT -> InputTab(viewModel, uiState)
                         SettingsTab.DIAGNOSTICS -> DiagnosticsSettingsTab(
-                            viewModel, uiState, onNavigateToDiagnostics
+                            viewModel, uiState, onNavigateToDiagnostics, onNavigateToEvEnergyModel
                         )
                     }
                 }
@@ -1827,26 +1829,25 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
     // Key capture dialog
     if (captureTarget != null) {
         val target = captureTarget!!
-        val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
-        LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+        // Subscribe to the global Activity-level key bus while the dialog is
+        // open. Compose `onKeyEvent` does NOT receive steering-wheel / remote
+        // keys inside an AlertDialog (different window, no focus), so we hook
+        // MainActivity.dispatchKeyEvent via KeyCaptureBus instead.
+        DisposableEffect(target) {
+            com.openautolink.app.input.KeyCaptureBus.listener = { code ->
+                val name = android.view.KeyEvent.keyCodeToString(code)
+                    .removePrefix("KEYCODE_")
+                lastDetectedKey = code to name
+            }
+            onDispose { com.openautolink.app.input.KeyCaptureBus.listener = null }
+        }
 
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { captureTarget = null },
+            onDismissRequest = { captureTarget = null; lastDetectedKey = null },
             title = { Text("Assign key to: ${target.label}") },
             text = {
-                Column(
-                    modifier = Modifier
-                        .focusRequester(focusRequester)
-                        .onKeyEvent { event ->
-                            if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_UP) {
-                                val code = event.nativeKeyEvent.keyCode
-                                val name = android.view.KeyEvent.keyCodeToString(code)
-                                    .removePrefix("KEYCODE_")
-                                lastDetectedKey = code to name
-                            }
-                            true // consume all key events
-                        }
-                ) {
+                Column {
                     Text("Press any physical button (steering wheel, remote, keyboard) now.")
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -2082,6 +2083,7 @@ private fun DiagnosticsSettingsTab(
     viewModel: SettingsViewModel,
     uiState: SettingsUiState,
     onNavigateToDiagnostics: () -> Unit,
+    onNavigateToEvEnergyModel: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -2113,6 +2115,26 @@ private fun DiagnosticsSettingsTab(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text("Open Diagnostics Dashboard")
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // EV energy-model tuning entry — see docs/ev-energy-model-tuning-plan.md.
+        SectionHeader("EV Range Estimates")
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Tweak the energy model OpenAutoLink sends to Maps so " +
+                "battery-on-arrival matches what your car shows natively. " +
+                "Only meaningful on EV vehicles.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(0.7f).padding(bottom = 12.dp),
+        )
+        FilledTonalButton(
+            onClick = onNavigateToEvEnergyModel,
+            modifier = Modifier.testTag("openEvEnergyModelButton"),
+        ) {
+            Text("Tweak EV Range Estimates")
         }
 
         Spacer(modifier = Modifier.height(24.dp))

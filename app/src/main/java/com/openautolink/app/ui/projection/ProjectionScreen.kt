@@ -70,7 +70,8 @@ import com.openautolink.app.video.VideoStats
 fun ProjectionScreen(
     viewModel: ProjectionViewModel = viewModel(),
     onNavigateToSettings: () -> Unit = {},
-    settingsOverlay: @Composable (onBack: () -> Unit) -> Unit = {},
+    settingsOverlay: @Composable (onBack: () -> Unit, onShowDiagnostics: () -> Unit) -> Unit = { _, _ -> },
+    diagnosticsOverlay: @Composable (onBack: () -> Unit) -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val connectionMode by viewModel.connectionMode.collectAsStateWithLifecycle()
@@ -85,6 +86,10 @@ fun ProjectionScreen(
 
     // Settings overlay state
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    // Diagnostics overlay state — rendered as overlay (not nav destination) so the
+    // projection Surface stays alive underneath. Returning to projection avoids
+    // a codec/Surface re-init and the black frames that come with it.
+    var showDiagnostics by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(showSettings) {
         viewModel.setSettingsOpen(showSettings)
@@ -354,7 +359,32 @@ fun ProjectionScreen(
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.85f))
             ) {
-                settingsOverlay { showSettings = false }
+                settingsOverlay(
+                    { showSettings = false },
+                    {
+                        // Open diagnostics on top of settings; closing diagnostics
+                        // returns the user to the settings overlay rather than
+                        // straight to projection.
+                        showDiagnostics = true
+                    },
+                )
+            }
+        }
+
+        // Diagnostics overlay — same pattern as Settings. Projection keeps
+        // rendering underneath so closing the overlay shows live video, not
+        // a recreated Surface.
+        AnimatedVisibility(
+            visible = showDiagnostics,
+            enter = slideInHorizontally { -it },
+            exit = slideOutHorizontally { -it },
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.85f))
+            ) {
+                diagnosticsOverlay { showDiagnostics = false }
             }
         }
 

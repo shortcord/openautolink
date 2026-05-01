@@ -110,6 +110,37 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val CAR_HOTSPOT_AUTO_INTERFACE = booleanPreferencesKey("car_hotspot_auto_interface")
         val CAR_HOTSPOT_INTERFACE_NAME = stringPreferencesKey("car_hotspot_interface_name")
 
+        // EV energy model tuning — see docs/ev-energy-model-tuning-plan.md.
+        // EV_TUNING_ENABLED is the master toggle; when false, all overrides
+        // are ignored and we send today's hardcoded VEM values.
+        // EV_DRIVING_MODE: "derived" | "manual" | "multiplier"
+        val EV_TUNING_ENABLED = booleanPreferencesKey("ev_tuning_enabled")
+        val EV_DRIVING_MODE = stringPreferencesKey("ev_driving_mode")
+        val EV_DRIVING_WH_PER_KM = intPreferencesKey("ev_driving_wh_per_km")
+        val EV_DRIVING_MULTIPLIER_PCT = intPreferencesKey("ev_driving_multiplier_pct")
+        val EV_AUX_WH_PER_KM_X10 = intPreferencesKey("ev_aux_wh_per_km_x10")
+        val EV_AERO_COEF_X100 = intPreferencesKey("ev_aero_coef_x100")
+        val EV_RESERVE_PCT = intPreferencesKey("ev_reserve_pct")
+        val EV_MAX_CHARGE_KW = intPreferencesKey("ev_max_charge_kw")
+        val EV_MAX_DISCHARGE_KW = intPreferencesKey("ev_max_discharge_kw")
+
+        // Phase 2 — EPA / community-curated prefill profiles.
+        // EV_USE_EPA_BASELINE: when true, baseline driving rate falls back to
+        //   the bundled per-vehicle Wh/km when the auto-derived value isn't
+        //   available or when the master tuning toggle is off.
+        // EV_PROFILES_LAST_UPDATE_MS / EV_PROFILES_OVERLAY_PATH: track the
+        //   user-fetched profile DB (Phase 2b). Empty path = use bundled JSON.
+        // EV_PROFILES_UPDATE_URL: source of truth for refreshes; defaults to
+        //   the OAL repo's bundled file. User-editable for forks.
+        val EV_USE_EPA_BASELINE = booleanPreferencesKey("ev_use_epa_baseline")
+        val EV_PROFILES_LAST_UPDATE_MS = androidx.datastore.preferences.core.longPreferencesKey("ev_profiles_last_update_ms")
+        val EV_PROFILES_UPDATE_URL = stringPreferencesKey("ev_profiles_update_url")
+
+        // Phase 3' — learned driving rate (per-vehicle JSON map). Stored as
+        // a single JSON blob keyed by "Make|Model|Year". See
+        // [EvLearnedRateEstimator].
+        val EV_LEARNED_RATES_JSON = stringPreferencesKey("ev_learned_rates_json")
+
         const val DEFAULT_VIDEO_AUTO_NEGOTIATE = true
         const val DEFAULT_VIDEO_CODEC = "h264"
         const val DEFAULT_VIDEO_FPS = 60
@@ -163,6 +194,31 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_ALWAYS_ASK_PHONE = false
         const val DEFAULT_CAR_HOTSPOT_AUTO_INTERFACE = true
         const val DEFAULT_CAR_HOTSPOT_INTERFACE_NAME = ""
+
+        // EV tuning defaults — must reproduce current hardcoded VEM behavior
+        // when EV_TUNING_ENABLED=false (see sendEnergyModelSensor in
+        // app/src/main/cpp/jni_session.cpp).
+        const val EV_DRIVING_MODE_DERIVED = "derived"
+        const val EV_DRIVING_MODE_MANUAL = "manual"
+        const val EV_DRIVING_MODE_MULTIPLIER = "multiplier"
+        const val EV_DRIVING_MODE_LEARNED = "learned"
+
+        const val DEFAULT_EV_TUNING_ENABLED = false
+        const val DEFAULT_EV_DRIVING_MODE = EV_DRIVING_MODE_DERIVED
+        const val DEFAULT_EV_DRIVING_WH_PER_KM = 160
+        const val DEFAULT_EV_DRIVING_MULTIPLIER_PCT = 100
+        const val DEFAULT_EV_AUX_WH_PER_KM_X10 = 20      // 2.0
+        const val DEFAULT_EV_AERO_COEF_X100 = 36         // 0.36
+        const val DEFAULT_EV_RESERVE_PCT = 5
+        const val DEFAULT_EV_MAX_CHARGE_KW = 150
+        const val DEFAULT_EV_MAX_DISCHARGE_KW = 150
+
+        const val DEFAULT_EV_USE_EPA_BASELINE = false
+        const val DEFAULT_EV_PROFILES_LAST_UPDATE_MS = 0L
+        const val DEFAULT_EV_PROFILES_UPDATE_URL =
+            "https://raw.githubusercontent.com/mossyhub/openautolink/main/app/src/main/assets/ev_profiles.json"
+
+        const val DEFAULT_EV_LEARNED_RATES_JSON = "{}"
     }
 
     val videoAutoNegotiate: Flow<Boolean> = dataStore.data.map { prefs ->
@@ -558,5 +614,119 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setCarHotspotInterfaceName(name: String) {
         dataStore.edit { it[CAR_HOTSPOT_INTERFACE_NAME] = name }
+    }
+
+    // ── EV energy model tuning ──────────────────────────────────────
+
+    val evTuningEnabled: Flow<Boolean> = dataStore.data.map { p ->
+        p[EV_TUNING_ENABLED] ?: DEFAULT_EV_TUNING_ENABLED
+    }
+
+    suspend fun setEvTuningEnabled(enabled: Boolean) {
+        dataStore.edit { it[EV_TUNING_ENABLED] = enabled }
+    }
+
+    val evDrivingMode: Flow<String> = dataStore.data.map { p ->
+        p[EV_DRIVING_MODE] ?: DEFAULT_EV_DRIVING_MODE
+    }
+
+    suspend fun setEvDrivingMode(mode: String) {
+        val sanitized = when (mode) {
+            EV_DRIVING_MODE_DERIVED, EV_DRIVING_MODE_MANUAL,
+            EV_DRIVING_MODE_MULTIPLIER, EV_DRIVING_MODE_LEARNED -> mode
+            else -> DEFAULT_EV_DRIVING_MODE
+        }
+        dataStore.edit { it[EV_DRIVING_MODE] = sanitized }
+    }
+
+    val evDrivingWhPerKm: Flow<Int> = dataStore.data.map { p ->
+        p[EV_DRIVING_WH_PER_KM] ?: DEFAULT_EV_DRIVING_WH_PER_KM
+    }
+
+    suspend fun setEvDrivingWhPerKm(value: Int) {
+        dataStore.edit { it[EV_DRIVING_WH_PER_KM] = value.coerceIn(80, 300) }
+    }
+
+    val evDrivingMultiplierPct: Flow<Int> = dataStore.data.map { p ->
+        p[EV_DRIVING_MULTIPLIER_PCT] ?: DEFAULT_EV_DRIVING_MULTIPLIER_PCT
+    }
+
+    suspend fun setEvDrivingMultiplierPct(value: Int) {
+        dataStore.edit { it[EV_DRIVING_MULTIPLIER_PCT] = value.coerceIn(50, 150) }
+    }
+
+    val evAuxWhPerKmX10: Flow<Int> = dataStore.data.map { p ->
+        p[EV_AUX_WH_PER_KM_X10] ?: DEFAULT_EV_AUX_WH_PER_KM_X10
+    }
+
+    suspend fun setEvAuxWhPerKmX10(value: Int) {
+        dataStore.edit { it[EV_AUX_WH_PER_KM_X10] = value.coerceIn(0, 100) }
+    }
+
+    val evAeroCoefX100: Flow<Int> = dataStore.data.map { p ->
+        p[EV_AERO_COEF_X100] ?: DEFAULT_EV_AERO_COEF_X100
+    }
+
+    suspend fun setEvAeroCoefX100(value: Int) {
+        dataStore.edit { it[EV_AERO_COEF_X100] = value.coerceIn(20, 45) }
+    }
+
+    val evReservePct: Flow<Int> = dataStore.data.map { p ->
+        p[EV_RESERVE_PCT] ?: DEFAULT_EV_RESERVE_PCT
+    }
+
+    suspend fun setEvReservePct(value: Int) {
+        dataStore.edit { it[EV_RESERVE_PCT] = value.coerceIn(0, 15) }
+    }
+
+    val evMaxChargeKw: Flow<Int> = dataStore.data.map { p ->
+        p[EV_MAX_CHARGE_KW] ?: DEFAULT_EV_MAX_CHARGE_KW
+    }
+
+    suspend fun setEvMaxChargeKw(value: Int) {
+        dataStore.edit { it[EV_MAX_CHARGE_KW] = value.coerceIn(50, 350) }
+    }
+
+    val evMaxDischargeKw: Flow<Int> = dataStore.data.map { p ->
+        p[EV_MAX_DISCHARGE_KW] ?: DEFAULT_EV_MAX_DISCHARGE_KW
+    }
+
+    suspend fun setEvMaxDischargeKw(value: Int) {
+        dataStore.edit { it[EV_MAX_DISCHARGE_KW] = value.coerceIn(50, 300) }
+    }
+
+    // ── EV profile prefill (Phase 2 / 2b) ───────────────────────────
+
+    val evUseEpaBaseline: Flow<Boolean> = dataStore.data.map { p ->
+        p[EV_USE_EPA_BASELINE] ?: DEFAULT_EV_USE_EPA_BASELINE
+    }
+
+    suspend fun setEvUseEpaBaseline(enabled: Boolean) {
+        dataStore.edit { it[EV_USE_EPA_BASELINE] = enabled }
+    }
+
+    val evProfilesLastUpdateMs: Flow<Long> = dataStore.data.map { p ->
+        p[EV_PROFILES_LAST_UPDATE_MS] ?: DEFAULT_EV_PROFILES_LAST_UPDATE_MS
+    }
+
+    suspend fun setEvProfilesLastUpdateMs(ms: Long) {
+        dataStore.edit { it[EV_PROFILES_LAST_UPDATE_MS] = ms }
+    }
+
+    val evProfilesUpdateUrl: Flow<String> = dataStore.data.map { p ->
+        val raw = p[EV_PROFILES_UPDATE_URL] ?: DEFAULT_EV_PROFILES_UPDATE_URL
+        if (raw.isBlank()) DEFAULT_EV_PROFILES_UPDATE_URL else raw
+    }
+
+    suspend fun setEvProfilesUpdateUrl(url: String) {
+        dataStore.edit { it[EV_PROFILES_UPDATE_URL] = url }
+    }
+
+    val evLearnedRatesJson: Flow<String> = dataStore.data.map { p ->
+        p[EV_LEARNED_RATES_JSON] ?: DEFAULT_EV_LEARNED_RATES_JSON
+    }
+
+    suspend fun setEvLearnedRatesJson(json: String) {
+        dataStore.edit { it[EV_LEARNED_RATES_JSON] = json }
     }
 }

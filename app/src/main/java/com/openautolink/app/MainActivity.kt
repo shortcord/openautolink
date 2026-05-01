@@ -105,6 +105,9 @@ class MainActivity : ComponentActivity() {
                 "dispatchKeyEvent: keycode=${event.keyCode} (${KeyEvent.keyCodeToString(event.keyCode)}) action=DOWN source=0x${Integer.toHexString(event.source)}"
             )
         }
+        // Settings "Assign key" capture takes priority — steering wheel keys
+        // don't reach Compose focus inside an AlertDialog, so we intercept here.
+        if (com.openautolink.app.input.KeyCaptureBus.handle(event)) return true
         val vm = ViewModelProvider(this)[ProjectionViewModel::class.java]
         if (vm.onKeyEvent(event)) return true
         return super.dispatchKeyEvent(event)

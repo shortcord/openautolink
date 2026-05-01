@@ -11,6 +11,8 @@ import com.openautolink.app.audio.CallState
 import com.openautolink.app.audio.MicCaptureManager
 import com.openautolink.app.cluster.ClusterNavigationState
 import com.openautolink.app.data.AppPreferences
+import com.openautolink.app.data.EvLearnedRateEstimator
+import com.openautolink.app.data.EvProfilesRepository
 import com.openautolink.app.diagnostics.DiagnosticLevel
 import com.openautolink.app.diagnostics.DiagnosticLog
 import com.openautolink.app.diagnostics.RemoteDiagnostics
@@ -142,6 +144,43 @@ class SessionManager(
     private var lastVemRangeM: Int = Int.MIN_VALUE
     private var lastVemChargeW: Int = Int.MIN_VALUE
     private val VEM_LOG_MIN_GAP_MS: Long = 30_000L
+
+    /**
+     * EV energy-model tuning snapshot — see docs/ev-energy-model-tuning-plan.md.
+     * Updated by a coroutine that observes [AppPreferences] flows; read on the
+     * VHAL hot path with no locking. When [evTuningEnabled] is false, all
+     * `evXxx` overrides are ignored and we send today's hardcoded VEM values
+     * (mirrors plan acceptance test #2).
+     */
+    @Volatile private var evTuningEnabled: Boolean = false
+    @Volatile private var evDrivingMode: String = AppPreferences.DEFAULT_EV_DRIVING_MODE
+    @Volatile private var evDrivingWhPerKm: Int = AppPreferences.DEFAULT_EV_DRIVING_WH_PER_KM
+    @Volatile private var evDrivingMultiplierPct: Int = AppPreferences.DEFAULT_EV_DRIVING_MULTIPLIER_PCT
+    @Volatile private var evAuxWhPerKmX10: Int = AppPreferences.DEFAULT_EV_AUX_WH_PER_KM_X10
+    @Volatile private var evAeroCoefX100: Int = AppPreferences.DEFAULT_EV_AERO_COEF_X100
+    @Volatile private var evReservePct: Int = AppPreferences.DEFAULT_EV_RESERVE_PCT
+    @Volatile private var evMaxChargeKw: Int = AppPreferences.DEFAULT_EV_MAX_CHARGE_KW
+    @Volatile private var evMaxDischargeKw: Int = AppPreferences.DEFAULT_EV_MAX_DISCHARGE_KW
+
+    /** EPA / curated baseline (Phase 2). When non-null AND used (see flag),
+     *  the C++ side gets these values when the user-tunable override would
+     *  otherwise have been "derive on the C++ side". */
+    @Volatile private var evUseEpaBaseline: Boolean = AppPreferences.DEFAULT_EV_USE_EPA_BASELINE
+    @Volatile private var epaDrivingWhPerKm: Int? = null
+    @Volatile private var epaMaxChargeKw: Int? = null
+
+    /** Phase 3' — learned-rate estimator. Lazily initialized once context
+     *  is available; null on the (rare) early ticks before that. The UI
+     *  reads the same singleton directly via [EvLearnedRateEstimator.getInstance]
+     *  so the EV screen works even when no session has started. */
+    private var evLearnedEstimator: EvLearnedRateEstimator? = null
+    val evLearnedSnapshot: StateFlow<EvLearnedRateEstimator.Snapshot>?
+        get() = evLearnedEstimator?.activeSnapshot
+
+    fun resetEvLearnedRate() {
+        val snapshot = evLearnedEstimator?.activeSnapshot?.value
+        evLearnedEstimator?.reset(snapshot?.key)
+    }
 
     // IMU forwarder
     private var _imuForwarder: ImuForwarder? = null
@@ -326,6 +365,13 @@ class SessionManager(
                         val rangeM = ((vd.rangeKm ?: 0f) * 1000).toInt()
                         val chargeW = vd.evChargeRateW?.toInt() ?: 0
                         val now = SystemClock.elapsedRealtime()
+                        // Feed the learned-rate estimator before VEM send so
+                        // the override (if learned mode is selected) reflects
+                        // the latest tick.
+                        evLearnedEstimator?.onVehicleTick(vd, now)
+                        // Refresh the EPA / curated profile match. Cheap —
+                        // early-outs when carMake/Model/Year haven't changed.
+                        refreshEvProfileLookup(vd)
                         // Suppress identical / near-identical emits — log only
                         // when a value moved meaningfully or [VEM_LOG_MIN_GAP_MS]
                         // elapsed. First emit always logs.
@@ -337,14 +383,14 @@ class SessionManager(
                         if (firstEmit || movedBattery || movedRange || movedCharge || staleEnough) {
                             DiagnosticLog.i(
                                 "vem",
-                                "sendEnergyModel: level=${batteryWh}Wh cap=${capacityWh}Wh range=${rangeM}m charge=${chargeW}W",
+                                "sendEnergyModel: level=${batteryWh}Wh cap=${capacityWh}Wh range=${rangeM}m charge=${chargeW}W${evTuningSummary(batteryWh, rangeM)}",
                             )
                             lastVemLogMs = now
                             lastVemBatteryWh = batteryWh
                             lastVemRangeM = rangeM
                             lastVemChargeW = chargeW
                         }
-                        session.sendEnergyModel(batteryWh, capacityWh, rangeM, chargeW)
+                        sendEnergyModelWithTuning(session, batteryWh, capacityWh, rangeM, chargeW)
                     }
                 },
                 onIgnitionOn = { /* aasdk mode doesn't need ignition-based reconnect */ }
@@ -1070,6 +1116,9 @@ class SessionManager(
         } catch (e: Exception) {
             OalLog.w(TAG, "Failed to sync local preferences: ${e.message}")
         }
+        // Start (idempotent-enough) EV tuning observer; coroutines just
+        // re-read the same Volatiles on subsequent calls.
+        observeEvTuningPrefs()
     }
 
     suspend fun sendControlMessage(message: ControlMessage) {
@@ -1252,6 +1301,175 @@ class SessionManager(
             }
             else -> {}
         }
+    }
+
+    // ── EV energy-model tuning ──────────────────────────────────────
+
+    @Volatile private var evTuningObserverStarted = false
+
+    /**
+     * Start observing tuning prefs and refreshing [evTuningEnabled] et al.
+     * Safe to call repeatedly; only the first call starts the collectors.
+     * See docs/ev-energy-model-tuning-plan.md.
+     */
+    private fun observeEvTuningPrefs() {
+        if (evTuningObserverStarted) return
+        val ctx = context ?: return
+        evTuningObserverStarted = true
+        val prefs = AppPreferences.getInstance(ctx)
+        if (evLearnedEstimator == null) {
+            evLearnedEstimator = EvLearnedRateEstimator.getInstance(prefs)
+        }
+        scope.launch { prefs.evTuningEnabled.collect { evTuningEnabled = it } }
+        scope.launch { prefs.evDrivingMode.collect { evDrivingMode = it } }
+        scope.launch { prefs.evDrivingWhPerKm.collect { evDrivingWhPerKm = it } }
+        scope.launch { prefs.evDrivingMultiplierPct.collect { evDrivingMultiplierPct = it } }
+        scope.launch { prefs.evAuxWhPerKmX10.collect { evAuxWhPerKmX10 = it } }
+        scope.launch { prefs.evAeroCoefX100.collect { evAeroCoefX100 = it } }
+        scope.launch { prefs.evReservePct.collect { evReservePct = it } }
+        scope.launch { prefs.evMaxChargeKw.collect { evMaxChargeKw = it } }
+        scope.launch { prefs.evMaxDischargeKw.collect { evMaxDischargeKw = it } }
+        scope.launch { prefs.evUseEpaBaseline.collect { evUseEpaBaseline = it } }
+
+        // Profile lookup runs inline in the VHAL sendMessage callback (see
+        // the `refreshEvProfileLookup(vd)` call in start()). Doing it there
+        // avoids a flaky retry-when-forwarder-arrives dance and guarantees
+        // every identity tick is seen.
+    }
+
+    private fun refreshEvProfileLookup(vd: ControlMessage.VehicleData) {
+        val ctx = context ?: return
+        val repo = EvProfilesRepository.getInstance(ctx)
+        val profile = repo.lookup(vd.carMake, vd.carModel, vd.carYear)
+        val newDrv = profile?.drivingWhPerKm
+        val newChg = profile?.maxChargeKw
+        if (newDrv != epaDrivingWhPerKm || newChg != epaMaxChargeKw) {
+            epaDrivingWhPerKm = newDrv
+            epaMaxChargeKw = newChg
+            if (profile != null) {
+                DiagnosticLog.i(
+                    "ev_profiles",
+                    "matched ${profile.key}: drv=${newDrv}Wh/km chg=${newChg}kW",
+                )
+            }
+        }
+    }
+
+    /**
+     * Compute the driving Wh/km override the C++ side should use. Returns a
+     * negative value when the C++ derived formula should be used instead
+     * (`derived` mode). Callers must pass the same `batteryWh`/`rangeM` that
+     * will reach [JniSession::sendEnergyModelSensor] so the multiplier mode
+     * matches.
+     */
+    private fun computeDrivingOverride(batteryWh: Int, rangeM: Int): Float {
+        if (!evTuningEnabled) return -1f
+        return when (evDrivingMode) {
+            AppPreferences.EV_DRIVING_MODE_MANUAL -> evDrivingWhPerKm.toFloat()
+            AppPreferences.EV_DRIVING_MODE_MULTIPLIER -> {
+                if (rangeM <= 0 || batteryWh <= 0) return -1f
+                val derived = (batteryWh.toFloat() / rangeM.toFloat()) * 1000f
+                derived * (evDrivingMultiplierPct / 100f)
+            }
+            AppPreferences.EV_DRIVING_MODE_LEARNED -> {
+                // Fall back to legacy derived path until the EMA has enough
+                // data to be trustworthy (>= 1 km of valid samples).
+                val snap = evLearnedEstimator?.activeSnapshot?.value
+                if (snap?.usable == true) snap.whPerKm else -1f
+            }
+            else -> -1f
+        }
+    }
+
+    private fun sendEnergyModelWithTuning(
+        session: AasdkSession, batteryWh: Int, capacityWh: Int, rangeM: Int, chargeW: Int,
+    ) {
+        // EPA baseline path: master tuning OFF, but user opted in to "use EPA
+        // as baseline". Apply driving Wh/km and max charge kW from the bundled
+        // profile when available. All other fields stay at hardcoded defaults
+        // (i.e. < 0 → C++ derives) so behavior remains close to the legacy
+        // path for unmatched vehicles.
+        if (!evTuningEnabled) {
+            if (!evUseEpaBaseline) {
+                session.sendEnergyModel(batteryWh, capacityWh, rangeM, chargeW)
+                return
+            }
+            val drv = epaDrivingWhPerKm?.toFloat() ?: -1f
+            val chg = epaMaxChargeKw?.let { it * 1000 } ?: -1
+            session.sendEnergyModel(
+                batteryWh, capacityWh, rangeM, chargeW,
+                drivingWhPerKm = drv,
+                maxChargeW = chg,
+            )
+            return
+        }
+        session.sendEnergyModel(
+            batteryWh, capacityWh, rangeM, chargeW,
+            drivingWhPerKm = computeDrivingOverride(batteryWh, rangeM),
+            auxWhPerKm = evAuxWhPerKmX10 / 10f,
+            aeroCoef = evAeroCoefX100 / 100f,
+            reservePct = evReservePct.toFloat(),
+            maxChargeW = evMaxChargeKw * 1000,
+            maxDischargeW = evMaxDischargeKw * 1000,
+        )
+    }
+
+    private fun evTuningSummary(batteryWh: Int, rangeM: Int): String {
+        if (!evTuningEnabled) return ""
+        val drv = when (evDrivingMode) {
+            AppPreferences.EV_DRIVING_MODE_MANUAL -> "manual:${evDrivingWhPerKm}"
+            AppPreferences.EV_DRIVING_MODE_MULTIPLIER -> {
+                val derived = if (rangeM > 0) (batteryWh.toFloat() / rangeM.toFloat()) * 1000f else 0f
+                val effective = (derived * (evDrivingMultiplierPct / 100f)).toInt()
+                "x${evDrivingMultiplierPct}%(${effective})"
+            }
+            AppPreferences.EV_DRIVING_MODE_LEARNED -> {
+                val snap = evLearnedEstimator?.activeSnapshot?.value
+                if (snap?.usable == true)
+                    "learned:${snap.whPerKm.toInt()}(${"%.1f".format(snap.sampleKm)}km)"
+                else "learned:warmup"
+            }
+            else -> "derived"
+        }
+        return " [tuning=ON drv=$drv aux=${evAuxWhPerKmX10 / 10f} aero=${evAeroCoefX100 / 100f}" +
+            " res=${evReservePct}% chg=${evMaxChargeKw}kW]"
+    }
+
+    fun forceSendEnergyModel(): Boolean {
+        val session = aasdkSession ?: return false
+        val vd = _vehicleDataForwarder?.latestVehicleData?.value ?: return false
+        if (vd.evBatteryLevelWh == null && vd.evBatteryCapacityWh == null) return false
+        val batteryWh = vd.evBatteryLevelWh?.toInt() ?: 0
+        val capacityWh = vd.evBatteryCapacityWh?.toInt() ?: 0
+        val rangeM = ((vd.rangeKm ?: 0f) * 1000).toInt()
+        val chargeW = vd.evChargeRateW?.toInt() ?: 0
+        DiagnosticLog.i(
+            "vem",
+            "forceSendEnergyModel: level=${batteryWh}Wh cap=${capacityWh}Wh range=${rangeM}m charge=${chargeW}W${evTuningSummary(batteryWh, rangeM)}",
+        )
+        sendEnergyModelWithTuning(session, batteryWh, capacityWh, rangeM, chargeW)
+        return true
+    }
+
+    /** Snapshot of the currently matched EV profile, for the tuning UI. */
+    data class EvProfileMatch(
+        val key: String?,
+        val displayName: String?,
+        val drivingWhPerKm: Int?,
+        val maxChargeKw: Int?,
+    )
+
+    fun currentEvProfileMatch(): EvProfileMatch {
+        val vd = _vehicleDataForwarder?.latestVehicleData?.value
+        val ctx = context ?: return EvProfileMatch(null, null, null, null)
+        val profile = EvProfilesRepository.getInstance(ctx)
+            .lookup(vd?.carMake, vd?.carModel, vd?.carYear)
+        return EvProfileMatch(
+            key = profile?.key,
+            displayName = profile?.displayName ?: profile?.key,
+            drivingWhPerKm = profile?.drivingWhPerKm,
+            maxChargeKw = profile?.maxChargeKw,
+        )
     }
 }
 
