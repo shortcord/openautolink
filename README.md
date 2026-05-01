@@ -218,6 +218,14 @@ Day-to-day:
 - **Changing the default.** Tap a different phone in the chooser to switch to it for this drive, or use Settings → Connection → Known Phones → "Set Default" to change it permanently. Turn on "Always ask which phone to use" if you'd rather pick every time (useful for shared cars).
 - **Forgetting a phone.** Settings → Connection → Known Phones → "Forget" removes a phone. If it was your default, the chooser will appear on the next connect so you can pick a new one.
 
+> **Tip — assign a static IP to your phone for fastest reconnects.** The car app caches the last IP it saw the phone on so future reconnects skip discovery entirely (sub-second). If the car's DHCP server hands the phone a different IP next time, the cached IP is stale and the car has to fall back to mDNS / TCP sweep (still works, just slower — usually 3–10 seconds). Avoid that by giving your phone a static IP for the car's WiFi:
+>
+> - On the phone: Settings → WiFi → long-press the car's network → Modify network → IP settings → **Static**.
+> - Pick an address **inside the AP's DHCP range** — easiest way is to look at the IP the phone got the first time (e.g. `10.220.23.232` on a GM Blazer EV) and reuse that exact value.
+> - Keep the same gateway / DNS the AP gave you.
+>
+> One-time setup; after this, every drive reconnects in well under a second.
+
 #### Phone Hotspot mode
 
 1. In Settings → Connection on both apps, switch to **Phone Hotspot**.

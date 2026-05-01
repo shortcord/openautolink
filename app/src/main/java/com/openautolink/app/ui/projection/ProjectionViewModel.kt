@@ -443,58 +443,20 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      * Force reconnect — used by "Save & Connect" button in Settings and
      * other manual reconnect triggers.
      *
-     * In Car Hotspot mode, fast-paths through the warm-cache IP of the
-     * default phone (or any known phone) so the reconnect is as instant
-     * as picking the phone from the chooser. Without this, reconnect()
-     * would re-run the full 3-phase resolve while [SessionManager.start]
-     * also tears down + rebuilds, leading to a slow + flaky restart.
+     * Stops cleanly and re-runs the full connect pipeline. In Car Hotspot
+     * mode that pipeline already starts with a warm-cache probe (Phase 0
+     * of [resolveCarHotspotPhone]) so reconnects are sub-second when the
+     * AP re-leased the same IP, and fall through gracefully when it
+     * didn't. **Don't** pass a cached IP as overrideIp here: if the IP
+     * is stale, [TcpConnector] will retry forever on it because manualIp
+     * mode has no fallback.
      */
     fun reconnect() {
         viewModelScope.launch {
-            // Stop cleanly so SessionManager isn't mid-stream when we kick
-            // a new connect — same pattern as the chooser pick.
+            OalLog.i(TAG, "reconnect(): tearing down current session")
             sessionManager.stop()
             hasConnected = false
-
-            val mode = try {
-                preferences.connectionMode.first()
-            } catch (_: Exception) {
-                AppPreferences.DEFAULT_CONNECTION_MODE
-            }
-            val overrideIp: String? = if (mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
-                pickReconnectIp()
-            } else null
-
-            if (overrideIp != null) {
-                OalLog.i(TAG, "reconnect: using cached IP $overrideIp")
-            } else {
-                OalLog.i(TAG, "reconnect: no cached IP — running full discovery")
-            }
-            connect(overrideIp = overrideIp)
-        }
-    }
-
-    /**
-     * Best-effort IP for [reconnect]: prefer the default phone's last-known
-     * IP, then any known phone's last-known IP. Returns null if nothing is
-     * cached (caller falls back to full discovery).
-     */
-    private suspend fun pickReconnectIp(): String? {
-        return try {
-            val defaultId = preferences.defaultPhoneId.first().takeIf { it.isNotBlank() }
-            val known = knownPhonesStore.phones.first()
-            // Default phone first.
-            defaultId?.let { id ->
-                known.firstOrNull { it.phoneId == id }?.lastKnownIp
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { return it }
-            }
-            // Otherwise any known phone, most recently seen first.
-            known.sortedByDescending { it.lastSeenMs }
-                .firstNotNullOfOrNull { it.lastKnownIp?.takeIf { ip -> ip.isNotBlank() } }
-        } catch (e: Exception) {
-            OalLog.d(TAG, "pickReconnectIp failed: ${e.message}")
-            null
+            connect(overrideIp = null)
         }
     }
 
@@ -758,17 +720,40 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             hasConnected = false
             connect(overrideIp = host)
 
-            // Hold the switching flag until the session reaches STREAMING
-            // (success), or we time out (failure / phone unreachable).
+            // Wait for the new session to settle. STREAMING means success;
+            // any IDLE *after* we've seen at least one CONNECTING means the
+            // attempt finished and bounced back without streaming (network
+            // unreachable, handshake failed, etc.). 30s is the absolute
+            // ceiling.
             val timeoutMs = 30_000L
-            val reached = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
-                sessionManager.sessionState.first { it == SessionState.STREAMING }
+            var sawConnecting = false
+            val outcome = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+                sessionManager.sessionState.first { state ->
+                    if (state == SessionState.CONNECTING ||
+                        state == SessionState.CONNECTED) sawConnecting = true
+                    when {
+                        state == SessionState.STREAMING -> true
+                        state == SessionState.ERROR -> true
+                        sawConnecting && state == SessionState.IDLE -> true
+                        else -> false
+                    }
+                }
             }
-            if (reached == null) {
-                OalLog.w(TAG, "Switch to id=${phoneId.take(8)} timed out after ${timeoutMs}ms")
-                _activePhoneId.value = null
-            } else {
-                OalLog.i(TAG, "Switch to id=${phoneId.take(8)} succeeded")
+            when (outcome) {
+                null -> {
+                    OalLog.w(TAG, "Switch to id=${phoneId.take(8)} timed out after ${timeoutMs}ms")
+                    _activePhoneId.value = null
+                }
+                SessionState.STREAMING -> {
+                    OalLog.i(TAG, "Switch to id=${phoneId.take(8)} succeeded")
+                }
+                else -> {
+                    OalLog.w(
+                        TAG,
+                        "Switch to id=${phoneId.take(8)} failed: state settled to $outcome",
+                    )
+                    _activePhoneId.value = null
+                }
             }
             _carHotspotSwitching.value = false
         }
