@@ -302,9 +302,48 @@ class SessionManager(
     @Volatile private var lastNegotiationKey: VideoNegotiationKey? = null
 
     fun requiresReconnectForVideoSettings(desired: VideoNegotiationKey): Boolean {
+        if (_audioPlayer == null || aasdkSession == null) return true
         val current = lastNegotiationKey ?: return true
         return current != desired
     }
+
+    private fun buildVideoNegotiationKey(
+        codecPreference: String,
+        videoAutoNegotiate: Boolean,
+        aaResolution: String,
+        aaDpi: Int,
+        aaWidthMargin: Int,
+        aaHeightMargin: Int,
+        aaPixelAspect: Int,
+        aaTargetLayoutWidthDp: Int,
+        videoFps: Int,
+        driveSide: String,
+        hideClock: Boolean,
+        hideSignal: Boolean,
+        hideBattery: Boolean,
+        safeAreaTop: Int,
+        safeAreaBottom: Int,
+        safeAreaLeft: Int,
+        safeAreaRight: Int,
+    ) = VideoNegotiationKey(
+        codecPreference = codecPreference,
+        videoAutoNegotiate = videoAutoNegotiate,
+        aaResolution = aaResolution,
+        aaDpi = aaDpi,
+        aaWidthMargin = aaWidthMargin,
+        aaHeightMargin = aaHeightMargin,
+        aaPixelAspect = aaPixelAspect,
+        aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
+        videoFps = videoFps,
+        driveSide = driveSide,
+        hideClock = hideClock,
+        hideSignal = hideSignal,
+        hideBattery = hideBattery,
+        safeAreaTop = safeAreaTop,
+        safeAreaBottom = safeAreaBottom,
+        safeAreaLeft = safeAreaLeft,
+        safeAreaRight = safeAreaRight,
+    )
 
     /** Screen-off receiver registration tracker. */
     private var screenReceiver: android.content.BroadcastReceiver? = null
@@ -345,7 +384,7 @@ class SessionManager(
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
     ) {
-        lastNegotiationKey = VideoNegotiationKey(
+        lastNegotiationKey = buildVideoNegotiationKey(
             codecPreference = codecPreference,
             videoAutoNegotiate = videoAutoNegotiate,
             aaResolution = aaResolution,
@@ -868,6 +907,7 @@ class SessionManager(
         _remoteDiagnostics = null
         _sessionState.value = SessionState.IDLE
         _statusMessage.value = "Disconnected"
+        lastNegotiationKey = null
         _phoneBatteryLevel.value = null
         _phoneBatteryCritical.value = false
         _voiceSessionActive.value = false
@@ -912,25 +952,6 @@ class SessionManager(
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
     ) {
-        lastNegotiationKey = VideoNegotiationKey(
-            codecPreference = codecPreference,
-            videoAutoNegotiate = videoAutoNegotiate,
-            aaResolution = aaResolution,
-            aaDpi = aaDpi,
-            aaWidthMargin = aaWidthMargin,
-            aaHeightMargin = aaHeightMargin,
-            aaPixelAspect = aaPixelAspect,
-            aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
-            videoFps = videoFps,
-            driveSide = driveSide,
-            hideClock = hideClock,
-            hideSignal = hideSignal,
-            hideBattery = hideBattery,
-            safeAreaTop = safeAreaTop,
-            safeAreaBottom = safeAreaBottom,
-            safeAreaLeft = safeAreaLeft,
-            safeAreaRight = safeAreaRight,
-        )
         // If islands were never initialized, do a full start
         if (_audioPlayer == null) {
             start(
@@ -1034,6 +1055,25 @@ class SessionManager(
         _phoneSignalStrength.value = null
 
         // 8. Start new AA session with new SDR config
+        lastNegotiationKey = buildVideoNegotiationKey(
+            codecPreference = codecPreference,
+            videoAutoNegotiate = videoAutoNegotiate,
+            aaResolution = aaResolution,
+            aaDpi = aaDpi,
+            aaWidthMargin = aaWidthMargin,
+            aaHeightMargin = aaHeightMargin,
+            aaPixelAspect = aaPixelAspect,
+            aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
+            videoFps = videoFps,
+            driveSide = driveSide,
+            hideClock = hideClock,
+            hideSignal = hideSignal,
+            hideBattery = hideBattery,
+            safeAreaTop = safeAreaTop,
+            safeAreaBottom = safeAreaBottom,
+            safeAreaLeft = safeAreaLeft,
+            safeAreaRight = safeAreaRight,
+        )
         observeJob = scope.launch {
             decoderWatchJob = launch { watchDecoderState() }
             keyframeWatchJob = launch { watchKeyframeNeeds() }

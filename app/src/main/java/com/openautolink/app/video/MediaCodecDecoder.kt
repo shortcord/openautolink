@@ -99,7 +99,6 @@ class MediaCodecDecoder(
 
     // Drop-only stats tracking — updates stats even when only dropping frames
     private var lastDropStatsTime = 0L
-    private var lastDropStatsCount = 0L
     private val DROP_STATS_INTERVAL_MS = 1000L
 
     // Bitrate tracking — rolling window
@@ -261,7 +260,6 @@ class MediaCodecDecoder(
         bitrateWindowBytes = 0L
         currentBitrateKbps = 0f
         lastDropStatsTime = 0L
-        lastDropStatsCount = framesDropped.get()
         lastKeyframeReceivedAtMs = 0L
         updateStats(null)
     }
@@ -753,7 +751,7 @@ class MediaCodecDecoder(
                                 mc.releaseOutputBuffer(outputIndex, true)
                             }
                             val decoded = framesDecoded.incrementAndGet()
-                            if (!firstFrameRendered && renderingEnabled) {
+                            if (!firstFrameRendered && shouldRender) {
                                 firstFrameRendered = true
                                 val elapsed = System.currentTimeMillis() - decodeStartTimeMs
                                 Log.i(TAG, "First frame RENDERED in ${elapsed}ms (renderGate=$renderingEnabled)")
@@ -833,13 +831,11 @@ class MediaCodecDecoder(
         val now = System.currentTimeMillis()
         if (lastDropStatsTime == 0L) {
             lastDropStatsTime = now
-            lastDropStatsCount = framesDropped.get()
             return
         }
         val elapsed = now - lastDropStatsTime
         if (elapsed >= DROP_STATS_INTERVAL_MS) {
             lastDropStatsTime = now
-            lastDropStatsCount = framesDropped.get()
             updateStats(null)
         }
     }
