@@ -113,6 +113,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = viewModel(),
     sessionState: SessionState = SessionState.IDLE,
     onSaveAndConnect: () -> Unit = {},
+    onSaveAndRestartVideo: () -> Unit = {},
     onBack: () -> Unit = {},
     onNavigateToDiagnostics: () -> Unit = {},
     onNavigateToSafeAreaEditor: () -> Unit = {},
@@ -185,6 +186,7 @@ fun SettingsScreen(
                 ConnectionStatusBar(
                     sessionState = sessionState,
                     onSaveAndConnect = onSaveAndConnect,
+                    onSaveAndRestartVideo = onSaveAndRestartVideo,
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -225,6 +227,7 @@ fun SettingsScreen(
 private fun ConnectionStatusBar(
     sessionState: SessionState,
     onSaveAndConnect: () -> Unit,
+    onSaveAndRestartVideo: () -> Unit,
 ) {
     val statusColor = when (sessionState) {
         SessionState.STREAMING -> Color(0xFF4CAF50) // Green
@@ -260,6 +263,19 @@ private fun ConnectionStatusBar(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text("Save & Reconnect")
+        }
+
+        FilledTonalButton(
+            onClick = onSaveAndRestartVideo,
+            modifier = Modifier.testTag("saveAndRestartVideoButton"),
+        ) {
+            Icon(
+                imageVector = Icons.Default.VideoSettings,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Save & Restart Video")
         }
 
         // Status indicator dot + text
@@ -1693,7 +1709,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Changes to video/display settings restart only the video stream; audio keeps playing.",
+            text = "After changing video/display settings, use \"Save & Restart Video\" to apply without reconnecting audio.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

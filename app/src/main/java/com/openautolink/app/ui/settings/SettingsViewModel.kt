@@ -281,28 +281,24 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun updateVideoCodec(codec: String) {
         viewModelScope.launch {
             preferences.setVideoCodec(codec)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateVideoAutoNegotiate(enabled: Boolean) {
         viewModelScope.launch {
             preferences.setVideoAutoNegotiate(enabled)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateVideoFps(fps: Int) {
         viewModelScope.launch {
             preferences.setVideoFps(fps)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateDisplayMode(mode: String) {
         viewModelScope.launch {
             preferences.setDisplayMode(mode)
-            scheduleVideoOnlyRestart()
         }
     }
 
@@ -313,56 +309,48 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun updateVideoScalingMode(mode: String) {
         viewModelScope.launch {
             preferences.setVideoScalingMode(mode)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateAaResolution(resolution: String) {
         viewModelScope.launch {
             preferences.setAaResolution(resolution)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateAaDpi(dpi: Int) {
         viewModelScope.launch {
             preferences.setAaDpi(dpi)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateAaWidthMargin(margin: Int) {
         viewModelScope.launch {
             preferences.setAaWidthMargin(margin)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateAaHeightMargin(margin: Int) {
         viewModelScope.launch {
             preferences.setAaHeightMargin(margin)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateAaPixelAspect(value: Int) {
         viewModelScope.launch {
             preferences.setAaPixelAspect(value)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateAaTargetLayoutWidthDp(value: Int) {
         viewModelScope.launch {
             preferences.setAaTargetLayoutWidthDp(value)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateDriveSide(side: String) {
         viewModelScope.launch {
             preferences.setDriveSide(side)
-            scheduleVideoOnlyRestart()
         }
     }
 
@@ -393,28 +381,24 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun updateSyncAaTheme(enabled: Boolean) {
         viewModelScope.launch {
             preferences.setSyncAaTheme(enabled)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateHideAaClock(enabled: Boolean) {
         viewModelScope.launch {
             preferences.setHideAaClock(enabled)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateHidePhoneSignal(enabled: Boolean) {
         viewModelScope.launch {
             preferences.setHidePhoneSignal(enabled)
-            scheduleVideoOnlyRestart()
         }
     }
 
     fun updateHideBatteryLevel(enabled: Boolean) {
         viewModelScope.launch {
             preferences.setHideBatteryLevel(enabled)
-            scheduleVideoOnlyRestart()
         }
     }
 
@@ -441,14 +425,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             preferences.setSafeAreaBottom(bottom)
             preferences.setSafeAreaLeft(left)
             preferences.setSafeAreaRight(right)
-            scheduleVideoOnlyRestart()
         }
     }
 
-    private fun scheduleVideoOnlyRestart() {
+    /** Restart only the video stream (audio stays active). Called from Settings "Save & Restart Video". */
+    fun saveAndRestartVideoStream() {
         videoRestartJob?.cancel()
         videoRestartJob = viewModelScope.launch {
-            delay(500)
+            // Give DataStore preference writes a moment to flush before restart.
+            delay(250)
             SessionManager.instanceOrNull()?.restartVideoStream()
         }
     }
