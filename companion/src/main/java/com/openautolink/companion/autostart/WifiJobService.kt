@@ -176,7 +176,7 @@ class WifiJobService : JobService() {
         ): Boolean {
             if (CompanionService.isRunning.value) return false // already running
 
-            val entries = com.openautolink.companion.wifi.CarWifiEntry.loadAll(prefs)
+            val entries = com.openautolink.companion.wifi.CarWifiEntry.loadAll(context)
             if (entries.isEmpty()) return false
 
             val carSsids = entries.map { it.ssid.lowercase() }.toSet()

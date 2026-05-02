@@ -198,3 +198,14 @@ if ./gradlew :app:bundleRelease \
 fi
 
 ./gradlew --stop
+
+# Symlink 'latest' to current build output for easy access; update if it already exists
+if [ ! -L "${_buildOutputDir}/../latest" ]; then
+    echo "Creating 'latest' symlink to current build output..."
+    ln -s "$(basename "${_buildOutputDir}")" "${_buildOutputDir}/../latest"
+else
+    echo "Updating 'latest' symlink to current build output..."
+    rm -f "${_buildOutputDir}/../latest"
+    ln -s "$(basename "${_buildOutputDir}")" "${_buildOutputDir}/../latest"
+fi
+

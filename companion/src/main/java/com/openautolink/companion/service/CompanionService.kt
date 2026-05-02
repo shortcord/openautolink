@@ -65,6 +65,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         when (intent?.action) {
             ACTION_STOP -> {
                 CompanionLog.i(TAG, "Stop requested")
+                setDesiredRunning(false)
                 _isRunning.value = false
                 _isConnected.value = false
                 _statusText.value = "Stopped"
@@ -73,6 +74,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
 
             ACTION_START -> {
                 CompanionLog.i(TAG, "Start requested")
+                setDesiredRunning(true)
                 _isRunning.value = true
                 _isConnected.value = false
                 _statusText.value = "Advertising..."
@@ -84,13 +86,30 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
 
             else -> {
                 // System restart
-                if (_isRunning.value) {
+                if (isDesiredRunning()) {
                     CompanionLog.i(TAG, "Service restarted by system, resuming")
+                    _isRunning.value = true
+                    _isConnected.value = false
+                    _statusText.value = "Advertising..."
                     startNearby()
+                } else {
+                    CompanionLog.i(TAG, "Service restarted by system with no desired running state")
+                    stopSelf()
                 }
             }
         }
         return START_STICKY
+    }
+
+    private fun isDesiredRunning(): Boolean =
+        getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
+            .getBoolean(CompanionPrefs.SERVICE_DESIRED_RUNNING, false)
+
+    private fun setDesiredRunning(value: Boolean) {
+        getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(CompanionPrefs.SERVICE_DESIRED_RUNNING, value)
+            .apply()
     }
 
     private fun startNearby() {
@@ -130,8 +149,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
      */
     private fun startCarWifiIfConfigured() {
         carWifiManager?.stop()
-        val prefs = getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
-        val entries = com.openautolink.companion.wifi.CarWifiEntry.loadAll(prefs)
+        val entries = com.openautolink.companion.wifi.CarWifiEntry.loadAll(this)
         if (entries.isEmpty()) {
             CompanionLog.d(TAG, "No car WiFi entries configured, skipping CarWifiManager")
             return

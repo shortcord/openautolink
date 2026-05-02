@@ -167,22 +167,57 @@ data class CarWifiEntry(val ssid: String, val password: String) {
             return CarWifiEntry(parts[0], parts[1])
         }
 
-        /** Load all entries from SharedPreferences */
-        fun loadAll(prefs: android.content.SharedPreferences): List<CarWifiEntry> {
+        /** Load all entries from non-backed-up private storage. */
+        fun loadAll(context: Context): List<CarWifiEntry> {
+            val prefs = secretsPrefs(context)
+            migrateLegacyEntries(context, prefs)
             val raw = prefs.getStringSet(
                 com.openautolink.companion.CompanionPrefs.CAR_WIFI_ENTRIES,
-                emptySet()
+                emptySet(),
             ) ?: emptySet()
             return raw.mapNotNull { fromPrefsString(it) }
         }
 
-        /** Save all entries to SharedPreferences */
-        fun saveAll(prefs: android.content.SharedPreferences, entries: List<CarWifiEntry>) {
-            prefs.edit()
+        /** Save all entries to non-backed-up private storage. */
+        fun saveAll(context: Context, entries: List<CarWifiEntry>) {
+            secretsPrefs(context).edit()
                 .putStringSet(
                     com.openautolink.companion.CompanionPrefs.CAR_WIFI_ENTRIES,
-                    entries.map { it.toPrefsString() }.toSet()
+                    entries.map { it.toPrefsString() }.toSet(),
                 )
+                .apply()
+            context.getSharedPreferences(
+                com.openautolink.companion.CompanionPrefs.NAME,
+                Context.MODE_PRIVATE,
+            ).edit()
+                .remove(com.openautolink.companion.CompanionPrefs.CAR_WIFI_ENTRIES)
+                .apply()
+        }
+
+        private fun secretsPrefs(context: Context): android.content.SharedPreferences =
+            context.getSharedPreferences(
+                com.openautolink.companion.CompanionPrefs.SECRETS_NAME,
+                Context.MODE_PRIVATE,
+            )
+
+        private fun migrateLegacyEntries(
+            context: Context,
+            secretPrefs: android.content.SharedPreferences,
+        ) {
+            if (secretPrefs.contains(com.openautolink.companion.CompanionPrefs.CAR_WIFI_ENTRIES)) return
+            val mainPrefs = context.getSharedPreferences(
+                com.openautolink.companion.CompanionPrefs.NAME,
+                Context.MODE_PRIVATE,
+            )
+            val legacy = mainPrefs.getStringSet(
+                com.openautolink.companion.CompanionPrefs.CAR_WIFI_ENTRIES,
+                null,
+            ) ?: return
+            secretPrefs.edit()
+                .putStringSet(com.openautolink.companion.CompanionPrefs.CAR_WIFI_ENTRIES, legacy)
+                .apply()
+            mainPrefs.edit()
+                .remove(com.openautolink.companion.CompanionPrefs.CAR_WIFI_ENTRIES)
                 .apply()
         }
     }

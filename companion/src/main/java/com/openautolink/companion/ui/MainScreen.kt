@@ -114,7 +114,7 @@ fun MainScreen(
         mutableStateOf(prefs.getBoolean(CompanionPrefs.WIFI_DISCONNECT_STOP, false))
     }
     var carWifiEntries by remember {
-        mutableStateOf(com.openautolink.companion.wifi.CarWifiEntry.loadAll(prefs))
+        mutableStateOf(com.openautolink.companion.wifi.CarWifiEntry.loadAll(context))
     }
 
     fun saveAutoStartMode(mode: Int) {
@@ -503,7 +503,7 @@ fun MainScreen(
                 entries = carWifiEntries,
                 onEntriesChanged = { updated ->
                     carWifiEntries = updated
-                    com.openautolink.companion.wifi.CarWifiEntry.saveAll(prefs, updated)
+                    com.openautolink.companion.wifi.CarWifiEntry.saveAll(context, updated)
                 },
             )
 

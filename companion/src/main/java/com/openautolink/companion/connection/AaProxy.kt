@@ -45,6 +45,8 @@ class AaProxy(
 
     @Volatile
     private var activeCarSocket: Socket? = null
+    @Volatile
+    private var activeAaSocket: Socket? = null
     private val activeBridges = AtomicInteger(0)
     private var bridgeUsed = false
 
@@ -81,13 +83,22 @@ class AaProxy(
     private fun launchBridge(aaSocket: Socket) {
         scope.launch {
             var carSocket: Socket? = null
+            var bridgeStarted = false
             try {
+                if (bridgeUsed) {
+                    CompanionLog.w(TAG, "Rejecting extra AA connection for one-shot proxy")
+                    runCatching { aaSocket.close() }
+                    return@launch
+                }
+                bridgeUsed = true
                 activeBridges.incrementAndGet()
+                bridgeStarted = true
                 listener?.onConnected()
 
                 carSocket = preConnectedSocket
                     ?: throw IllegalStateException("No pre-connected socket available")
                 activeCarSocket = carSocket
+                activeAaSocket = aaSocket
 
                 CompanionLog.i(TAG, "Bridge established: AA <-> Car")
 
@@ -96,17 +107,24 @@ class AaProxy(
                 val carIn = carSocket.getInputStream()
                 val carOut = carSocket.getOutputStream()
 
+                val closeBoth = {
+                    runCatching { aaSocket.close() }
+                    runCatching { carSocket.close() }
+                }
                 val job1 = launch { pump(aaIn, carOut, "AA->Car") }
                 val job2 = launch { pump(carIn, aaOut, "Car->AA") }
+                job1.invokeOnCompletion { closeBoth() }
+                job2.invokeOnCompletion { closeBoth() }
                 joinAll(job1, job2)
             } catch (e: Exception) {
                 CompanionLog.e(TAG, "Bridge error: ${e.message}")
             } finally {
                 CompanionLog.i(TAG, "Bridge closed")
                 activeCarSocket = null
+                activeAaSocket = null
                 runCatching { aaSocket.close() }
-                // Don't close carSocket here — let the NearbyAdvertiser manage it via cleanup()
-                if (activeBridges.decrementAndGet() <= 0) {
+                runCatching { carSocket?.close() }
+                if (bridgeStarted && activeBridges.decrementAndGet() <= 0) {
                     listener?.onDisconnected()
                 }
             }
@@ -134,6 +152,10 @@ class AaProxy(
         if (wasRunning) {
             sendDisconnectSignal()
         }
+        runCatching { activeAaSocket?.close() }
+        activeAaSocket = null
+        runCatching { activeCarSocket?.close() }
+        activeCarSocket = null
         runCatching { serverSocket?.close() }
         serverSocket = null
         scope.cancel()
