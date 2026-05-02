@@ -66,8 +66,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.openautolink.companion.R
+import com.openautolink.companion.BuildConfig
 import com.openautolink.companion.CompanionPrefs
+import com.openautolink.companion.R
 import com.openautolink.companion.autostart.WifiJobService
 import com.openautolink.companion.service.CompanionService
 import com.openautolink.companion.ui.theme.OalGreen
@@ -120,7 +121,19 @@ fun MainScreen(
         }
     }
 
-    Scaffold { padding ->
+    Scaffold(
+        bottomBar = {
+            Text(
+                text = "Version ${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+        },
+    ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()

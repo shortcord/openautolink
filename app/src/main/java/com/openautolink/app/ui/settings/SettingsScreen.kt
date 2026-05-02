@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
+import com.openautolink.app.BuildConfig
 import com.openautolink.app.session.SessionState
 import com.openautolink.app.data.AppPreferences
 import androidx.compose.material3.FilterChip
@@ -205,6 +206,16 @@ fun SettingsScreen(
                         )
                     }
                 }
+
+                Text(
+                    text = "Version ${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
         }
     }

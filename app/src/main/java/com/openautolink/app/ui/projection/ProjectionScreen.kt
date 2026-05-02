@@ -60,6 +60,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.openautolink.app.BuildConfig
 import com.openautolink.app.R
 import com.openautolink.app.audio.AudioStats
 import com.openautolink.app.session.SessionState
@@ -998,6 +999,9 @@ private fun VideoStatsOverlay(
             } else {
                 StatLine("Audio", "not active")
             }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            StatLine("Version", BuildConfig.VERSION_NAME)
         }
     }
 }
