@@ -197,6 +197,8 @@ Because this is an AAOS app, installation on the car goes through your own Googl
    export OAL_KEY_PASS='...'
    scripts/linux/bundle-release.sh
    ```
+
+   **Linux note (native deps):** On Linux, Gradle automatically runs `./build_linux.sh --prepare` before the Android build to prepare native dependencies (OpenSSL/Boost/AASDK) under `app/src/main/cpp/third_party/`. To force a full rebuild of those artifacts/caches, run `./build_linux.sh --prepare --clean` once, then rerun your Gradle task. Also, `./gradlew clean` automatically runs `./build_linux.sh --clean-only` on Linux to remove those cached artifacts.
 6. Upload the AAB to Play Console, publish, and install on the car via Play Store.
 7. Grant the **Car Information** permission: Settings → Apps → OpenAutoLink → Permissions.
 
