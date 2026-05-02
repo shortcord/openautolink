@@ -274,6 +274,8 @@ private:
     std::atomic<bool> aborted_{false};
     std::atomic<bool> sessionStoppedFired_{false};
     std::atomic<int> negotiatedCodecType_{0};
+    // Video stream session id (from Start indication). Used for media ACK flow control.
+    std::atomic<int> videoSessionId_{0};
     std::atomic<int64_t> pingSentAtMs_{0};
     std::atomic<int64_t> keyframeRequestedAtMs_{0};
 

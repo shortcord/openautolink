@@ -920,6 +920,7 @@ void JniSession::onMediaChannelStartIndication(
     LOGI("Video stream starting: session=%d config_idx=%d",
          indication.session_id(), indication.configuration_index());
     logProtoRaw("VideoStart", indication);
+    videoSessionId_.store(indication.session_id());
 
     aap_protobuf::service::media::video::message::VideoFocusNotification focus;
     focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
@@ -935,6 +936,7 @@ void JniSession::onMediaChannelStopIndication(
     const aap_protobuf::service::media::shared::message::Stop& /*indication*/)
 {
     LOGI("Video stream stopping");
+    videoSessionId_.store(0);
     videoChannel_->receive(shared_from_this());
 }
 
@@ -944,7 +946,7 @@ void JniSession::onMediaWithTimestampIndication(
 {
     // Hot path Ã¢â‚¬â€ video frame. Send ACK immediately (flow control).
     aap_protobuf::service::media::source::message::Ack ack;
-    ack.set_session_id(0);
+    ack.set_session_id(videoSessionId_.load());
     ack.set_ack(1);
     auto promise = aasdk::channel::SendPromise::defer(*strand_);
     promise->then([]() {}, [](const auto&) {});
@@ -1680,7 +1682,9 @@ void JniSession::restartVideoStream()
 
             aap_protobuf::service::media::video::message::VideoFocusNotification startFocus;
             startFocus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
-            startFocus.set_unsolicited(false);
+            // Treat as an unsolicited focus change; some phones appear to ignore
+            // solicited=false here, leaving video in a low-FPS/native-focus state.
+            startFocus.set_unsolicited(true);
             auto startPromise = aasdk::channel::SendPromise::defer(*self->strand_);
             startPromise->then([]() {}, [self](const auto& e) { self->onChannelError(e); });
             self->videoChannel_->sendVideoFocusIndication(startFocus, std::move(startPromise));

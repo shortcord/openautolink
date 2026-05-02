@@ -243,11 +243,26 @@ class MediaCodecDecoder(
         cachedIdrFrame = null
         codecConfigData = null
         receivedIdr = false
+        // Clear any dimensions learned from the previous stream. If SPS parsing fails on the
+        // next stream config, stale pending dims can cause MediaCodec to be configured with
+        // the wrong resolution, leading to sustained low decode FPS until full reconnect.
+        pendingWidth = null
+        pendingHeight = null
         renderingEnabled = false
         outputFormatReceived = false
         _needsKeyframe = true
         _needsKeyframeFlow.value = true
         _decoderState.value = DecoderState.IDLE
+        // Reset rolling stats so post-restart telemetry reflects the new stream.
+        lastStatsTime = 0L
+        lastStatsFrames = framesDecoded.get()
+        currentFps = 0f
+        bitrateWindowStartMs = 0L
+        bitrateWindowBytes = 0L
+        currentBitrateKbps = 0f
+        lastDropStatsTime = 0L
+        lastDropStatsCount = framesDropped.get()
+        lastKeyframeReceivedAtMs = 0L
         updateStats(null)
     }
 
