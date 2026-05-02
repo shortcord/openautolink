@@ -274,6 +274,38 @@ class SessionManager(
     /** Reentrancy guard for reconnect() so rapid Save&Reconnect taps coalesce. */
     @Volatile private var reconnectInProgress = false
 
+    /**
+     * Snapshot of settings that affect the AA Service Discovery Response (SDR) / video
+     * negotiation. These cannot be applied with a video-only restart; they require a
+     * session reconnect so the phone re-requests SDR and re-selects a video config.
+     */
+    data class VideoNegotiationKey(
+        val codecPreference: String,
+        val videoAutoNegotiate: Boolean,
+        val aaResolution: String,
+        val aaDpi: Int,
+        val aaWidthMargin: Int,
+        val aaHeightMargin: Int,
+        val aaPixelAspect: Int,
+        val aaTargetLayoutWidthDp: Int,
+        val videoFps: Int,
+        val driveSide: String,
+        val hideClock: Boolean,
+        val hideSignal: Boolean,
+        val hideBattery: Boolean,
+        val safeAreaTop: Int,
+        val safeAreaBottom: Int,
+        val safeAreaLeft: Int,
+        val safeAreaRight: Int,
+    )
+
+    @Volatile private var lastNegotiationKey: VideoNegotiationKey? = null
+
+    fun requiresReconnectForVideoSettings(desired: VideoNegotiationKey): Boolean {
+        val current = lastNegotiationKey ?: return true
+        return current != desired
+    }
+
     /** Screen-off receiver registration tracker. */
     private var screenReceiver: android.content.BroadcastReceiver? = null
     /** True when we proactively stopped the session for sleep; restart on wake. */
@@ -313,6 +345,25 @@ class SessionManager(
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
     ) {
+        lastNegotiationKey = VideoNegotiationKey(
+            codecPreference = codecPreference,
+            videoAutoNegotiate = videoAutoNegotiate,
+            aaResolution = aaResolution,
+            aaDpi = aaDpi,
+            aaWidthMargin = aaWidthMargin,
+            aaHeightMargin = aaHeightMargin,
+            aaPixelAspect = aaPixelAspect,
+            aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
+            videoFps = videoFps,
+            driveSide = driveSide,
+            hideClock = hideClock,
+            hideSignal = hideSignal,
+            hideBattery = hideBattery,
+            safeAreaTop = safeAreaTop,
+            safeAreaBottom = safeAreaBottom,
+            safeAreaLeft = safeAreaLeft,
+            safeAreaRight = safeAreaRight,
+        )
         micSource = micSourcePreference
         observeJob?.cancel()
 
@@ -861,6 +912,25 @@ class SessionManager(
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
     ) {
+        lastNegotiationKey = VideoNegotiationKey(
+            codecPreference = codecPreference,
+            videoAutoNegotiate = videoAutoNegotiate,
+            aaResolution = aaResolution,
+            aaDpi = aaDpi,
+            aaWidthMargin = aaWidthMargin,
+            aaHeightMargin = aaHeightMargin,
+            aaPixelAspect = aaPixelAspect,
+            aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
+            videoFps = videoFps,
+            driveSide = driveSide,
+            hideClock = hideClock,
+            hideSignal = hideSignal,
+            hideBattery = hideBattery,
+            safeAreaTop = safeAreaTop,
+            safeAreaBottom = safeAreaBottom,
+            safeAreaLeft = safeAreaLeft,
+            safeAreaRight = safeAreaRight,
+        )
         // If islands were never initialized, do a full start
         if (_audioPlayer == null) {
             start(

@@ -432,9 +432,38 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun saveAndRestartVideoStream() {
         videoRestartJob?.cancel()
         videoRestartJob = viewModelScope.launch {
+            val sm = SessionManager.instanceOrNull() ?: return@launch
+
             // Give DataStore preference writes a moment to flush before restart.
             delay(250)
-            SessionManager.instanceOrNull()?.restartVideoStream()
+
+            // Some settings (e.g., AA Resolution/DPI/codec/fps) change the AA Service
+            // Discovery Response (SDR) and require a reconnect to renegotiate video.
+            val desiredKey = SessionManager.VideoNegotiationKey(
+                codecPreference = preferences.videoCodec.first(),
+                videoAutoNegotiate = preferences.videoAutoNegotiate.first(),
+                aaResolution = preferences.aaResolution.first(),
+                aaDpi = preferences.aaDpi.first(),
+                aaWidthMargin = preferences.aaWidthMargin.first(),
+                aaHeightMargin = preferences.aaHeightMargin.first(),
+                aaPixelAspect = preferences.aaPixelAspect.first(),
+                aaTargetLayoutWidthDp = preferences.aaTargetLayoutWidthDp.first(),
+                videoFps = preferences.videoFps.first(),
+                driveSide = preferences.driveSide.first(),
+                hideClock = preferences.hideAaClock.first(),
+                hideSignal = preferences.hidePhoneSignal.first(),
+                hideBattery = preferences.hideBatteryLevel.first(),
+                safeAreaTop = preferences.safeAreaTop.first(),
+                safeAreaBottom = preferences.safeAreaBottom.first(),
+                safeAreaLeft = preferences.safeAreaLeft.first(),
+                safeAreaRight = preferences.safeAreaRight.first(),
+            )
+
+            if (sm.requiresReconnectForVideoSettings(desiredKey)) {
+                saveAndReconnect()
+            } else {
+                sm.restartVideoStream()
+            }
         }
     }
 
