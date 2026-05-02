@@ -142,16 +142,25 @@ fi
 fi
 
 echo "Configuring OpenSSL..."
-bash ./scripts/build-openssl-android.sh arm64-v8a 2>&1 | tee "${_buildOutputDir}/logs/build-openssl-android-arm64-v8a.log"
-bash ./scripts/build-openssl-android.sh x86_64 2>&1 | tee "${_buildOutputDir}/logs/build-openssl-android-x86_64.log"
+if [ ! -d "./app/src/main/cpp/third_party/openssl/arm64-v8a" ]; then
+    bash ./scripts/build-openssl-android.sh arm64-v8a 2>&1 | tee "${_buildOutputDir}/logs/build-openssl-android-arm64-v8a.log"
+fi
 
-echo "Configuring Android NDK..."
-bash ./scripts/setup-ndk-deps.sh arm64-v8a 2>&1 | tee "${_buildOutputDir}/logs/setup-ndk-deps-arm64-v8a.log"
-bash ./scripts/setup-ndk-deps.sh x86_64 2>&1 | tee "${_buildOutputDir}/logs/setup-ndk-deps-x86_64.log"
+if [ ! -d "./app/src/main/cpp/third_party/openssl/x86_64" ]; then
+    bash ./scripts/build-openssl-android.sh x86_64 2>&1 | tee "${_buildOutputDir}/logs/build-openssl-android-x86_64.log"
+fi
 
-echo "Configuring AASDK..."
-bash ./scripts/build-aasdk-android.sh arm64-v8a 2>&1 | tee "${_buildOutputDir}/logs/build-aasdk-android-arm64-v8a.log"
-bash ./scripts/build-aasdk-android.sh x86_64 2>&1 | tee "${_buildOutputDir}/logs/build-aasdk-android-x86_64.log"
+if [ ! -d "/tmp/oal-ndk-deps" ]; then
+    echo "Configuring Android NDK..."
+    bash ./scripts/setup-ndk-deps.sh arm64-v8a 2>&1 | tee "${_buildOutputDir}/logs/setup-ndk-deps-arm64-v8a.log"
+    bash ./scripts/setup-ndk-deps.sh x86_64 2>&1 | tee "${_buildOutputDir}/logs/setup-ndk-deps-x86_64.log"
+fi
+
+if [ ! -d "/tmp/oal-aasdk-android-build" ]; then
+    echo "Configuring AASDK..."
+    bash ./scripts/build-aasdk-android.sh arm64-v8a 2>&1 | tee "${_buildOutputDir}/logs/build-aasdk-android-arm64-v8a.log"
+    bash ./scripts/build-aasdk-android.sh x86_64 2>&1 | tee "${_buildOutputDir}/logs/build-aasdk-android-x86_64.log"
+fi
 
 if [ "${_prepareOnly}" = true ]; then
     echo "Dependency preparation complete (--prepare)."
