@@ -469,6 +469,12 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun restartVideoStream() {
+        viewModelScope.launch {
+            sessionManager.restartVideoStream()
+        }
+    }
+
     fun disconnect() {
         sessionManager.stop()
     }

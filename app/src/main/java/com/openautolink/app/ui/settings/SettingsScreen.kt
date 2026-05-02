@@ -583,7 +583,7 @@ private fun DisplayTab(
 
         Text(
             text = "Controls how the app interacts with AAOS system bars. " +
-                    "Changes apply immediately. On some AAOS head units, the system may " +
+                    "Changes apply immediately and restart only the video stream. On some AAOS head units, the system may " +
                     "prevent apps from hiding bars. To change the video encoding resolution, " +
                     "use AA Resolution on the Video tab.",
             style = MaterialTheme.typography.bodyMedium,
@@ -1494,7 +1494,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             text = "How the video fits your screen. " +
                     "Letterbox shows the full frame with black bars on the sides. " +
                     "Crop fills the screen but cuts off top/bottom. " +
-                    "Requires reconnect (Save & Reconnect).",
+                    "Changing this restarts only the video stream; audio keeps playing.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
@@ -1693,7 +1693,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Changes to video settings require an AA session reconnect (Save & Reconnect).",
+            text = "Changes to video/display settings restart only the video stream; audio keeps playing.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

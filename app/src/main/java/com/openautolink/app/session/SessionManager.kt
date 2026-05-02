@@ -278,6 +278,7 @@ class SessionManager(
     private var screenReceiver: android.content.BroadcastReceiver? = null
     /** True when we proactively stopped the session for sleep; restart on wake. */
     @Volatile private var pausedForSleep = false
+    @Volatile private var videoClosedForAppFocusLoss = false
     /** Timestamp of the most recent SCREEN_ON / USER_PRESENT — used to suppress
      *  SCREEN_OFF that AAOS sometimes delivers seconds AFTER wake (queued during
      *  input dispatch). Without this, a queued SCREEN_OFF tears down a freshly
@@ -1121,6 +1122,32 @@ class SessionManager(
 
     suspend fun requestKeyframe() {
         aasdkSession?.requestKeyframe()
+    }
+
+    suspend fun closeVideoStreamForAppFocusLoss() {
+        if (videoClosedForAppFocusLoss) return
+        val session = aasdkSession ?: return
+        if (_sessionState.value == SessionState.IDLE) return
+        videoClosedForAppFocusLoss = true
+        OalLog.i(TAG, "App focus lost — closing video stream only")
+        _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "App focus lost: close video stream")
+        _videoDecoder?.suspendStream()
+        session.closeVideoStream()
+    }
+
+    suspend fun restartVideoStreamAfterAppFocusGain() {
+        if (!videoClosedForAppFocusLoss) return
+        videoClosedForAppFocusLoss = false
+        OalLog.i(TAG, "App focus gained — restarting video stream")
+        _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "App focus gained: restart video stream")
+        restartVideoStream()
+    }
+
+    suspend fun restartVideoStream() {
+        OalLog.i(TAG, "Restarting video stream without reconnecting audio")
+        _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "Video-only stream restart requested")
+        _videoDecoder?.restartStream()
+        aasdkSession?.restartVideoStream()
     }
 
     private suspend fun syncLocalPreferences() {

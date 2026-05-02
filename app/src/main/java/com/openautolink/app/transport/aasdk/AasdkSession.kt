@@ -303,6 +303,14 @@ class AasdkSession(
         AasdkNative.nativeRequestKeyframe()
     }
 
+    fun closeVideoStream() {
+        AasdkNative.nativeCloseVideoStream()
+    }
+
+    fun restartVideoStream() {
+        AasdkNative.nativeRestartVideoStream()
+    }
+
     // -- AasdkSessionCallback (called from native thread → dispatch to flows) --
 
     override fun onSessionStarted() {

@@ -237,6 +237,30 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeRequestKeyframe(
     if (session) session->requestKeyframe();
 }
 
+/*
+ * Class:     com_openautolink_app_transport_aasdk_AasdkNative
+ * Method:    nativeCloseVideoStream
+ */
+JNIEXPORT void JNICALL
+Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeCloseVideoStream(
+    JNIEnv* /*env*/, jclass /*clazz*/)
+{
+    auto session = getSession();
+    if (session) session->closeVideoStream();
+}
+
+/*
+ * Class:     com_openautolink_app_transport_aasdk_AasdkNative
+ * Method:    nativeRestartVideoStream
+ */
+JNIEXPORT void JNICALL
+Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeRestartVideoStream(
+    JNIEnv* /*env*/, jclass /*clazz*/)
+{
+    auto session = getSession();
+    if (session) session->restartVideoStream();
+}
+
 // Typed vehicle sensor JNI methods — each calls the corresponding C++ method
 // that builds the correct SensorBatch protobuf and sends via sensorChannel_.
 

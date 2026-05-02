@@ -94,7 +94,20 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // On AAOS, resume after car sleep leaves TCP sockets dead.
         // Detect time gaps and force-reconnect stale connections.
-        com.openautolink.app.session.SessionManager.instanceOrNull()?.onSystemWake()
+        com.openautolink.app.session.SessionManager.instanceOrNull()?.let { sessionManager ->
+            sessionManager.onSystemWake()
+            lifecycleScope.launch {
+                sessionManager.restartVideoStreamAfterAppFocusGain()
+            }
+        }
+    }
+
+    override fun onPause() {
+        lifecycleScope.launch {
+            com.openautolink.app.session.SessionManager.instanceOrNull()
+                ?.closeVideoStreamForAppFocusLoss()
+        }
+        super.onPause()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

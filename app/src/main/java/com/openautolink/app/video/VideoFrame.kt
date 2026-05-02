@@ -54,6 +54,7 @@ data class VideoStats(
     val codecResets: Int = 0,
     val bitrateKbps: Float = 0f,
     val waitingForKeyframe: Boolean = false,
+    val timeSinceLastKeyframeMs: Long = -1L,
 )
 
 enum class DecoderState {

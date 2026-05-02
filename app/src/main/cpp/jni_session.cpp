@@ -1638,6 +1638,56 @@ void JniSession::requestKeyframe()
     });
 }
 
+void JniSession::closeVideoStream()
+{
+    if (!streaming_ || !videoChannel_ || !ioService_) return;
+    auto self = shared_from_this();
+    ioService_->post([self]() {
+        if (!self->streaming_ || !self->videoChannel_) return;
+        LOGI("Closing video stream only (VIDEO_FOCUS_NATIVE)");
+        aap_protobuf::service::media::video::message::VideoFocusNotification focus;
+        focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
+        focus.set_unsolicited(true);
+        auto promise = aasdk::channel::SendPromise::defer(*self->strand_);
+        promise->then([]() {}, [self](const auto& e) { self->onChannelError(e); });
+        self->videoChannel_->sendVideoFocusIndication(focus, std::move(promise));
+    });
+}
+
+void JniSession::restartVideoStream()
+{
+    if (!streaming_ || !videoChannel_ || !ioService_ || !strand_) return;
+    auto self = shared_from_this();
+    ioService_->post([self]() {
+        if (!self->streaming_ || !self->videoChannel_) return;
+
+        LOGI("Restarting video stream only (VIDEO_FOCUS_NATIVE -> PROJECTED)");
+        aap_protobuf::service::media::video::message::VideoFocusNotification stopFocus;
+        stopFocus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
+        stopFocus.set_unsolicited(true);
+        auto stopPromise = aasdk::channel::SendPromise::defer(*self->strand_);
+        stopPromise->then([]() {}, [self](const auto& e) { self->onChannelError(e); });
+        self->videoChannel_->sendVideoFocusIndication(stopFocus, std::move(stopPromise));
+
+        auto timer = std::make_shared<boost::asio::deadline_timer>(
+            *self->ioService_,
+            boost::posix_time::milliseconds(250));
+        timer->async_wait(self->strand_->wrap([self, timer](const boost::system::error_code& ec) {
+            if (ec || !self->streaming_ || !self->videoChannel_) return;
+            const auto requestedAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            self->keyframeRequestedAtMs_.store(requestedAtMs);
+
+            aap_protobuf::service::media::video::message::VideoFocusNotification startFocus;
+            startFocus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
+            startFocus.set_unsolicited(false);
+            auto startPromise = aasdk::channel::SendPromise::defer(*self->strand_);
+            startPromise->then([]() {}, [self](const auto& e) { self->onChannelError(e); });
+            self->videoChannel_->sendVideoFocusIndication(startFocus, std::move(startPromise));
+        }));
+    });
+}
+
 // ============================================================================
 // Typed vehicle sensor methods Ã¢â‚¬â€ each builds SensorBatch and sends
 // ============================================================================

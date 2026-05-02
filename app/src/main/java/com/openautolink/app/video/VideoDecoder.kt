@@ -25,6 +25,12 @@ interface VideoDecoder {
     /** Signal that a keyframe should be requested from the bridge. */
     fun requestKeyframe(): Boolean
 
+    /** Reset only local video decode state before asking the phone to restart video. */
+    fun restartStream()
+
+    /** Close local video decode while leaving the transport/audio session active. */
+    fun suspendStream()
+
     /** Pause decoding (release codec). */
     fun pause()
 

@@ -118,6 +118,12 @@ public:
     /** Request a video keyframe (IDR). */
     void requestKeyframe();
 
+    /** Close only the projected video stream without tearing down audio channels. */
+    void closeVideoStream();
+
+    /** Restart only the projected video stream without tearing down audio channels. */
+    void restartVideoStream();
+
     // Typed vehicle sensor methods — each builds a SensorBatch and sends
     void sendSpeedSensor(int speedMmPerS);
     void sendGearSensor(int gear);

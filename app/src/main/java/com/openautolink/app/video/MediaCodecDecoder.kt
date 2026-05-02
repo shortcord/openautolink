@@ -117,6 +117,7 @@ class MediaCodecDecoder(
     // showing green (uninitialized decoder buffer) while still getting
     // near-instant video once the warmup completes.
     @Volatile private var seedIdrTimeMs = 0L
+    @Volatile private var lastKeyframeReceivedAtMs = 0L
 
     // Render gate: don't render output until after a valid keyframe has been
     // queued to the decoder. Prevents green/blocky frames from P-frames
@@ -191,25 +192,35 @@ class MediaCodecDecoder(
 
         when {
             frame.isCodecConfig && frame.isKeyframe -> {
-                // Combined SPS/PPS + IDR frame — configure codec, then queue the keyframe.
-                // But verify the data actually contains IDR NALs — the bridge replay may
-                // incorrectly flag SPS/PPS-only data as keyframe.
-                handleCodecConfig(frame)
-                if (NalParser.containsIdr(frame.data)) {
-                    handleKeyframe(frame)
+                if (CodecSelector.isNalCodec(detectedCodec)) {
+                    // Combined SPS/PPS + IDR frame — configure codec, then queue the keyframe.
+                    // But verify the data actually contains IDR NALs — the bridge replay may
+                    // incorrectly flag SPS/PPS-only data as keyframe.
+                    handleCodecConfig(frame)
+                    if (NalParser.containsIdr(frame.data)) {
+                        handleKeyframe(frame)
+                    } else {
+                        Log.w(TAG, "Frame flagged as codec_config+keyframe but no IDR NAL found (${frame.data.size} bytes)")
+                    }
                 } else {
-                    Log.w(TAG, "Frame flagged as codec_config+keyframe but no IDR NAL found (${frame.data.size} bytes)")
+                    Log.i(TAG, "Non-NAL keyframe flagged as codec_config; using negotiated $detectedCodec stream")
+                    handleKeyframe(frame)
                 }
             }
             frame.isCodecConfig -> {
-                handleCodecConfig(frame)
-                // H.265 phones often send VPS+SPS+PPS+IDR in one buffer.
-                // C++ scans all NALs now, but as defense-in-depth: if the
-                // codec is ready and the buffer contains an IDR, process it.
-                if (codec != null && !receivedIdr && NalParser.containsIdr(frame.data)) {
-                    Log.i(TAG, "Config frame contains embedded IDR — processing as keyframe")
-                    DiagnosticLog.i("video", "Config frame has embedded IDR, processing")
-                    handleKeyframe(frame)
+                if (CodecSelector.isNalCodec(detectedCodec)) {
+                    handleCodecConfig(frame)
+                    // H.265 phones often send VPS+SPS+PPS+IDR in one buffer.
+                    // C++ scans all NALs now, but as defense-in-depth: if the
+                    // codec is ready and the buffer contains an IDR, process it.
+                    if (codec != null && !receivedIdr && NalParser.containsIdr(frame.data)) {
+                        Log.i(TAG, "Config frame contains embedded IDR — processing as keyframe")
+                        DiagnosticLog.i("video", "Config frame has embedded IDR, processing")
+                        handleKeyframe(frame)
+                    }
+                } else {
+                    Log.w(TAG, "Ignoring codec_config flag for non-NAL codec $detectedCodec")
+                    handleRegularFrame(frame)
                 }
             }
             frame.isEndOfStream -> handleEndOfStream()
@@ -223,6 +234,36 @@ class MediaCodecDecoder(
         _needsKeyframe = true
         _needsKeyframeFlow.value = true
         return true
+    }
+
+    override fun restartStream() {
+        Log.i(TAG, "Restarting local video decode stream")
+        DiagnosticLog.i("video", "Restarting video stream")
+        releaseCodec()
+        cachedIdrFrame = null
+        codecConfigData = null
+        receivedIdr = false
+        renderingEnabled = false
+        outputFormatReceived = false
+        _needsKeyframe = true
+        _needsKeyframeFlow.value = true
+        _decoderState.value = DecoderState.IDLE
+        updateStats(null)
+    }
+
+    override fun suspendStream() {
+        Log.i(TAG, "Suspending local video decode stream")
+        DiagnosticLog.i("video", "Suspending video stream")
+        releaseCodec()
+        cachedIdrFrame = null
+        codecConfigData = null
+        receivedIdr = false
+        renderingEnabled = false
+        outputFormatReceived = false
+        _needsKeyframe = false
+        _needsKeyframeFlow.value = false
+        _decoderState.value = DecoderState.PAUSED
+        updateStats(null)
     }
 
     override fun pause() {
@@ -252,6 +293,11 @@ class MediaCodecDecoder(
     private fun handleCodecConfig(frame: VideoFrame) {
         Log.i(TAG, "Codec config received: ${frame.data.size} bytes (flags=0x${frame.flags.toString(16)})")
         DiagnosticLog.i("video", "Codec config received: ${frame.data.size} bytes")
+
+        if (!CodecSelector.isNalCodec(detectedCodec)) {
+            Log.i(TAG, "Ignoring NAL codec config path for negotiated non-NAL codec $detectedCodec")
+            return
+        }
 
         // Auto-detect codec from NAL stream data — the bridge controls what codec
         // the phone uses, so the actual stream may differ from the app's preference.
@@ -296,6 +342,8 @@ class MediaCodecDecoder(
     }
 
     private fun handleKeyframe(frame: VideoFrame) {
+        lastKeyframeReceivedAtMs = System.currentTimeMillis()
+
         if (codec == null) {
             if (CodecSelector.isNalCodec(detectedCodec)) {
                 // H.264/H.265: try to extract SPS/PPS/VPS from the IDR frame.
@@ -352,20 +400,17 @@ class MediaCodecDecoder(
         // but suppress rendering for SEED_WARMUP_MS. After warmup, enough P-frame blocks
         // have accumulated that the picture is mostly complete. A real IDR (when it arrives
         // at the phone's natural GOP interval) will clean up any remaining artifacts.
-        if (frame.data.size < MIN_REAL_IDR_BYTES) {
+        if (CodecSelector.isNalCodec(detectedCodec) && frame.data.size < MIN_REAL_IDR_BYTES) {
             Log.w(TAG, "Seed IDR detected (${frame.data.size} bytes < $MIN_REAL_IDR_BYTES) — silent decode for ${SEED_WARMUP_MS}ms before rendering")
             DiagnosticLog.w("video", "Seed IDR: ${frame.data.size}B, warmup ${SEED_WARMUP_MS}ms")
             queueFrame(frame)  // Feed to decoder — establishes reference for P-frames
             receivedIdr = true  // Allow P-frames to flow to decoder
+            _needsKeyframe = false
+            _needsKeyframeFlow.value = false
             renderingEnabled = false  // Don't show green seed output
             seedIdrTimeMs = System.currentTimeMillis()  // Start warmup timer
             // Don't cache the seed IDR — if surface is recreated, we don't want
             // to replay a green frame. Better to wait for a real one.
-            // Keep requesting a real IDR — the phone may eventually respond
-            if (!_needsKeyframe) {
-                _needsKeyframe = true
-                _needsKeyframeFlow.value = true
-            }
             return
         }
 
@@ -413,9 +458,6 @@ class MediaCodecDecoder(
                 DiagnosticLog.i("video", "Seed warmup done (${elapsed}ms), render enabled")
                 renderingEnabled = true
                 seedIdrTimeMs = 0  // Clear — warmup is done
-                // Keep requesting a real IDR. The seed IDR is good enough to
-                // resume rendering after warmup, but only a real IDR fully
-                // resets the decoder's reference picture.
             }
         }
         queueFrame(frame)
@@ -592,6 +634,7 @@ class MediaCodecDecoder(
             firstFrameRendered = false
             decodeStartTimeMs = System.currentTimeMillis()
             renderingEnabled = true  // VP9/AV1: no reference dependency, render immediately
+            outputFormatReceived = true
 
             startDrainThread(mc)
 
@@ -806,6 +849,7 @@ class MediaCodecDecoder(
 
     private fun updateStats(codecName: String?) {
         val current = _stats.value
+        val now = System.currentTimeMillis()
         val isHw = codecName?.let {
             try { android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS)
                 .codecInfos.firstOrNull { info -> info.name == it }
@@ -817,6 +861,11 @@ class MediaCodecDecoder(
             CodecSelector.MIME_H265 -> "H.265"
             CodecSelector.MIME_VP9 -> "VP9"
             else -> mimeType
+        }
+        val timeSinceLastKeyframeMs = if (lastKeyframeReceivedAtMs > 0) {
+            now - lastKeyframeReceivedAtMs
+        } else {
+            -1L
         }
         _stats.value = current.copy(
             fps = currentFps,
@@ -832,6 +881,7 @@ class MediaCodecDecoder(
             codecResets = codecResetCount,
             bitrateKbps = currentBitrateKbps,
             waitingForKeyframe = _needsKeyframe && !renderingEnabled,
+            timeSinceLastKeyframeMs = timeSinceLastKeyframeMs,
         )
     }
 }

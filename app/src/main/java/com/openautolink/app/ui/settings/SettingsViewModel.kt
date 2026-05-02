@@ -4,9 +4,12 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.openautolink.app.data.AppPreferences
+import com.openautolink.app.session.SessionManager
 import com.openautolink.app.transport.NetworkInterfaceInfo
 import com.openautolink.app.transport.NetworkInterfaceScanner
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -68,6 +71,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val preferences = AppPreferences.getInstance(application)
     private val interfaceScanner = NetworkInterfaceScanner(application)
+    private var videoRestartJob: Job? = null
 
     val networkInterfaces: StateFlow<List<NetworkInterfaceInfo>> = interfaceScanner.interfaces
 
@@ -275,19 +279,31 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { preferences.setHotspotPassword(password) }
     }
     fun updateVideoCodec(codec: String) {
-        viewModelScope.launch { preferences.setVideoCodec(codec) }
+        viewModelScope.launch {
+            preferences.setVideoCodec(codec)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateVideoAutoNegotiate(enabled: Boolean) {
-        viewModelScope.launch { preferences.setVideoAutoNegotiate(enabled) }
+        viewModelScope.launch {
+            preferences.setVideoAutoNegotiate(enabled)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateVideoFps(fps: Int) {
-        viewModelScope.launch { preferences.setVideoFps(fps) }
+        viewModelScope.launch {
+            preferences.setVideoFps(fps)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateDisplayMode(mode: String) {
-        viewModelScope.launch { preferences.setDisplayMode(mode) }
+        viewModelScope.launch {
+            preferences.setDisplayMode(mode)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateMicSource(source: String) {
@@ -295,35 +311,59 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateVideoScalingMode(mode: String) {
-        viewModelScope.launch { preferences.setVideoScalingMode(mode) }
+        viewModelScope.launch {
+            preferences.setVideoScalingMode(mode)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateAaResolution(resolution: String) {
-        viewModelScope.launch { preferences.setAaResolution(resolution) }
+        viewModelScope.launch {
+            preferences.setAaResolution(resolution)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateAaDpi(dpi: Int) {
-        viewModelScope.launch { preferences.setAaDpi(dpi) }
+        viewModelScope.launch {
+            preferences.setAaDpi(dpi)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateAaWidthMargin(margin: Int) {
-        viewModelScope.launch { preferences.setAaWidthMargin(margin) }
+        viewModelScope.launch {
+            preferences.setAaWidthMargin(margin)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateAaHeightMargin(margin: Int) {
-        viewModelScope.launch { preferences.setAaHeightMargin(margin) }
+        viewModelScope.launch {
+            preferences.setAaHeightMargin(margin)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateAaPixelAspect(value: Int) {
-        viewModelScope.launch { preferences.setAaPixelAspect(value) }
+        viewModelScope.launch {
+            preferences.setAaPixelAspect(value)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateAaTargetLayoutWidthDp(value: Int) {
-        viewModelScope.launch { preferences.setAaTargetLayoutWidthDp(value) }
+        viewModelScope.launch {
+            preferences.setAaTargetLayoutWidthDp(value)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateDriveSide(side: String) {
-        viewModelScope.launch { preferences.setDriveSide(side) }
+        viewModelScope.launch {
+            preferences.setDriveSide(side)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateGpsForwarding(enabled: Boolean) {
@@ -351,19 +391,31 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun updateSyncAaTheme(enabled: Boolean) {
-        viewModelScope.launch { preferences.setSyncAaTheme(enabled) }
+        viewModelScope.launch {
+            preferences.setSyncAaTheme(enabled)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateHideAaClock(enabled: Boolean) {
-        viewModelScope.launch { preferences.setHideAaClock(enabled) }
+        viewModelScope.launch {
+            preferences.setHideAaClock(enabled)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateHidePhoneSignal(enabled: Boolean) {
-        viewModelScope.launch { preferences.setHidePhoneSignal(enabled) }
+        viewModelScope.launch {
+            preferences.setHidePhoneSignal(enabled)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateHideBatteryLevel(enabled: Boolean) {
-        viewModelScope.launch { preferences.setHideBatteryLevel(enabled) }
+        viewModelScope.launch {
+            preferences.setHideBatteryLevel(enabled)
+            scheduleVideoOnlyRestart()
+        }
     }
 
     fun updateSendImuSensors(enabled: Boolean) {
@@ -389,6 +441,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             preferences.setSafeAreaBottom(bottom)
             preferences.setSafeAreaLeft(left)
             preferences.setSafeAreaRight(right)
+            scheduleVideoOnlyRestart()
+        }
+    }
+
+    private fun scheduleVideoOnlyRestart() {
+        videoRestartJob?.cancel()
+        videoRestartJob = viewModelScope.launch {
+            delay(500)
+            SessionManager.instanceOrNull()?.restartVideoStream()
         }
     }
 

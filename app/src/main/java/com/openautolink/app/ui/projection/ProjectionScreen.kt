@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -220,6 +221,22 @@ fun ProjectionScreen(
         if (uiState.sessionState == SessionState.STREAMING && uiState.videoStats.waitingForKeyframe) {
             Box(
                 modifier = Modifier
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xAA000000))
+                    .padding(24.dp)
+                    .testTag("videoLoadingPlaceholder"),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(36.dp),
+                    color = Color.White,
+                    strokeWidth = 3.dp
+                )
+            }
+
+            Box(
+                modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 48.dp)
                     .clip(RoundedCornerShape(12.dp))
@@ -259,6 +276,19 @@ fun ProjectionScreen(
                 onClick = { showSettings = true },
                 positionKey = "overlay_settings",
                 modifier = Modifier.testTag("settingsButton"),
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Video restart button — resets only projected video, audio stays active.
+            DraggableOverlayButton(
+                icon = Icons.Default.Refresh,
+                contentDescription = "Restart video stream",
+                onClick = { viewModel.restartVideoStream() },
+                positionKey = "overlay_restart_video",
+                containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.7f),
+                tint = MaterialTheme.colorScheme.onSecondary,
+                modifier = Modifier.testTag("restartVideoButton"),
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -954,6 +984,9 @@ private fun VideoStatsOverlay(
                         else -> Color.Red
                     })
                 StatLine("Frames", "Rx:${stats.framesReceived}  Dec:${stats.framesDecoded}")
+                if (stats.timeSinceLastKeyframeMs >= 0) {
+                    StatLine("Last Keyframe", formatDurationMs(stats.timeSinceLastKeyframeMs))
+                }
                 if (stats.bitrateKbps > 0) {
                     val bitrateStr = if (stats.bitrateKbps >= 1000) {
                         "${"%.1f".format(stats.bitrateKbps / 1000)} Mbps"
@@ -1036,11 +1069,48 @@ private fun StatLine(
     }
 }
 
+@Composable
+private fun StatActionLine(
+    label: String,
+    value: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .widthIn(min = 240.dp)
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            color = Color.Gray,
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 16.sp,
+        )
+        Text(
+            text = value,
+            color = Color.Cyan,
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 16.sp,
+        )
+    }
+}
+
 private fun formatUptime(seconds: Long): String {
     val h = seconds / 3600
     val m = (seconds % 3600) / 60
     val s = seconds % 60
     return if (h > 0) "${h}h ${m}m ${s}s" else if (m > 0) "${m}m ${s}s" else "${s}s"
+}
+
+private fun formatDurationMs(milliseconds: Long): String {
+    return if (milliseconds < 1000) {
+        "${milliseconds}ms"
+    } else {
+        formatUptime(milliseconds / 1000)
+    }
 }
 
 @Composable
