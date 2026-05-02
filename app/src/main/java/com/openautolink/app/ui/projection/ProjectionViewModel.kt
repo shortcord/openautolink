@@ -37,10 +37,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 data class ProjectionUiState(
@@ -69,6 +71,7 @@ data class ProjectionUiState(
     val fileLoggingEnabled: Boolean = false,
 )
 
+@OptIn(kotlinx.coroutines.FlowPreview::class)
 class ProjectionViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
@@ -108,6 +111,13 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _audioStats = MutableStateFlow(AudioStats())
     private val _showStats = MutableStateFlow(false)
     private val _showPhoneChooser = MutableStateFlow(false)
+    /**
+     * Transient status surfaced inside the Car Hotspot chooser. Set when the
+     * directed warm-cache loop has been trying without success long enough
+     * that the user should verify their setup. Cleared on next select / dismiss.
+     */
+    private val _carHotspotChooserMessage = MutableStateFlow<String?>(null)
+    val carHotspotChooserMessage: StateFlow<String?> = _carHotspotChooserMessage.asStateFlow()
     private val _fileLoggingActive = MutableStateFlow(false)
     private val _fileLoggingPath = MutableStateFlow<String?>(null)
     private var fileLogWriter: FileLogWriter? = null
@@ -268,20 +278,27 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     @Volatile private var lastAutoReconnectAttemptMs: Long = 0L
     private val AUTO_RECONNECT_MIN_GAP_MS = 10_000L
     /**
-     * How long to wait for mDNS alone to surface a resolved phone before
-     * falling back to a TCP sweep. mDNS on GM AAOS typically returns in
-     * <1s; we give it 3s of headroom so the common case has zero sweep
-     * activity.
+     * mDNS-only grace window inside [resolveCarHotspotPhone]. mDNS is
+     * passive and zero-cost, so we always give it a brief head-start
+     * before kicking the active /24 sweep.
      */
     private val MDNS_GRACE_MS = 3_000L
-
     /**
-     * How long to give the warm-cache phase (parallel identity probes of
-     * known phones' last-known IPs) before falling through to mDNS. A
-     * successful identity probe on the local subnet typically completes
-     * in <100ms; ~700ms is a generous ceiling that still feels instant.
+     * Background sweep cadence while idle in Car Hotspot mode with a
+     * default phone set. Covers two scenarios where mDNS alone wouldn't
+     * surface the phone: (1) mid-drive session drops where mDNS is
+     * filtered (e.g. AAOS 13 IPv6-only NSD), (2) car wake-from-sleep
+     * before the WiFi callback fires. The sweep is fast (~400ms wall
+     * time, 128-way parallel) and only runs while idle, so the cost is
+     * negligible.
      */
-    private val WARM_CACHE_BUDGET_MS = 700L
+    private val IDLE_SWEEP_INTERVAL_MS = 15_000L
+    /**
+     * Minimum gap between activePhoneId-clear-on-IDLE and the actual
+     * clear. Sessions can briefly bounce IDLE → CONNECTING → IDLE during
+     * retries; debouncing prevents the ACTIVE badge from flickering.
+     */
+    private val ACTIVE_PHONE_ID_CLEAR_DEBOUNCE_MS = 4_000L
     private val connectLock = Any()
 
     fun connect() {
@@ -387,7 +404,14 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             //   3. Fall back to the persistent manual-IP setting.
             val mode = preferences.connectionMode.first()
             val carHotspotPhone = if (overrideIp == null && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
-                resolveCarHotspotPhone(timeoutMs = 15_000)
+                // Long budget: with directed probing (no /24 sweep) this is
+                // cheap — just one TCP probe per known IP every
+                // [WARM_CACHE_RETRY_GAP_MS]. The user's guidance is to set a
+                // static IP on the phone for the car's WiFi; once that's done
+                // we want to keep retrying the known IP rather than nag the
+                // user with a chooser. If the AP genuinely re-leased a new
+                // IP, the user can press Scan in the chooser.
+                resolveCarHotspotPhone(timeoutMs = 45_000)
             } else null
             val carHotspotIp: String? = carHotspotPhone?.host
             val manualIp = overrideIp ?: carHotspotIp ?: manualIpFromPrefs
@@ -404,6 +428,23 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     if (!pickedId.isNullOrBlank()) {
                         _activePhoneId.value = pickedId
                     }
+                }
+                // Resolve failed and we have nothing to fall back to → guide
+                // the user. Re-open the chooser with a clear message; the
+                // user can re-tap a phone or press Scan.
+                if (carHotspotPhone == null && manualIp == null) {
+                    val defaultName = try {
+                        knownPhonesStore.phones.first()
+                            .firstOrNull { it.phoneId == defaultPhoneId.value }
+                            ?.friendlyName
+                    } catch (_: Exception) { null }
+                    val who = defaultName ?: "your phone"
+                    _carHotspotChooserMessage.value =
+                        "Couldn't reach $who. Verify it's connected to this car's WiFi and the companion app is started. " +
+                            "If the connection looks good, tap your phone again. If its IP changed, press Scan."
+                    _showPhoneChooser.value = true
+                    OalLog.w(TAG, "Car Hotspot resolve gave up after 45s — re-opening chooser with guidance")
+                    return@launch
                 }
             }
 
@@ -549,6 +590,37 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     private val _carHotspotSwitching = MutableStateFlow(false)
     val carHotspotSwitching: StateFlow<Boolean> = _carHotspotSwitching.asStateFlow()
 
+    /** Stashed WiFi callback so we can unregister in onCleared. */
+    private var wifiAvailableCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * High-level Car Hotspot connection status surfaced to the projection
+     * screen so the user always knows what's happening when streaming
+     * isn't yet active. Distinct from [SessionState] because it captures
+     * pre-session phases (scanning, picking, no default set).
+     */
+    enum class CarHotspotStatus {
+        /** Car Hotspot mode isn't selected, no banner needed. */
+        INACTIVE,
+        /** Need user to pick a phone (no default set, or "always ask"). */
+        AWAITING_USER_PICK,
+        /** Searching the network — mDNS + sweep in flight. */
+        SEARCHING,
+        /** Tearing down + dialing a different phone. */
+        SWITCHING,
+        /** Found the phone, AA handshake in progress. */
+        CONNECTING,
+        /** AA streaming. */
+        STREAMING,
+        /** Discovery cycle finished without finding the default phone. */
+        PHONE_NOT_FOUND,
+    }
+    private val _carHotspotStatus = MutableStateFlow(CarHotspotStatus.INACTIVE)
+    val carHotspotStatus: StateFlow<CarHotspotStatus> = _carHotspotStatus.asStateFlow()
+    /** Optional human-readable detail line under the headline status. */
+    private val _carHotspotStatusDetail = MutableStateFlow<String?>(null)
+    val carHotspotStatusDetail: StateFlow<String?> = _carHotspotStatusDetail.asStateFlow()
+
     /**
      * Last phone_id we deliberately dialed via the Car Hotspot flow. Used by
      * the chooser UI to mark the ACTIVE phone reliably (vs. comparing by
@@ -581,31 +653,118 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     list.mapNotNull { p ->
                         val id = p.phoneId
                         if (id.isNullOrBlank()) null
-                        else Triple(id, p.friendlyName ?: "", p.host ?: "")
+                        else id to (p.friendlyName ?: "")
                     }.toSet()
                 }
                 .distinctUntilChanged()
                 .collect { tuples ->
                     val mode = connectionMode.value
                     if (mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) return@collect
-                    tuples.forEach { (id, name, host) ->
+                    tuples.forEach { (id, name) ->
                         knownPhonesStore.touch(
                             phoneId = id,
                             friendlyName = name.takeIf { it.isNotBlank() },
-                            lastKnownIp = host.takeIf { it.isNotBlank() },
                         )
                     }
                 }
         }
-        // Clear `activePhoneId` whenever the session leaves STREAMING. The
-        // ACTIVE badge in the chooser should disappear when we're no longer
-        // talking to the phone we last dialed.
+        // Clear `activePhoneId` when the session leaves STREAMING — but
+        // only after [ACTIVE_PHONE_ID_CLEAR_DEBOUNCE_MS] of continuous
+        // non-active state. Sessions can briefly bounce IDLE → CONNECTING
+        // → IDLE during retries; without the debounce the chooser's
+        // ACTIVE badge flickers off and back on.
         viewModelScope.launch {
-            sessionManager.sessionState.collect { state ->
-                if (state == SessionState.IDLE) {
-                    _activePhoneId.value = null
+            sessionManager.sessionState
+                .debounce(ACTIVE_PHONE_ID_CLEAR_DEBOUNCE_MS)
+                .collect { state ->
+                    if (state == SessionState.IDLE && _activePhoneId.value != null) {
+                        OalLog.d(TAG, "Clearing activePhoneId after debounced IDLE")
+                        _activePhoneId.value = null
+                    }
+                }
+        }
+        // Drive the [carHotspotStatus] flow from connection mode +
+        // sessionState + chooser visibility + switching flag + default-set
+        // state. The projection UI uses this to render a clear "what's
+        // happening" banner whenever streaming isn't yet active.
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                connectionMode,
+                sessionManager.sessionState,
+                _carHotspotSwitching,
+                defaultPhoneId,
+                alwaysAskPhone,
+            ) { mode, state, switching, defId, askMode ->
+                computeCarHotspotStatus(mode, state, switching, defId, askMode)
+            }.collect { status ->
+                if (_carHotspotStatus.value != status) {
+                    OalLog.d(TAG, "carHotspotStatus: ${_carHotspotStatus.value} -> $status")
+                }
+                _carHotspotStatus.value = status
+            }
+        }
+        // Periodic background sweep while idle in Car Hotspot mode + has
+        // a default phone. Covers two cases the auto-reconnect collector
+        // alone can't handle:
+        //   1. Mid-drive session drop where mDNS is filtered (AAOS 13
+        //      IPv6-only NSD). phoneDiscovery.phones never changes →
+        //      collector never fires → stuck IDLE forever. Periodic
+        //      sweep produces a fresh mDNS-equivalent hit.
+        //   2. Car wake-from-sleep where the phone is on a brand new
+        //      subnet and nothing has triggered a re-resolve yet.
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(IDLE_SWEEP_INTERVAL_MS)
+                try {
+                    val mode = connectionMode.value
+                    val state = sessionManager.sessionState.value
+                    val askMode = alwaysAskPhone.value
+                    val haveDefault = defaultPhoneId.value.isNotBlank()
+                    val idleAndCarHotspot = mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT &&
+                        state == SessionState.IDLE
+                    if (!idleAndCarHotspot) continue
+                    if (askMode) continue          // user wants to pick manually
+                    if (!haveDefault) continue     // no default → chooser path handles it
+                    if (connectInFlight) continue
+                    if (phoneDiscovery.isSweeping.value) continue
+                    OalLog.d(TAG, "Periodic idle probe (Car Hotspot, default set, no session)")
+                    // Cheap-first: a single UDP broadcast costs ~1 packet
+                    // and ~600ms wall time. Only escalate to the full /24
+                    // sweep if broadcast comes back empty.
+                    val hits = try { phoneDiscovery.udpBroadcastAllInterfaces(listenWindowMs = 600L) } catch (_: Exception) { 0 }
+                    if (hits == 0) {
+                        kickSweep()
+                    }
+                } catch (_: Exception) { /* keep loop alive */ }
+            }
+        }
+        // WiFi-up trigger: when the head unit's WiFi (re)connects to the
+        // car AP — typically the car waking from sleep — kick a discovery
+        // immediately rather than waiting for the next [IDLE_SWEEP_INTERVAL_MS]
+        // tick. Best-effort; if the callback fails we still have the
+        // periodic timer above.
+        try {
+            val cm = application.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val req = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .build()
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    val mode = connectionMode.value
+                    if (mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) return
+                    if (sessionManager.sessionState.value != SessionState.IDLE) return
+                    if (!defaultPhoneId.value.isNotBlank()) return
+                    if (alwaysAskPhone.value) return
+                    if (connectInFlight) return
+                    OalLog.i(TAG, "WiFi onAvailable — kicking sweep to find phone")
+                    kickSweep()
                 }
             }
+            cm?.registerNetworkCallback(req, cb)
+            // Stash for cleanup
+            wifiAvailableCallback = cb
+        } catch (e: Exception) {
+            OalLog.w(TAG, "Couldn't register WiFi NetworkCallback: ${e.message}")
         }
         // Car Hotspot mode auto-reconnect: when we're idle and a phone
         // appears in discovery, kick off a connect. Throttled to one attempt
@@ -641,6 +800,59 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     hasConnected = false
                     connect()
                 }
+        }
+    }
+
+    /**
+     * Pure mapping from inputs → [CarHotspotStatus]. Keeps the side-effect-
+     * free logic out of the collector.
+     */
+    private fun computeCarHotspotStatus(
+        mode: String,
+        state: SessionState,
+        switching: Boolean,
+        defaultId: String,
+        askMode: Boolean,
+    ): CarHotspotStatus {
+        if (mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+            _carHotspotStatusDetail.value = null
+            return CarHotspotStatus.INACTIVE
+        }
+        if (switching) {
+            _carHotspotStatusDetail.value = null
+            return CarHotspotStatus.SWITCHING
+        }
+        return when (state) {
+            SessionState.STREAMING -> {
+                _carHotspotStatusDetail.value = null
+                CarHotspotStatus.STREAMING
+            }
+            SessionState.CONNECTED, SessionState.CONNECTING -> {
+                _carHotspotStatusDetail.value = null
+                CarHotspotStatus.CONNECTING
+            }
+            SessionState.IDLE, SessionState.ERROR -> when {
+                askMode -> {
+                    _carHotspotStatusDetail.value = "Pick a phone in the chooser"
+                    CarHotspotStatus.AWAITING_USER_PICK
+                }
+                defaultId.isBlank() -> {
+                    _carHotspotStatusDetail.value = "Tap the phone icon to choose"
+                    CarHotspotStatus.AWAITING_USER_PICK
+                }
+                phoneDiscovery.isSweeping.value || connectInFlight -> {
+                    _carHotspotStatusDetail.value = phoneDiscovery.sweepProgress.value.takeIf { it.isNotBlank() }
+                    CarHotspotStatus.SEARCHING
+                }
+                else -> {
+                    // Idle, default set, not actively scanning — between
+                    // sweep cycles. Treat as "searching" rather than the
+                    // alarming "not found"; the periodic sweep will fire
+                    // within IDLE_SWEEP_INTERVAL_MS.
+                    _carHotspotStatusDetail.value = "Looking for your phone…"
+                    CarHotspotStatus.SEARCHING
+                }
+            }
         }
     }
 
@@ -710,6 +922,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      */
     fun selectCarHotspotPhone(phone: com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone) {
         _showPhoneChooser.value = false
+        _carHotspotChooserMessage.value = null
         val phoneId = phone.phoneId
         val host = phone.host
         if (phoneId.isNullOrBlank() || host.isNullOrBlank()) {
@@ -724,7 +937,6 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     phoneId = phoneId,
                     friendlyName = phone.friendlyName ?: "Phone-${phoneId.take(4)}",
                     lastSeenMs = System.currentTimeMillis(),
-                    lastKnownIp = host,
                 )
             )
             val currentDefault = preferences.defaultPhoneId.first()
@@ -811,24 +1023,20 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     /**
      * Resolve a usable phone for the Car Hotspot connect flow.
      *
-     * Strategy: **warm cache → mDNS → sweep.** Each phase only runs if the
-     * previous one didn't find the phone:
+     * Strategy: **mDNS first, /24 sweep on fallback.** No IP cache —
+     * automotive APs re-randomize their entire DHCP scope every boot
+     * (`10.220.23.0/24` one drive, `10.59.121.0/24` the next), so any
+     * cached "last known IP" is wrong as often as it's right. We always
+     * re-discover fresh.
      *
-     *   - **Phase 0 (warm cache):** parallel-probe last-known IPs of all
-     *     known phones. Automotive APs almost always re-lease the same IP
-     *     to the same MAC, so this typically returns in <500ms with no
-     *     mDNS / sweep traffic at all.
-     *   - **Phase 1 (mDNS):** cheap, passive, usually returns on AAOS 14+.
-     *     Grace window of [MDNS_GRACE_MS].
-     *   - **Phase 2 (sweep):** full TCP sweep of preferred → fallback
-     *     interfaces. Only fires if both phase 0 and phase 1 came up
-     *     empty.
+     *   - mDNS passive grace window of [MDNS_GRACE_MS]. Returns
+     *     immediately on AAOS 14+ if NSD's IPv4 path is healthy.
+     *   - On expiry, kick a /24 TCP sweep on the AP-bridge interface(s)
+     *     (`ap_br_swlan0` etc.). With high parallelism this completes in
+     *     well under a second.
      *
-     * Preference order for which phone to pick out of the discovery flow:
-     *   1. Default phone (matching [AppPreferences.defaultPhoneId]) when
-     *      it has a resolved host.
-     *   2. Any currently-discovered phone with a resolved host.
-     *   3. null if nothing comes up before [timeoutMs] elapses.
+     * Identity is keyed on `phone_id` — the chooser still tracks "your
+     * phones" across drives even when their IPs change.
      */
     private suspend fun resolveCarHotspotPhone(
         timeoutMs: Long,
@@ -842,58 +1050,35 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             preferences.defaultPhoneId.first().takeIf { it.isNotBlank() }
         } catch (_: Exception) { null }
 
-        // Phase 0: warm cache hit. Build the target list with the default
-        // phone's last-known IP first so the most-likely-to-succeed probe
-        // gets to race in parallel with the others.
-        val knownTargets: List<com.openautolink.app.transport.PhoneDiscovery.KnownTarget> = try {
-            val knownNow = knownPhonesStore.phones.first()
-            knownNow
-                .mapNotNull { kp ->
-                    val ip = kp.lastKnownIp ?: return@mapNotNull null
-                    com.openautolink.app.transport.PhoneDiscovery.KnownTarget(
-                        expectedPhoneId = kp.phoneId,
-                        host = ip,
-                    )
-                }
-                .sortedByDescending { it.expectedPhoneId == defaultId }
-        } catch (_: Exception) { emptyList() }
-
-        if (knownTargets.isNotEmpty()) {
-            val cacheHit = kotlinx.coroutines.withTimeoutOrNull(WARM_CACHE_BUDGET_MS) {
-                phoneDiscovery.probeKnown(knownTargets)
-            } == true
-            if (cacheHit) {
-                // probeKnown added results into the discovery flow — read it
-                // back through pickBestPhone so we honor the default-phone
-                // preference if the default was actually one of the hits.
-                val picked = pickBestPhone(phoneDiscovery.phones.value, defaultId)
-                if (picked != null) {
-                    OalLog.i(
-                        TAG,
-                        "Resolved via warm cache hit on ${picked.host} (${picked.friendlyName ?: picked.phoneId?.take(8)})",
-                    )
-                    return picked
-                }
-            }
-        }
-
-        // Phase 1: mDNS-only grace period. Cheapest, fastest, no socket
-        // pressure on the network.
-        val mdnsResult = kotlinx.coroutines.withTimeoutOrNull(MDNS_GRACE_MS) {
+        // Phase 1: mDNS-only grace. Cheapest, fastest, no socket pressure.
+        OalLog.i(TAG, "Resolving phone — mDNS grace ${MDNS_GRACE_MS}ms")
+        val mdnsHit = kotlinx.coroutines.withTimeoutOrNull(MDNS_GRACE_MS) {
             phoneDiscovery.phones
                 .map { list -> pickBestPhone(list, defaultId) }
                 .first { it != null }
         }
-        if (mdnsResult != null) {
-            OalLog.i(TAG, "Resolved via mDNS in <${MDNS_GRACE_MS}ms")
-            return mdnsResult
+        if (mdnsHit != null) {
+            OalLog.i(TAG, "Resolved via mDNS within ${MDNS_GRACE_MS}ms")
+            return mdnsHit
         }
 
-        // Phase 2: kick a sweep and keep watching the same flow. mDNS keeps
-        // running too — whichever fills in the host first wins.
-        OalLog.i(TAG, "mDNS grace expired with no resolved phone; falling back to sweep")
+        // Phase 2: UDP broadcast. ~50ms when the AP allows it. Sits
+        // between mDNS (often broken on AAOS 12/13) and the full /24
+        // sweep (always works, ~400ms wall time).
+        OalLog.i(TAG, "mDNS grace expired — trying UDP broadcast")
+        val broadcastHits = phoneDiscovery.udpBroadcastAllInterfaces(listenWindowMs = 600L)
+        if (broadcastHits > 0) {
+            val picked = pickBestPhone(phoneDiscovery.phones.value, defaultId)
+            if (picked != null) {
+                OalLog.i(TAG, "Resolved via UDP broadcast ($broadcastHits hit(s))")
+                return picked
+            }
+        }
+
+        // Phase 3: full /24 TCP sweep. Always works on cooperative APs.
+        OalLog.i(TAG, "UDP broadcast empty — kicking /24 sweep")
         kickSweep()
-        val remaining = (timeoutMs - WARM_CACHE_BUDGET_MS - MDNS_GRACE_MS).coerceAtLeast(1_000L)
+        val remaining = (timeoutMs - MDNS_GRACE_MS - 600L).coerceAtLeast(2_000L)
         return kotlinx.coroutines.withTimeoutOrNull(remaining) {
             phoneDiscovery.phones
                 .map { list -> pickBestPhone(list, defaultId) }
@@ -948,6 +1133,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      */
     fun dismissPhoneChooser() {
         _showPhoneChooser.value = false
+        _carHotspotChooserMessage.value = null
         if (connectionMode.value == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
             // Car Hotspot: chooser was opened over a live session. Do nothing.
             return
@@ -1174,6 +1360,10 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         try {
             connectivityManager.unregisterNetworkCallback(transportNetworkCallback)
         } catch (_: Exception) {}
+        wifiAvailableCallback?.let {
+            try { connectivityManager.unregisterNetworkCallback(it) } catch (_: Exception) {}
+        }
+        wifiAvailableCallback = null
         // Stop file logging if active
         logcatCapture?.stop()
         fileLogWriter?.stop()

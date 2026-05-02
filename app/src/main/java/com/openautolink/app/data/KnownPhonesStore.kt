@@ -12,23 +12,20 @@ import org.json.JSONObject
  * "known phones" list so the chooser UI can show all of them, even when
  * they're not currently advertising on the car AP.
  *
- * [lastKnownIp] is opportunistically remembered from the most recent
- * successful discovery — DHCP on automotive APs almost always re-leases
- * the same address to the same MAC, so trying this IP first on subsequent
- * connects gives a sub-second "warm cache hit" path that bypasses mDNS
- * grace + sweep entirely.
+ * No IP cache: GM-style automotive APs change subnet every reboot, so
+ * stashing a "last known IP" would be misleading more often than helpful.
+ * Identity is keyed on the stable [phoneId] (UUID published by the
+ * companion); the actual IP is always re-discovered fresh via mDNS / sweep.
  */
 data class KnownPhone(
     val phoneId: String,
     val friendlyName: String,
     val lastSeenMs: Long,
-    val lastKnownIp: String? = null,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("phone_id", phoneId)
         put("friendly_name", friendlyName)
         put("last_seen_ms", lastSeenMs)
-        if (!lastKnownIp.isNullOrBlank()) put("last_known_ip", lastKnownIp)
     }
 
     companion object {
@@ -39,8 +36,9 @@ data class KnownPhone(
             val rawName = obj.optString("friendly_name", "").takeIf { it.isNotBlank() }
             val name = rawName ?: "Phone-${id.take(4)}"
             val lastSeen = obj.optLong("last_seen_ms", 0L)
-            val lastIp = obj.optString("last_known_ip", "").takeIf { it.isNotBlank() }
-            return KnownPhone(id, name, lastSeen, lastIp)
+            // [last_known_ip] from older app versions is intentionally
+            // ignored — see KnownPhone class doc.
+            return KnownPhone(id, name, lastSeen)
         }
     }
 }
@@ -93,27 +91,21 @@ class KnownPhonesStore(private val preferences: AppPreferences) {
     }
 
     /**
-     * Update the entry for [phoneId] with the latest [friendlyName] and
-     * [lastKnownIp]. Throttled: skips writes when nothing meaningful has
-     * changed and the last touch was within [TOUCH_THROTTLE_MS]. Critical
-     * because the discovery → touch coupling fires on every StateFlow
-     * emission.
+     * Update the entry for [phoneId] with the latest [friendlyName].
+     * Throttled: skips writes when nothing meaningful has changed and the
+     * last touch was within [TOUCH_THROTTLE_MS]. Critical because the
+     * discovery → touch coupling fires on every StateFlow emission.
      */
-    suspend fun touch(phoneId: String, friendlyName: String?, lastKnownIp: String? = null) {
+    suspend fun touch(phoneId: String, friendlyName: String?) {
         if (phoneId.isBlank()) return
         val current = currentValue() ?: return
         val now = System.currentTimeMillis()
         val existing = current.firstOrNull { it.phoneId == phoneId }
         val resolvedName = friendlyName?.takeIf { it.isNotBlank() }
-        val resolvedIp = lastKnownIp?.takeIf { it.isNotBlank() }
         if (existing != null) {
             val nameUnchanged = resolvedName == null || resolvedName == existing.friendlyName
-            // IP is "changed" only when caller supplied one AND it differs
-            // from what we have. A null caller-IP never invalidates the
-            // throttle (e.g. a sweep finds the phone but didn't pass IP up).
-            val ipUnchanged = resolvedIp == null || resolvedIp == existing.lastKnownIp
             val recent = (now - existing.lastSeenMs) < TOUCH_THROTTLE_MS
-            if (nameUnchanged && ipUnchanged && recent) return
+            if (nameUnchanged && recent) return
         }
         val updated = if (existing != null) {
             current.map { e ->
@@ -121,7 +113,6 @@ class KnownPhonesStore(private val preferences: AppPreferences) {
                     e.copy(
                         friendlyName = resolvedName ?: e.friendlyName,
                         lastSeenMs = now,
-                        lastKnownIp = resolvedIp ?: e.lastKnownIp,
                     )
                 } else e
             }
@@ -130,16 +121,11 @@ class KnownPhonesStore(private val preferences: AppPreferences) {
                 phoneId = phoneId,
                 friendlyName = resolvedName ?: "Phone-${phoneId.take(4)}",
                 lastSeenMs = now,
-                lastKnownIp = resolvedIp,
             )
         }
         preferences.setKnownPhonesJson(serialize(updated))
     }
 
-    /**
-     * Read the current persisted list. Returns null on read failure (rare;
-     * the caller should treat null as "leave the store alone").
-     */
     private suspend fun currentValue(): List<KnownPhone>? {
         return try {
             parse(preferences.knownPhonesJson.first())
