@@ -212,9 +212,14 @@ private:
     JNIEnv* getEnv(bool& attached);
     void releaseEnv(bool attached);
     void callVoidCallback(jmethodID method);
+    void emitNativeEvent(int type, const uint8_t* payload, size_t length, int64_t timestampNs);
+    void emitNativeEvent(int type, const std::string& payload);
+    void clearCallbackException(JNIEnv* env, const char* callbackName);
 
     JavaVM* jvm_;
     jobject callbackRef_ = nullptr;
+    std::mutex callbackMutex_;
+    bool callbacksClosed_ = false;
 
     // Boost.Asio event loop
     std::unique_ptr<boost::asio::io_service> ioService_;
@@ -342,6 +347,7 @@ private:
         jmethodID onVoiceSession = nullptr;
         jmethodID onAudioFocusRequest = nullptr;
         jmethodID onError = nullptr;
+        jmethodID onNativeEvent = nullptr;
     };
     CallbackMethods cbMethods_;
 };

@@ -12,6 +12,9 @@
 #include "jni_channel_handlers.h"
 
 #include <android/log.h>
+#include <chrono>
+#include <cstring>
+#include <sstream>
 #include <vector>
 
 // Protobuf messages for SDR building
@@ -57,6 +60,18 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+namespace {
+constexpr int kNativeEventSessionStarted = 1;
+constexpr int kNativeEventSessionStopped = 2;
+constexpr int kNativeEventError = 3;
+constexpr int kNativeEventVideoCodecConfigured = 4;
+
+int64_t nowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
 
 // Hex-dump helper for raw protobuf bytes
 static std::string hexDump(const uint8_t* data, size_t len, size_t maxBytes = 512) {
@@ -166,11 +181,54 @@ void JniSession::releaseEnv(bool attached)
 
 void JniSession::callVoidCallback(jmethodID method)
 {
-    if (!callbackRef_ || !method) return;
+    if (!method) return;
     bool attached;
     JNIEnv* env = getEnv(attached);
-    if (env) env->CallVoidMethod(callbackRef_, method);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (!callbacksClosed_ && callbackRef_) {
+            env->CallVoidMethod(callbackRef_, method);
+            clearCallbackException(env, "voidCallback");
+        }
+    }
     releaseEnv(attached);
+}
+
+void JniSession::emitNativeEvent(int type, const uint8_t* payload, size_t length, int64_t timestampNs)
+{
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (!callbacksClosed_ && callbackRef_ && cbMethods_.onNativeEvent) {
+            jbyteArray data = env->NewByteArray(static_cast<jsize>(length));
+            if (data) {
+                if (payload && length > 0) {
+                    env->SetByteArrayRegion(data, 0, static_cast<jsize>(length),
+                                            reinterpret_cast<const jbyte*>(payload));
+                }
+                env->CallVoidMethod(callbackRef_, cbMethods_.onNativeEvent,
+                                    static_cast<jint>(type), data,
+                                    static_cast<jlong>(timestampNs));
+                env->DeleteLocalRef(data);
+            }
+            clearCallbackException(env, "onNativeEvent");
+        }
+    }
+    releaseEnv(attached);
+}
+
+void JniSession::emitNativeEvent(int type, const std::string& payload)
+{
+    emitNativeEvent(type, reinterpret_cast<const uint8_t*>(payload.data()), payload.size(), nowNs());
+}
+
+void JniSession::clearCallbackException(JNIEnv* env, const char* callbackName)
+{
+    if (!env || !env->ExceptionCheck()) return;
+    LOGE("Kotlin callback threw from %s; clearing JNI exception", callbackName);
+    env->ExceptionDescribe();
+    env->ExceptionClear();
 }
 
 // ============================================================================
@@ -185,7 +243,11 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     }
 
     // Create global refs
-    callbackRef_ = env->NewGlobalRef(callback);
+    {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        callbacksClosed_ = false;
+        callbackRef_ = env->NewGlobalRef(callback);
+    }
     jobject transportRef = env->NewGlobalRef(transportPipe);
 
     // Cache callback method IDs
@@ -213,6 +275,7 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     cbMethods_.onVoiceSession = env->GetMethodID(cbClass, "onVoiceSession", "(Z)V");
     cbMethods_.onAudioFocusRequest = env->GetMethodID(cbClass, "onAudioFocusRequest", "(I)V");
     cbMethods_.onError = env->GetMethodID(cbClass, "onError", "(Ljava/lang/String;)V");
+    cbMethods_.onNativeEvent = env->GetMethodID(cbClass, "onNativeEvent", "(I[BJ)V");
     env->DeleteLocalRef(cbClass);
 
     // Read SDR config from Kotlin
@@ -416,20 +479,25 @@ void JniSession::stop()
     if (ioThread_.joinable()) ioThread_.join();
 
     // Notify Kotlin (only if onSessionStopped hasn't already been fired by triggerAbort)
-    if (callbackRef_) {
-        bool attached;
-        JNIEnv* env = getEnv(attached);
-        if (env) {
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (callbackRef_) {
             if (!sessionStoppedFired_.exchange(true) && cbMethods_.onSessionStopped) {
                 jstring reason = env->NewStringUTF("stopped");
-                env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
-                env->DeleteLocalRef(reason);
+                if (reason) {
+                    env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
+                    env->DeleteLocalRef(reason);
+                    clearCallbackException(env, "onSessionStopped");
+                }
             }
+            callbacksClosed_ = true;
             env->DeleteGlobalRef(callbackRef_);
             callbackRef_ = nullptr;
         }
-        releaseEnv(attached);
     }
+    releaseEnv(attached);
     transport_.reset();
 }
 
@@ -512,6 +580,7 @@ void JniSession::onServiceDiscoveryRequest(
             LOGI("SDR sent Ã¢â‚¬â€ starting all service handlers");
             startAllHandlers();
             streaming_ = true;
+            emitNativeEvent(kNativeEventSessionStarted, "session_active");
             callVoidCallback(cbMethods_.onSessionStarted);
         },
         [this](const auto& e) { this->onChannelError(e); });
@@ -698,16 +767,21 @@ void JniSession::triggerAbort(const std::string& reason)
     if (transport_) transport_->stop();
 
     if (sessionStoppedFired_.exchange(true)) return;
-    if (callbackRef_ && cbMethods_.onSessionStopped) {
-        bool attached;
-        JNIEnv* env = getEnv(attached);
-        if (env) {
+    emitNativeEvent(kNativeEventSessionStopped, reason);
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (!callbacksClosed_ && callbackRef_ && cbMethods_.onSessionStopped) {
             jstring r = env->NewStringUTF(reason.c_str());
-            env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, r);
-            env->DeleteLocalRef(r);
+            if (r) {
+                env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, r);
+                env->DeleteLocalRef(r);
+                clearCallbackException(env, "onSessionStopped");
+            }
         }
-        releaseEnv(attached);
     }
+    releaseEnv(attached);
 }
 
 void JniSession::onChannelError(const aasdk::error::Error& e)
@@ -748,13 +822,20 @@ void JniSession::reportChannelError(const char* channelName, const aasdk::error:
              channelName, e.what(), totalInWindow);
     }
 
-    if (cbMethods_.onError && callbackRef_ && shouldLog) {
+    if (shouldLog) {
+        emitNativeEvent(kNativeEventError, e.what());
         bool attached;
         JNIEnv* env = getEnv(attached);
         if (env) {
-            jstring msg = env->NewStringUTF(e.what());
-            env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
-            env->DeleteLocalRef(msg);
+            std::lock_guard<std::mutex> lock(callbackMutex_);
+            if (!callbacksClosed_ && callbackRef_ && cbMethods_.onError) {
+                jstring msg = env->NewStringUTF(e.what());
+                if (msg) {
+                    env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
+                    env->DeleteLocalRef(msg);
+                    clearCallbackException(env, "onError");
+                }
+            }
         }
         releaseEnv(attached);
     }
@@ -790,15 +871,18 @@ void JniSession::onMediaChannelSetupRequest(
     negotiatedCodecType_ = request.type();
 
     // Notify Kotlin of the negotiated codec type so the decoder configures correctly
-    if (cbMethods_.onVideoCodecConfigured && callbackRef_) {
-        bool attached;
-        JNIEnv* env = getEnv(attached);
-        if (env) {
+    emitNativeEvent(kNativeEventVideoCodecConfigured, std::to_string(request.type()));
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (!callbacksClosed_ && callbackRef_ && cbMethods_.onVideoCodecConfigured) {
             env->CallVoidMethod(callbackRef_, cbMethods_.onVideoCodecConfigured,
                                 static_cast<jint>(request.type()));
+            clearCallbackException(env, "onVideoCodecConfigured");
         }
-        releaseEnv(attached);
     }
+    releaseEnv(attached);
 
     aap_protobuf::service::media::shared::message::Config config;
     config.set_status(aap_protobuf::service::media::shared::message::Config::STATUS_READY);

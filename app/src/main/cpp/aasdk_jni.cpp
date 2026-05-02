@@ -119,10 +119,8 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendTouchEvent(
     JNIEnv* /*env*/, jclass /*clazz*/,
     jint action, jint pointerId, jfloat x, jfloat y, jint pointerCount)
 {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) {
-        gSession->sendTouchEvent(action, pointerId, x, y, pointerCount);
-    }
+    auto session = getSession();
+    if (session) session->sendTouchEvent(action, pointerId, x, y, pointerCount);
 }
 
 /*
@@ -138,9 +136,20 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendMultiTouchEvent(
     if (!session) return;
 
     jsize count = env->GetArrayLength(ids);
+    if (count != env->GetArrayLength(xs) || count != env->GetArrayLength(ys)) {
+        LOGE("nativeSendMultiTouchEvent array length mismatch");
+        return;
+    }
     jint* idArr = env->GetIntArrayElements(ids, nullptr);
     jfloat* xArr = env->GetFloatArrayElements(xs, nullptr);
     jfloat* yArr = env->GetFloatArrayElements(ys, nullptr);
+    if (!idArr || !xArr || !yArr) {
+        if (idArr) env->ReleaseIntArrayElements(ids, idArr, JNI_ABORT);
+        if (xArr) env->ReleaseFloatArrayElements(xs, xArr, JNI_ABORT);
+        if (yArr) env->ReleaseFloatArrayElements(ys, yArr, JNI_ABORT);
+        LOGE("nativeSendMultiTouchEvent failed to pin arrays");
+        return;
+    }
 
     session->sendMultiTouchEvent(action, actionIndex, idArr, xArr, yArr, count);
 
@@ -158,10 +167,8 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendKeyEvent(
     JNIEnv* /*env*/, jclass /*clazz*/,
     jint keyCode, jboolean isDown, jint metastate, jboolean longpress)
 {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) {
-        gSession->sendKeyEvent(keyCode, isDown, metastate, longpress);
-    }
+    auto session = getSession();
+    if (session) session->sendKeyEvent(keyCode, isDown, metastate, longpress);
 }
 
 /*
@@ -174,10 +181,8 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendGpsLocation(
     jdouble lat, jdouble lon, jdouble alt,
     jfloat speed, jfloat bearing, jlong timestampMs)
 {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) {
-        gSession->sendGpsLocation(lat, lon, alt, speed, bearing, timestampMs);
-    }
+    auto session = getSession();
+    if (session) session->sendGpsLocation(lat, lon, alt, speed, bearing, timestampMs);
 }
 
 /*
@@ -189,12 +194,13 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendVehicleSensor(
     JNIEnv* env, jclass /*clazz*/,
     jint sensorType, jbyteArray data)
 {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (!gSession) return;
+    auto session = getSession();
+    if (!session || !data) return;
 
     jsize len = env->GetArrayLength(data);
     auto* bytes = env->GetByteArrayElements(data, nullptr);
-    gSession->sendVehicleSensor(sensorType,
+    if (!bytes) return;
+    session->sendVehicleSensor(sensorType,
         reinterpret_cast<const uint8_t*>(bytes), static_cast<size_t>(len));
     env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
 }
@@ -208,12 +214,13 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSendMicAudio(
     JNIEnv* env, jclass /*clazz*/,
     jbyteArray data)
 {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (!gSession) return;
+    auto session = getSession();
+    if (!session || !data) return;
 
     jsize len = env->GetArrayLength(data);
     auto* bytes = env->GetByteArrayElements(data, nullptr);
-    gSession->sendMicAudio(
+    if (!bytes) return;
+    session->sendMicAudio(
         reinterpret_cast<const uint8_t*>(bytes), static_cast<size_t>(len));
     env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
 }
@@ -239,62 +246,62 @@ Java_com_openautolink_app_transport_aasdk_AasdkNative_nativeSend##Name( \
     JNIEnv* /*env*/, jclass /*clazz*/, __VA_ARGS__)
 
 SENSOR_JNI(Speed, jint speedMmPerS) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendSpeedSensor(speedMmPerS);
+    auto session = getSession();
+    if (session) session->sendSpeedSensor(speedMmPerS);
 }
 
 SENSOR_JNI(Gear, jint gear) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendGearSensor(gear);
+    auto session = getSession();
+    if (session) session->sendGearSensor(gear);
 }
 
 SENSOR_JNI(ParkingBrake, jboolean engaged) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendParkingBrakeSensor(engaged);
+    auto session = getSession();
+    if (session) session->sendParkingBrakeSensor(engaged);
 }
 
 SENSOR_JNI(NightMode, jboolean night) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendNightModeSensor(night);
+    auto session = getSession();
+    if (session) session->sendNightModeSensor(night);
 }
 
 SENSOR_JNI(DrivingStatus, jboolean moving) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendDrivingStatusSensor(moving);
+    auto session = getSession();
+    if (session) session->sendDrivingStatusSensor(moving);
 }
 
 SENSOR_JNI(Fuel, jint levelPct, jint rangeM, jboolean lowFuel) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendFuelSensor(levelPct, rangeM, lowFuel);
+    auto session = getSession();
+    if (session) session->sendFuelSensor(levelPct, rangeM, lowFuel);
 }
 
 SENSOR_JNI(EnergyModel, jint batteryLevelWh, jint batteryCapacityWh, jint rangeM, jint chargeRateW,
                        jfloat drivingWhPerKm, jfloat auxWhPerKm, jfloat aeroCoef,
                        jfloat reservePct, jint maxChargeW, jint maxDischargeW) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendEnergyModelSensor(
+    auto session = getSession();
+    if (session) session->sendEnergyModelSensor(
         batteryLevelWh, batteryCapacityWh, rangeM, chargeRateW,
         drivingWhPerKm, auxWhPerKm, aeroCoef, reservePct, maxChargeW, maxDischargeW);
 }
 
 SENSOR_JNI(Accelerometer, jint xE3, jint yE3, jint zE3) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendAccelerometerSensor(xE3, yE3, zE3);
+    auto session = getSession();
+    if (session) session->sendAccelerometerSensor(xE3, yE3, zE3);
 }
 
 SENSOR_JNI(Gyroscope, jint rxE3, jint ryE3, jint rzE3) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendGyroscopeSensor(rxE3, ryE3, rzE3);
+    auto session = getSession();
+    if (session) session->sendGyroscopeSensor(rxE3, ryE3, rzE3);
 }
 
 SENSOR_JNI(Compass, jint bearingE6, jint pitchE6, jint rollE6) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendCompassSensor(bearingE6, pitchE6, rollE6);
+    auto session = getSession();
+    if (session) session->sendCompassSensor(bearingE6, pitchE6, rollE6);
 }
 
 SENSOR_JNI(Rpm, jint rpmE3) {
-    std::lock_guard<std::mutex> lock(gSessionMutex);
-    if (gSession) gSession->sendRpmSensor(rpmE3);
+    auto session = getSession();
+    if (session) session->sendRpmSensor(rpmE3);
 }
 
 /*

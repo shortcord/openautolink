@@ -109,4 +109,14 @@ interface AasdkSessionCallback {
 
     /** Error from the native session. */
     fun onError(message: String)
+
+    /**
+     * Versioned native event side-channel for new native→Kotlin events.
+     *
+     * Existing typed callbacks remain the compatibility path. New native
+     * interface work should prefer this callback for low-frequency state,
+     * diagnostics, and metadata events so the JNI ABI does not grow a new
+     * wide method signature for every native payload shape.
+     */
+    fun onNativeEvent(type: Int, payload: ByteArray, timestampNs: Long)
 }

@@ -43,6 +43,10 @@ class AasdkSession(
 
     companion object {
         private const val TAG = "AasdkSession"
+        private const val NATIVE_EVENT_SESSION_STARTED = 1
+        private const val NATIVE_EVENT_SESSION_STOPPED = 2
+        private const val NATIVE_EVENT_ERROR = 3
+        private const val NATIVE_EVENT_VIDEO_CODEC_CONFIGURED = 4
     }
 
     // -- Output flows (same interface as DirectAaSession) --
@@ -571,5 +575,20 @@ class AasdkSession(
                 _controlMessages.emit(ControlMessage.Error(code = -1, message = message))
             }
         }
+    }
+
+    override fun onNativeEvent(type: Int, payload: ByteArray, timestampNs: Long) {
+        val payloadText = payload.toString(Charsets.UTF_8)
+        val label = when (type) {
+            NATIVE_EVENT_SESSION_STARTED -> "session_started"
+            NATIVE_EVENT_SESSION_STOPPED -> "session_stopped"
+            NATIVE_EVENT_ERROR -> "error"
+            NATIVE_EVENT_VIDEO_CODEC_CONFIGURED -> "video_codec_configured"
+            else -> "type_$type"
+        }
+        com.openautolink.app.diagnostics.DiagnosticLog.d(
+            "native",
+            "event=$label ts=$timestampNs payload=$payloadText"
+        )
     }
 }
