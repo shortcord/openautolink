@@ -15,20 +15,12 @@ val prepareLinuxBuild by tasks.registering(Exec::class) {
     commandLine("bash", "./build_linux.sh", "--prepare")
 }
 
-val linuxCleanArtifacts by tasks.registering(Exec::class) {
+tasks.register<Exec>("clean-native") {
     group = "build setup"
-    description = "Runs build_linux.sh --clean-only after Gradle clean on Linux."
+    description = "Runs build_linux.sh --clean-only to clean native build artifacts on Linux."
     onlyIf { isLinux }
     workingDir = rootDir
     commandLine("bash", "./build_linux.sh", "--clean-only")
-}
-
-allprojects {
-    tasks.matching { it.name == "clean" }.configureEach {
-        if (isLinux) {
-            finalizedBy(rootProject.tasks.named("linuxCleanArtifacts"))
-        }
-    }
 }
 
 subprojects {
