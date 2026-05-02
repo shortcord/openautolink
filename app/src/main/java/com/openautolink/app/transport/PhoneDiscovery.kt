@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.EnumSet
@@ -52,7 +55,14 @@ class PhoneDiscovery private constructor(private val context: Context) {
 
         private const val SWEEP_CONNECT_TIMEOUT_MS = 400
         private const val SWEEP_READ_TIMEOUT_MS = 300
-        private const val SWEEP_PARALLELISM = 32
+        /**
+         * Sockets in flight per chunk. We do one chunk per /24 since the
+         * goal is to minimize wall time, and Android's fd limit (1024+)
+         * easily handles 254 simultaneous short-lived TCP connects. With
+         * this set to ~254 the whole /24 sweep collapses to the per-probe
+         * timeout (~400ms) rather than `chunks × timeout`.
+         */
+        private const val SWEEP_PARALLELISM = 128
 
         /**
          * Interfaces tried first on the phone-discovery sweep. On GM AAOS
@@ -512,53 +522,6 @@ class PhoneDiscovery private constructor(private val context: Context) {
         _isSweeping.value = false
     }
 
-    /**
-     * Probe a small set of last-known IPs in parallel via the identity
-     * port. Used as a "warm cache" path before mDNS / sweep — if the AP's
-     * DHCP server re-leased the same IP to a known phone (very common on
-     * automotive APs), this completes in well under a second.
-     *
-     * Results that match an [expectedIds] entry are added to the discovery
-     * state with [Source.SWEEP] so the chooser shows them. Mismatches (a
-     * different phone now answering at that IP) are silently dropped — the
-     * regular sweep / mDNS will re-find the phones at their new addresses.
-     *
-     * Returns true if at least one expected phone was confirmed alive.
-     */
-    suspend fun probeKnown(targets: List<KnownTarget>): Boolean {
-        if (targets.isEmpty()) return false
-        OalLog.i(TAG, "probeKnown: trying ${targets.size} cached IPs (${targets.joinToString { "${it.expectedPhoneId.take(8)}@${it.host}" }})")
-        return kotlinx.coroutines.coroutineScope {
-            val deferreds = targets.map { t ->
-                async(Dispatchers.IO) {
-                    val ident = probeHost(t.host) ?: return@async false
-                    if (!ident.phoneId.isNullOrBlank() && ident.phoneId == t.expectedPhoneId) {
-                        addOrUpdate(
-                            phoneId = ident.phoneId,
-                            friendlyName = ident.friendlyName,
-                            host = t.host,
-                            port = AA_PORT,
-                            mdnsServiceName = null,
-                            viaSource = SourceBit.SWEEP,
-                        )
-                        true
-                    } else {
-                        OalLog.d(
-                            TAG,
-                            "probeKnown: ${t.host} answered with ${ident.phoneId?.take(8)} not the expected ${t.expectedPhoneId.take(8)}",
-                        )
-                        false
-                    }
-                }
-            }
-            val results = deferreds.awaitAll()
-            results.any { it }
-        }
-    }
-
-    /** Target for [probeKnown] — a host believed to belong to [expectedPhoneId]. */
-    data class KnownTarget(val expectedPhoneId: String, val host: String)
-
     private data class IdentityResult(val phoneId: String?, val friendlyName: String?)
 
     private suspend fun probeHost(host: String): IdentityResult? = withContext(Dispatchers.IO) {
@@ -591,9 +554,17 @@ class PhoneDiscovery private constructor(private val context: Context) {
                     friendlyName = parts.getOrNull(1)?.takeIf { it.isNotBlank() },
                 )
             } catch (e: Exception) {
-                // Most failures are "host unreachable" which is expected for
-                // ~250/254 IPs. Log only at debug to avoid spam.
-                OalLog.d(TAG, "probeHost($host) failed: ${e.javaClass.simpleName}: ${e.message}")
+                // Most failures are "host unreachable" / timeout — expected
+                // for ~250/254 IPs during a sweep, and also expected when
+                // the idle warm-cache poller probes a known IP that's
+                // currently asleep. Don't log timeouts at all (they are
+                // the overwhelmingly common case and pollute the on-device
+                // log viewer). Keep other exception classes at debug.
+                if (e !is java.net.SocketTimeoutException &&
+                    e !is java.net.ConnectException
+                ) {
+                    OalLog.d(TAG, "probeHost($host) failed: ${e.javaClass.simpleName}: ${e.message}")
+                }
                 null
             } finally {
                 try { socket.close() } catch (_: Exception) {}
@@ -601,9 +572,136 @@ class PhoneDiscovery private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Send a single UDP broadcast `OAL?` packet and listen for replies.
+     *
+     * Useful when mDNS is unavailable (AAOS 12/13 NSD often returns only
+     * IPv6 link-local) but the AP still allows broadcast between clients.
+     * Each running companion responds once with the same identity payload
+     * the TCP probe returns. Sub-50ms typical wall time, so this layer
+     * sits between mDNS and the /24 sweep in the connect pipeline.
+     *
+     * Source IPs of replies become the discovered hosts — no DHCP scope
+     * assumption, no IP cache. Caller is expected to call this on each
+     * usable broadcast interface (sweep already enumerates them via
+     * [currentIpv4Addresses]).
+     *
+     * @param broadcastAddress dotted-quad broadcast for the target /24
+     *   (e.g. `10.220.23.255`). If null, falls back to `255.255.255.255`
+     *   which most APs forward but a few drop.
+     * @param listenWindowMs how long to keep the socket open for late
+     *   replies. 600ms is generous for any LAN; bump for higher-latency
+     *   APs.
+     * @return number of distinct phones added to the discovery flow.
+     */
+    suspend fun udpBroadcast(
+        broadcastAddress: String? = null,
+        listenWindowMs: Long = 600L,
+    ): Int = withContext(Dispatchers.IO) {
+        val target = try {
+            if (broadcastAddress != null) InetAddress.getByName(broadcastAddress)
+            else InetAddress.getByName("255.255.255.255")
+        } catch (e: Exception) {
+            OalLog.w(TAG, "udpBroadcast: bad target $broadcastAddress: ${e.message}")
+            return@withContext 0
+        }
+        var socket: DatagramSocket? = null
+        try {
+            socket = DatagramSocket().apply {
+                broadcast = true
+                soTimeout = 200 // per-receive timeout; loop until window elapses
+            }
+            val payload = OalProtocol.IDENTITY_PROBE_REQUEST.toByteArray(Charsets.UTF_8)
+            val outPacket = DatagramPacket(payload, payload.size, target, OalProtocol.UDP_DISCOVERY_PORT)
+            socket.send(outPacket)
+            OalLog.d(TAG, "udpBroadcast: sent ${payload.size}B to ${target.hostAddress}:${OalProtocol.UDP_DISCOVERY_PORT}")
+
+            val deadline = System.currentTimeMillis() + listenWindowMs
+            val seenIds = HashSet<String>()
+            val recvBuf = ByteArray(512)
+            while (System.currentTimeMillis() < deadline) {
+                val recvPacket = DatagramPacket(recvBuf, recvBuf.size)
+                try {
+                    socket.receive(recvPacket)
+                } catch (_: java.net.SocketTimeoutException) {
+                    continue
+                }
+                val replyHost = recvPacket.address?.hostAddress ?: continue
+                val replyText = String(
+                    recvPacket.data, recvPacket.offset, recvPacket.length, Charsets.UTF_8,
+                ).trimEnd('\n', '\r')
+                if (!replyText.startsWith(OalProtocol.IDENTITY_PROBE_RESPONSE_PREFIX)) {
+                    continue
+                }
+                val parts = replyText
+                    .removePrefix(OalProtocol.IDENTITY_PROBE_RESPONSE_PREFIX)
+                    .split('\t', limit = 2)
+                val replyId = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: continue
+                if (!seenIds.add(replyId)) continue
+                OalLog.i(
+                    TAG,
+                    "udpBroadcast: ${parts.getOrNull(1) ?: replyId.take(8)} @ $replyHost replied",
+                )
+                addOrUpdate(
+                    phoneId = replyId,
+                    friendlyName = parts.getOrNull(1)?.takeIf { it.isNotBlank() },
+                    host = replyHost,
+                    port = AA_PORT,
+                    mdnsServiceName = null,
+                    // Tag as SWEEP — same fast / direct-connect semantics
+                    // as a TCP-probe hit. Source label in the chooser will
+                    // read "via sweep"; that's fine, broadcast is just a
+                    // faster sweep of the same address space.
+                    viaSource = SourceBit.SWEEP,
+                )
+            }
+            seenIds.size
+        } catch (e: Exception) {
+            OalLog.d(TAG, "udpBroadcast failed: ${e.javaClass.simpleName}: ${e.message}")
+            0
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Convenience: derive the broadcast address for a /24 subnet given any
+     * IPv4 address inside it. Returns null on bad input.
+     */
+    private fun broadcastFor24(ip: String): String? {
+        val parts = ip.split('.')
+        if (parts.size != 4) return null
+        return "${parts[0]}.${parts[1]}.${parts[2]}.255"
+    }
+
+    /**
+     * Run a UDP broadcast on every usable /24 we have a local address on.
+     * Mirrors the sweep's interface-enumeration logic but completes in a
+     * fraction of the time. Returns total number of phones found across
+     * all interfaces.
+     */
+    suspend fun udpBroadcastAllInterfaces(listenWindowMs: Long = 600L): Int {
+        val ifaces = currentIpv4Addresses()
+        if (ifaces.isEmpty()) return 0
+        // Prefer AP-bridge interfaces first (GM `ap_br_swlan0` etc.) — same
+        // ordering rationale as the sweep.
+        val preferred = ifaces.filter { it.iface.startsWithAny(PREFERRED_AP_INTERFACES) }
+        val rest = ifaces.filter { it !in preferred }
+        var found = 0
+        for (entry in preferred + rest) {
+            val bcast = broadcastFor24(entry.ip) ?: continue
+            found += udpBroadcast(broadcastAddress = bcast, listenWindowMs = listenWindowMs)
+            if (found > 0 && entry in preferred) {
+                // Got hits on a preferred interface; don't bother
+                // broadcasting on the fallback ones (USB, etc.).
+                break
+            }
+        }
+        return found
+    }
+
     /** (interface name, IPv4 address) pair for sweep planning. */
     private data class IfaceAddress(val iface: String, val ip: String)
-
     /**
      * Enumerate every plausible non-loopback IPv4 address the device has,
      * paired with its interface name. AAOS head units have lots of virtual

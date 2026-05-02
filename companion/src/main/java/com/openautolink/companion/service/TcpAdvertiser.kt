@@ -40,6 +40,14 @@ class TcpAdvertiser(
          * bytes from a real AA stream.
          */
         const val IDENTITY_PORT = 5278
+        /**
+         * UDP discovery port. The car broadcasts a single `OAL?\n` packet to
+         * `255.255.255.255:UDP_DISCOVERY_PORT`; we respond once per packet
+         * with the same identity payload as the TCP probe. Lets the car
+         * find this phone in <50ms when mDNS is broken (AAOS 12/13 NSD
+         * IPv6-only) but the AP still allows broadcast between clients.
+         */
+        const val UDP_DISCOVERY_PORT = 5279
         const val NSD_SERVICE_TYPE = "_openautolink._tcp"
         const val NSD_SERVICE_NAME = "OpenAutoLink"
 
@@ -52,6 +60,7 @@ class TcpAdvertiser(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var serverSocket: ServerSocket? = null
     private var identityServerSocket: ServerSocket? = null
+    private var udpDiscoverySocket: java.net.DatagramSocket? = null
     private var activeProxy: AaProxy? = null
     private var activeCarSocket: Socket? = null
     private var nsdManager: NsdManager? = null
@@ -83,6 +92,7 @@ class TcpAdvertiser(
 
                 registerNsd()
                 startIdentityServer()
+                startUdpDiscoveryServer()
 
                 while (isRunning) {
                     val carSocket = server.accept()
@@ -169,6 +179,66 @@ class TcpAdvertiser(
             CompanionLog.d(TAG, "Identity probe failed for $remoteIp: ${e.message}")
         } finally {
             try { socket.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * UDP broadcast discovery responder. Listens on
+     * [UDP_DISCOVERY_PORT] for `OAL?\n` packets (typically broadcast to
+     * `255.255.255.255` by the car), replies once per packet to the source
+     * address with the same identity payload as the TCP probe.
+     *
+     * Sub-50ms round-trip when the AP allows broadcast — fastest path the
+     * car has to find this phone, used when mDNS is broken (AAOS 12/13
+     * NSD often returns IPv6 link-local only).
+     */
+    private fun startUdpDiscoveryServer() {
+        scope.launch {
+            try {
+                val socket = java.net.DatagramSocket(null).apply {
+                    reuseAddress = true
+                    broadcast = true
+                    bind(InetSocketAddress(UDP_DISCOVERY_PORT))
+                }
+                udpDiscoverySocket = socket
+                CompanionLog.i(TAG, "UDP discovery server listening on 0.0.0.0:$UDP_DISCOVERY_PORT")
+                val recvBuf = ByteArray(64)
+                while (isRunning) {
+                    val packet = java.net.DatagramPacket(recvBuf, recvBuf.size)
+                    try {
+                        socket.receive(packet)
+                    } catch (e: Exception) {
+                        if (!isRunning) break
+                        CompanionLog.d(TAG, "UDP receive: ${e.message}")
+                        continue
+                    }
+                    val remoteIp = packet.address?.hostAddress ?: continue
+                    val text = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
+                        .trimEnd('\n', '\r')
+                    if (text != "OAL?") {
+                        CompanionLog.d(TAG, "UDP probe from $remoteIp: bad payload '$text'")
+                        continue
+                    }
+                    val prefs = context.getSharedPreferences(
+                        com.openautolink.companion.CompanionPrefs.NAME,
+                        Context.MODE_PRIVATE,
+                    )
+                    val phoneId = com.openautolink.companion.CompanionPrefs.getOrCreatePhoneId(prefs)
+                    val friendlyName = com.openautolink.companion.CompanionPrefs.getFriendlyName(prefs)
+                    val reply = "OAL!$phoneId\t$friendlyName\n".toByteArray(Charsets.UTF_8)
+                    val replyPacket = java.net.DatagramPacket(
+                        reply, reply.size, packet.address, packet.port,
+                    )
+                    try {
+                        socket.send(replyPacket)
+                        CompanionLog.d(TAG, "UDP probe answered for $remoteIp")
+                    } catch (e: Exception) {
+                        CompanionLog.d(TAG, "UDP reply to $remoteIp failed: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                if (isRunning) CompanionLog.w(TAG, "UDP discovery server error: ${e.message}")
+            }
         }
     }
 
@@ -297,6 +367,8 @@ class TcpAdvertiser(
         serverSocket = null
         runCatching { identityServerSocket?.close() }
         identityServerSocket = null
+        runCatching { udpDiscoverySocket?.close() }
+        udpDiscoverySocket = null
         scope.cancel()
     }
 

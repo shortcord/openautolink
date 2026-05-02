@@ -83,6 +83,9 @@ fun ProjectionScreen(
     val knownPhones by viewModel.knownPhones.collectAsStateWithLifecycle()
     val defaultPhoneId by viewModel.defaultPhoneId.collectAsStateWithLifecycle()
     val carHotspotSwitching by viewModel.carHotspotSwitching.collectAsStateWithLifecycle()
+    val carHotspotStatus by viewModel.carHotspotStatus.collectAsStateWithLifecycle()
+    val carHotspotStatusDetail by viewModel.carHotspotStatusDetail.collectAsStateWithLifecycle()
+    val chooserMessage by viewModel.carHotspotChooserMessage.collectAsStateWithLifecycle()
     val activePhoneId by viewModel.activePhoneId.collectAsStateWithLifecycle()
 
     // Settings overlay state
@@ -211,6 +214,24 @@ fun ProjectionScreen(
             ConnectionHud(
                 uiState = uiState,
                 modifier = Modifier.align(Alignment.Center)
+            )
+        }
+
+        // Car Hotspot status banner — visible whenever we're in Car Hotspot
+        // mode and not actively streaming. Tells the user what the app is
+        // doing (searching, switching, awaiting their pick, etc.) so a
+        // black screen never feels like the app is frozen.
+        if (isCarHotspotMode && carHotspotStatus != ProjectionViewModel.CarHotspotStatus.STREAMING &&
+            carHotspotStatus != ProjectionViewModel.CarHotspotStatus.INACTIVE
+        ) {
+            CarHotspotStatusBanner(
+                status = carHotspotStatus,
+                detail = carHotspotStatusDetail,
+                onTapPicker = { viewModel.showCarHotspotChooser() },
+                onTapScan = { viewModel.rescanCarHotspotPhones() },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 24.dp),
             )
         }
 
@@ -410,6 +431,7 @@ fun ProjectionScreen(
                     sweeping = carHotspotSweeping,
                     sweepProgress = carHotspotSweepProgress,
                     switching = carHotspotSwitching,
+                    chooserMessage = chooserMessage,
                     onSelect = { viewModel.selectCarHotspotPhone(it) },
                     onSelectKnown = { kp ->
                         // Selecting a known-but-not-currently-discovered phone:
@@ -444,6 +466,105 @@ fun ProjectionScreen(
 
     }
 }
+
+/**
+ * Top-of-screen status banner for the Car Hotspot connect lifecycle. Renders
+ * over the projection surface so the user always knows what's happening
+ * when streaming hasn't yet started (or has dropped).
+ *
+ * Different statuses get different colors + actions:
+ *   - SEARCHING / SWITCHING / CONNECTING: blue/grey, spinner, no actions.
+ *   - AWAITING_USER_PICK: amber, "Pick a phone" button → opens chooser.
+ *   - PHONE_NOT_FOUND: red, "Try again" button → kicks sweep.
+ */
+@Composable
+private fun CarHotspotStatusBanner(
+    status: ProjectionViewModel.CarHotspotStatus,
+    detail: String?,
+    onTapPicker: () -> Unit,
+    onTapScan: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val (headline, accent, isError, isAwaitingPick) = when (status) {
+        ProjectionViewModel.CarHotspotStatus.SEARCHING ->
+            Quad("Looking for your phone…", Color(0xFF64B5F6), false, false)
+        ProjectionViewModel.CarHotspotStatus.SWITCHING ->
+            Quad("Switching phones…", Color(0xFFFFB74D), false, false)
+        ProjectionViewModel.CarHotspotStatus.CONNECTING ->
+            Quad("Connecting…", Color(0xFF64B5F6), false, false)
+        ProjectionViewModel.CarHotspotStatus.AWAITING_USER_PICK ->
+            Quad("Choose a phone to start", Color(0xFFFFB74D), false, true)
+        ProjectionViewModel.CarHotspotStatus.PHONE_NOT_FOUND ->
+            Quad("Couldn't find your phone", Color(0xFFEF5350), true, false)
+        else -> Quad("", Color.White, false, false)
+    }
+    if (headline.isEmpty()) return
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xCC1B1B1F))
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (!isError && !isAwaitingPick) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = accent,
+                strokeWidth = 2.dp,
+            )
+        }
+        Column {
+            Text(
+                text = headline,
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (!detail.isNullOrBlank()) {
+                Text(
+                    text = detail,
+                    color = Color.White.copy(alpha = 0.75f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        when {
+            isAwaitingPick -> {
+                Spacer(modifier = Modifier.width(4.dp))
+                androidx.compose.material3.FilledTonalButton(
+                    onClick = onTapPicker,
+                    modifier = Modifier.height(36.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 14.dp, vertical = 0.dp,
+                    ),
+                ) { Text("Pick phone", fontSize = 13.sp) }
+            }
+            isError -> {
+                Spacer(modifier = Modifier.width(4.dp))
+                androidx.compose.material3.FilledTonalButton(
+                    onClick = onTapScan,
+                    modifier = Modifier.height(36.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 14.dp, vertical = 0.dp,
+                    ),
+                ) { Text("Try again", fontSize = 13.sp) }
+            }
+        }
+    }
+}
+
+/**
+ * Tiny 4-tuple helper used by [CarHotspotStatusBanner] to pack its derived
+ * display state. Kotlin's stdlib only goes to Triple.
+ */
+private data class Quad(
+    val headline: String,
+    val accent: Color,
+    val isError: Boolean,
+    val isAwaitingPick: Boolean,
+)
 
 @Composable
 private fun PhoneChooserOverlay(
@@ -555,6 +676,7 @@ private fun CarHotspotPhoneChooserOverlay(
     sweeping: Boolean,
     sweepProgress: String,
     switching: Boolean,
+    chooserMessage: String?,
     onSelect: (com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone) -> Unit,
     onSelectKnown: (com.openautolink.app.data.KnownPhone) -> Unit,
     onSetDefault: (String) -> Unit,
@@ -644,15 +766,22 @@ private fun CarHotspotPhoneChooserOverlay(
                     color = darkScheme.onSurfaceVariant,
                 )
 
-                // Static-IP tip — avoids slow reconnects when the car AP
-                // hands the phone a different DHCP lease each drive.
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "Tip: for fastest reconnects, set a static IP on your phone for this car's WiFi. " +
-                        "Use an address inside the AP's DHCP range (check the IP your phone got the first time).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = darkScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                )
+                if (!chooserMessage.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(darkScheme.error.copy(alpha = 0.18f))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Text(
+                            chooserMessage!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = darkScheme.error,
+                        )
+                    }
+                }
 
                 // ── Known phones ─────────────────────────────────────
                 if (knownPhones.isNotEmpty()) {
