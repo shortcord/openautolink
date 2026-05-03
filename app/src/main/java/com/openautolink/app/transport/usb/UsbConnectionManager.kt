@@ -146,7 +146,7 @@ class UsbConnectionManager(
         OalLog.i(TAG, "Scanning ${devices.size} existing USB devices")
         for ((_, device) in devices) {
             if (UsbConstants.isAccessoryDevice(device.vendorId, device.productId)) {
-                OalLog.i(TAG, "Found device already in accessory mode: ${device.deviceName}")
+                OalLog.i(TAG, "Found device already in accessory mode: ${describeDevice(device)}")
                 _connectionState.value = UsbConnectionState.ACCESSORY_DETECTED
                 requestPermissionOrConnect(device)
                 return
@@ -154,10 +154,8 @@ class UsbConnectionManager(
         }
         // No accessory device — check for any phone-like device
         for ((_, device) in devices) {
-            if (!isHubOrSystemDevice(device)) {
-                OalLog.i(TAG, "Found candidate USB device: ${device.deviceName} " +
-                        "VID=${String.format("%04X", device.vendorId)} " +
-                        "PID=${String.format("%04X", device.productId)}")
+            if (isLikelyPhoneCandidate(device)) {
+                OalLog.i(TAG, "Found candidate USB device: ${describeDevice(device)}")
                 handleDeviceAttached(device)
                 return
             }
@@ -165,10 +163,14 @@ class UsbConnectionManager(
     }
 
     private fun handleDeviceAttached(device: UsbDevice) {
+        OalLog.i(TAG, "Evaluating USB device: ${describeDevice(device)}")
         if (UsbConstants.isAccessoryDevice(device.vendorId, device.productId)) {
             _connectionState.value = UsbConnectionState.ACCESSORY_DETECTED
             _status.value = "Accessory device detected"
             requestPermissionOrConnect(device)
+        } else if (!isLikelyPhoneCandidate(device)) {
+            OalLog.i(TAG, "Ignoring USB device that does not look like an Android phone: ${describeDevice(device)}")
+            _status.value = "Waiting for Android phone..."
         } else {
             _connectionState.value = UsbConnectionState.DEVICE_DETECTED
             _status.value = "Device detected — requesting permission..."
@@ -252,7 +254,7 @@ class UsbConnectionManager(
 
         val connection = usbManager.openDevice(device)
         if (connection == null) {
-            OalLog.e(TAG, "Failed to open accessory device")
+            OalLog.e(TAG, "Failed to open accessory device: ${describeDevice(device)}")
             _status.value = "Failed to open device"
             _connectionState.value = UsbConnectionState.IDLE
             return
@@ -261,7 +263,7 @@ class UsbConnectionManager(
         // Find the bulk interface and endpoints
         val (iface, epIn, epOut) = findBulkEndpoints(device)
         if (iface == null || epIn == null || epOut == null) {
-            OalLog.e(TAG, "No bulk endpoints found on accessory device")
+            OalLog.e(TAG, "No bulk endpoints found on accessory device: ${describeDevice(device)}")
             connection.close()
             _status.value = "No bulk endpoints"
             _connectionState.value = UsbConnectionState.IDLE
@@ -328,5 +330,67 @@ class UsbConnectionManager(
     private fun isHubOrSystemDevice(device: UsbDevice): Boolean {
         // Skip USB hubs (class 9) and mass storage (class 8)
         return device.deviceClass == 9 || device.deviceClass == 8
+    }
+
+    private fun isLikelyPhoneCandidate(device: UsbDevice): Boolean {
+        if (isHubOrSystemDevice(device)) return false
+
+        if (device.interfaceCount > 1) return true
+
+        return when (device.deviceClass) {
+            0, // composite / per-interface classification
+            0xEF, // miscellaneous composite device
+            0xFF -> true // vendor specific
+            0x03, // HID
+            0x07, // printer
+            0x08, // mass storage
+            0x09, // hub
+            0x0B, // smart card
+            0x0D, // content security
+            0x0E, // video
+            0xE0 -> false // wireless controller
+            else -> device.interfaceCount > 0 && hasPhoneLikeInterface(device)
+        }
+    }
+
+    private fun hasPhoneLikeInterface(device: UsbDevice): Boolean {
+        for (i in 0 until device.interfaceCount) {
+            when (device.getInterface(i).interfaceClass) {
+                0, // per-interface composite
+                0x06, // still image / PTP-like
+                0xFF -> return true // vendor specific (ADB/MTP composites commonly include this)
+            }
+        }
+        return false
+    }
+
+    private fun describeDevice(device: UsbDevice): String {
+        val interfaces = buildString {
+            append("[")
+            for (i in 0 until device.interfaceCount) {
+                if (i > 0) append(", ")
+                val iface = device.getInterface(i)
+                append("#")
+                append(i)
+                append(":class=")
+                append(iface.interfaceClass)
+                append(" eps=")
+                append(iface.endpointCount)
+            }
+            append("]")
+        }
+        return buildString {
+            append(device.deviceName)
+            append(" VID=")
+            append(String.format("%04X", device.vendorId))
+            append(" PID=")
+            append(String.format("%04X", device.productId))
+            append(" class=")
+            append(device.deviceClass)
+            append(" interfaces=")
+            append(device.interfaceCount)
+            append(" ")
+            append(interfaces)
+        }
     }
 }
