@@ -250,6 +250,11 @@ private fun NetworkTab(info: NetworkInfo, probe: NetworkProbeState, viewModel: D
     ) {
         SectionHeader("Session")
         DiagRow("Session", info.sessionState.name, valueColor = sessionStateColor(info.sessionState))
+        DiagRow("Transport", info.transport)
+        if (info.transport == "usb") {
+            DiagRow("USB Status", info.usbStatus)
+            info.usbDeviceDescription?.let { DiagRow("USB Device", it) }
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Network Probe")

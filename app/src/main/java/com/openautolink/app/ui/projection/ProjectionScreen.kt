@@ -1416,6 +1416,19 @@ private fun ConnectionHud(
                 color = Color.White
             )
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = when (uiState.directTransport) {
+                    "usb" -> "USB"
+                    "hotspot" -> "WiFi Hotspot"
+                    "nearby" -> "Nearby"
+                    else -> uiState.directTransport
+                },
+                style = MaterialTheme.typography.labelLarge,
+                color = Color(0xFFB0B0B0)
+            )
+
             Spacer(modifier = Modifier.height(16.dp))
 
             when (uiState.sessionState) {
@@ -1425,6 +1438,15 @@ private fun ConnectionHud(
                         style = MaterialTheme.typography.bodyLarge,
                         color = Color(0xFFB0B0B0)
                     )
+                    if (uiState.directTransport == "usb" && uiState.usbDeviceDescription != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = uiState.usbDeviceDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF808080),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
                 SessionState.CONNECTING -> {
                     CircularProgressIndicator(
@@ -1438,6 +1460,15 @@ private fun ConnectionHud(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.primary
                     )
+                    if (uiState.directTransport == "usb" && uiState.usbDeviceDescription != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = uiState.usbDeviceDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFB0B0B0),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
                 SessionState.CONNECTED -> {
                     Text(
@@ -1455,6 +1486,15 @@ private fun ConnectionHud(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.error
                     )
+                    if (uiState.directTransport == "usb" && uiState.usbDeviceDescription != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = uiState.usbDeviceDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFB0B0B0),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             }
         }

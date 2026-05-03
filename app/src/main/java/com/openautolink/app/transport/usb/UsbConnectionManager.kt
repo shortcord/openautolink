@@ -62,6 +62,9 @@ class UsbConnectionManager(
 
         private val _connectionState = MutableStateFlow(UsbConnectionState.IDLE)
         val connectionState: StateFlow<UsbConnectionState> = _connectionState.asStateFlow()
+
+        private val _deviceDescription = MutableStateFlow<String?>(null)
+        val deviceDescription: StateFlow<String?> = _deviceDescription.asStateFlow()
     }
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -116,6 +119,7 @@ class UsbConnectionManager(
         isRunning = true
         _connectionState.value = UsbConnectionState.IDLE
         _status.value = "Waiting for USB device..."
+        _deviceDescription.value = null
 
         val filter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
@@ -139,6 +143,7 @@ class UsbConnectionManager(
         closePipe()
         _connectionState.value = UsbConnectionState.IDLE
         _status.value = "Stopped"
+        _deviceDescription.value = null
     }
 
     private fun scanExistingDevices() {
@@ -146,7 +151,9 @@ class UsbConnectionManager(
         OalLog.i(TAG, "Scanning ${devices.size} existing USB devices")
         for ((_, device) in devices) {
             if (UsbConstants.isAccessoryDevice(device.vendorId, device.productId)) {
-                OalLog.i(TAG, "Found device already in accessory mode: ${describeDevice(device)}")
+                val description = describeDevice(device)
+                OalLog.i(TAG, "Found device already in accessory mode: $description")
+                _deviceDescription.value = description
                 _connectionState.value = UsbConnectionState.ACCESSORY_DETECTED
                 requestPermissionOrConnect(device)
                 return
@@ -155,7 +162,9 @@ class UsbConnectionManager(
         // No accessory device — check for any phone-like device
         for ((_, device) in devices) {
             if (isLikelyPhoneCandidate(device)) {
-                OalLog.i(TAG, "Found candidate USB device: ${describeDevice(device)}")
+                val description = describeDevice(device)
+                OalLog.i(TAG, "Found candidate USB device: $description")
+                _deviceDescription.value = description
                 handleDeviceAttached(device)
                 return
             }
@@ -163,13 +172,15 @@ class UsbConnectionManager(
     }
 
     private fun handleDeviceAttached(device: UsbDevice) {
-        OalLog.i(TAG, "Evaluating USB device: ${describeDevice(device)}")
+        val description = describeDevice(device)
+        _deviceDescription.value = description
+        OalLog.i(TAG, "Evaluating USB device: $description")
         if (UsbConstants.isAccessoryDevice(device.vendorId, device.productId)) {
             _connectionState.value = UsbConnectionState.ACCESSORY_DETECTED
             _status.value = "Accessory device detected"
             requestPermissionOrConnect(device)
         } else if (!isLikelyPhoneCandidate(device)) {
-            OalLog.i(TAG, "Ignoring USB device that does not look like an Android phone: ${describeDevice(device)}")
+            OalLog.i(TAG, "Ignoring USB device that does not look like an Android phone: $description")
             _status.value = "Waiting for Android phone..."
         } else {
             _connectionState.value = UsbConnectionState.DEVICE_DETECTED
@@ -182,6 +193,7 @@ class UsbConnectionManager(
         closePipe()
         _connectionState.value = UsbConnectionState.IDLE
         _status.value = "USB device disconnected"
+        _deviceDescription.value = null
     }
 
     private fun requestPermissionOrConnect(device: UsbDevice) {

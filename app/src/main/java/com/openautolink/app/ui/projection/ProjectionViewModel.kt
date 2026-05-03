@@ -26,6 +26,7 @@ import com.openautolink.app.navigation.ManeuverState
 import com.openautolink.app.session.SessionManager
 import com.openautolink.app.session.SessionState
 import com.openautolink.app.transport.direct.AaNearbyManager
+import com.openautolink.app.transport.usb.UsbConnectionManager
 import com.openautolink.app.video.VideoStats
 import com.openautolink.app.diagnostics.OalLog
 import com.openautolink.app.diagnostics.DiagnosticLog
@@ -48,6 +49,8 @@ import kotlinx.coroutines.launch
 data class ProjectionUiState(
     val sessionState: SessionState = SessionState.IDLE,
     val statusMessage: String = "Ready",
+    val directTransport: String = AppPreferences.DEFAULT_DIRECT_TRANSPORT,
+    val usbDeviceDescription: String? = null,
     val phoneName: String? = null,
     val videoStats: VideoStats = VideoStats(),
     val audioStats: AudioStats = AudioStats(),
@@ -157,9 +160,17 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    val directTransport: StateFlow<String> = preferences.directTransport.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        AppPreferences.DEFAULT_DIRECT_TRANSPORT,
+    )
+
     val uiState: StateFlow<ProjectionUiState> = combine(
         sessionManager.sessionState,
         sessionManager.statusMessage,
+        directTransport,
+        UsbConnectionManager.deviceDescription,
         _phoneName,
         _videoStats,
         _audioStats,
@@ -189,31 +200,33 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         ProjectionUiState(
             sessionState = values[0] as SessionState,
             statusMessage = values[1] as String,
-            phoneName = values[2] as? String,
-            videoStats = values[3] as VideoStats,
-            audioStats = values[4] as AudioStats,
-            showStats = values[5] as Boolean,
-            maneuver = values[6] as? ManeuverState,
-            phoneBatteryLevel = values[7] as? Int,
-            phoneBatteryCritical = values[8] as Boolean,
-            voiceSessionActive = values[9] as Boolean,
-            displayMode = values[10] as String,
-            safeAreaTop = values[11] as Int,
-            safeAreaBottom = values[12] as Int,
-            safeAreaLeft = values[13] as Int,
-            safeAreaRight = values[14] as Int,
-            phoneSignalStrength = values[15] as? Int,
-            videoScalingMode = values[16] as String,
-            wifiFrequencyMhz = values[17] as Int,
-            aaDpi = values[18] as Int,
-            aaPixelAspect = values[19] as Int,
-            fileLoggingActive = values[20] as Boolean,
-            fileLoggingPath = values[21] as? String,
-            fileLoggingEnabled = values[22] as Boolean,
-            overlaySettingsButton = values[23] as Boolean,
-            overlayRestartVideoButton = values[24] as Boolean,
-            overlaySwitchPhoneButton = values[25] as Boolean,
-            overlayStatsButton = values[26] as Boolean,
+            directTransport = values[2] as String,
+            usbDeviceDescription = values[3] as? String,
+            phoneName = values[4] as? String,
+            videoStats = values[5] as VideoStats,
+            audioStats = values[6] as AudioStats,
+            showStats = values[7] as Boolean,
+            maneuver = values[8] as? ManeuverState,
+            phoneBatteryLevel = values[9] as? Int,
+            phoneBatteryCritical = values[10] as Boolean,
+            voiceSessionActive = values[11] as Boolean,
+            displayMode = values[12] as String,
+            safeAreaTop = values[13] as Int,
+            safeAreaBottom = values[14] as Int,
+            safeAreaLeft = values[15] as Int,
+            safeAreaRight = values[16] as Int,
+            phoneSignalStrength = values[17] as? Int,
+            videoScalingMode = values[18] as String,
+            wifiFrequencyMhz = values[19] as Int,
+            aaDpi = values[20] as Int,
+            aaPixelAspect = values[21] as Int,
+            fileLoggingActive = values[22] as Boolean,
+            fileLoggingPath = values[23] as? String,
+            fileLoggingEnabled = values[24] as Boolean,
+            overlaySettingsButton = values[25] as Boolean,
+            overlayRestartVideoButton = values[26] as Boolean,
+            overlaySwitchPhoneButton = values[27] as Boolean,
+            overlayStatsButton = values[28] as Boolean,
         )
     }.stateIn(
         viewModelScope,
@@ -572,12 +585,6 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope,
         SharingStarted.WhileSubscribed(5000),
         AppPreferences.DEFAULT_CONNECTION_MODE,
-    )
-
-    val directTransport: StateFlow<String> = preferences.directTransport.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5000),
-        AppPreferences.DEFAULT_DIRECT_TRANSPORT,
     )
 
     /** Persistent known-phones list, surfaced for the chooser + settings. */

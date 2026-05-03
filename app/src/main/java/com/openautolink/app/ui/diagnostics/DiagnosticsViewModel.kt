@@ -13,6 +13,7 @@ import com.openautolink.app.data.AppPreferences
 import com.openautolink.app.session.SessionManager
 import com.openautolink.app.session.SessionState
 import com.openautolink.app.transport.ControlMessage
+import com.openautolink.app.transport.usb.UsbConnectionManager
 import com.openautolink.app.video.CodecSelector
 import com.openautolink.app.video.VideoStats
 import com.openautolink.app.audio.AudioStats
@@ -58,6 +59,9 @@ data class SystemInfo(
 
 data class NetworkInfo(
     val sessionState: SessionState,
+    val transport: String = AppPreferences.DEFAULT_DIRECT_TRANSPORT,
+    val usbStatus: String = "",
+    val usbDeviceDescription: String? = null,
 )
 
 data class StreamingStats(
@@ -282,8 +286,20 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
 
         // Observe session state for network tab
         viewModelScope.launch {
-            sessionManager.sessionState.collect { state ->
-                _network.value = NetworkInfo(sessionState = state)
+            combine(
+                sessionManager.sessionState,
+                preferences.directTransport,
+                UsbConnectionManager.status,
+                UsbConnectionManager.deviceDescription,
+            ) { state, transport, usbStatus, usbDeviceDescription ->
+                NetworkInfo(
+                    sessionState = state,
+                    transport = transport,
+                    usbStatus = usbStatus,
+                    usbDeviceDescription = usbDeviceDescription,
+                )
+            }.collect { info ->
+                _network.value = info
             }
         }
 
