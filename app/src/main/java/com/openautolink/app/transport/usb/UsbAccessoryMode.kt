@@ -31,6 +31,12 @@ object UsbAccessoryMode {
         }
 
         try {
+            OalLog.i(
+                TAG,
+                "Starting AOA handshake for ${device.deviceName} " +
+                    "VID=${String.format("%04X", device.vendorId)} PID=${String.format("%04X", device.productId)}"
+            )
+
             // Step 1: GET_PROTOCOL — check AOA version support
             val version = getProtocol(connection)
             if (version < 1) {
@@ -80,11 +86,11 @@ object UsbAccessoryMode {
             OalLog.e(TAG, "GET_PROTOCOL failed: $result")
             return -1
         }
-        return (buffer[1].toInt() and 0xFF shl 8) or (buffer[0].toInt() and 0xFF)
+        return ((buffer[1].toInt() and 0xFF) shl 8) or (buffer[0].toInt() and 0xFF)
     }
 
     private fun sendString(connection: UsbDeviceConnection, index: Int, value: String): Boolean {
-        val data = value.toByteArray(Charsets.UTF_8)
+        val data = (value + '\u0000').toByteArray(Charsets.UTF_8)
         val result = connection.controlTransfer(
             UsbConstants.USB_TYPE_VENDOR or UsbConstants.USB_DIR_OUT,
             UsbConstants.ACC_REQ_SEND_STRING,
@@ -96,6 +102,7 @@ object UsbAccessoryMode {
             OalLog.e(TAG, "SEND_STRING index=$index failed: $result")
             return false
         }
+        OalLog.i(TAG, "SEND_STRING index=$index sent ${data.size} bytes")
         return true
     }
 }
