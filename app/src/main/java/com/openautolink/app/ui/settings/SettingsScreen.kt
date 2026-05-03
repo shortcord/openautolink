@@ -179,7 +179,11 @@ fun SettingsScreen(
                         NavigationRailItem(
                             selected = selectedTab == tab,
                             onClick = {
-                                selectedTab = tab
+                                if (tab == SettingsTab.DIAGNOSTICS) {
+                                    onNavigateToDiagnostics()
+                                } else {
+                                    selectedTab = tab
+                                }
                             },
                             icon = {
                                 Icon(
@@ -222,9 +226,7 @@ fun SettingsScreen(
                         SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
                         SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
                         SettingsTab.EV -> EvEnergyModelTab()
-                        SettingsTab.DIAGNOSTICS -> DiagnosticsSettingsTab(
-                            onNavigateToDiagnostics
-                        )
+                        SettingsTab.DIAGNOSTICS -> Unit
                         SettingsTab.ABOUT -> AboutTab()
                     }
                 }
@@ -2165,46 +2167,6 @@ private fun formatInsetLabel(top: Int, bottom: Int, left: Int, right: Int): Stri
     if (left > 0) parts += "Left: ${left}px"
     if (right > 0) parts += "Right: ${right}px"
     return parts.joinToString(", ")
-}
-
-private val logLevelOptions = listOf("DEBUG", "INFO", "WARN", "ERROR")
-
-@Composable
-private fun DiagnosticsSettingsTab(
-    onNavigateToDiagnostics: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
-    ) {
-        SectionHeader("Diagnostics")
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = "View structured logs and telemetry in the diagnostics dashboard.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 12.dp),
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Link to full diagnostics screen
-        FilledTonalButton(
-            onClick = onNavigateToDiagnostics,
-            modifier = Modifier.testTag("openDiagnosticsButton"),
-        ) {
-            Icon(
-                imageVector = Icons.Default.BugReport,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Open Diagnostics Dashboard")
-        }
-    }
 }
 
 @Composable
