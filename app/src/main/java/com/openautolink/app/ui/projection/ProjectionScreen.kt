@@ -88,8 +88,10 @@ fun ProjectionScreen(
     diagnosticsOverlay: @Composable (onBack: () -> Unit) -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val directTransport by viewModel.directTransport.collectAsStateWithLifecycle()
     val connectionMode by viewModel.connectionMode.collectAsStateWithLifecycle()
-    val isCarHotspotMode = connectionMode == com.openautolink.app.data.AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
+    val isCarHotspotMode = directTransport == "hotspot" &&
+        connectionMode == com.openautolink.app.data.AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
     val carHotspotPhones by viewModel.carHotspotPhones.collectAsStateWithLifecycle()
     val carHotspotSweeping by viewModel.carHotspotSweepActive.collectAsStateWithLifecycle()
     val carHotspotSweepProgress by viewModel.carHotspotSweepProgress.collectAsStateWithLifecycle()

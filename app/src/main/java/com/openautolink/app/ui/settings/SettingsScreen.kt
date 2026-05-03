@@ -75,6 +75,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.openautolink.app.BuildConfig
 import com.openautolink.app.session.SessionState
 import com.openautolink.app.data.AppPreferences
+import com.openautolink.app.transport.usb.UsbConnectionManager
 import androidx.compose.material3.FilterChip
 
 private enum class SettingsTab(
@@ -316,40 +317,75 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        // --- Connection Mode (phone-hotspot vs car-hotspot) ---
+        val usbStatus by UsbConnectionManager.status.collectAsStateWithLifecycle()
         val connectionMode by viewModel.connectionMode.collectAsStateWithLifecycle()
         val knownPhones by viewModel.knownPhones.collectAsStateWithLifecycle()
         val defaultPhoneId by viewModel.defaultPhoneId.collectAsStateWithLifecycle()
+        val isUsbTransport = uiState.directTransport == "usb"
 
-        SectionHeader("Connection Mode")
+        SectionHeader("Transport")
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             listOf(
+                "usb" to "USB",
                 AppPreferences.CONNECTION_MODE_CAR_HOTSPOT to "Car Hotspot",
                 AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT to "Phone Hotspot",
             ).forEach { (mode, label) ->
+                val selected = if (mode == "usb") {
+                    isUsbTransport
+                } else {
+                    !isUsbTransport && connectionMode == mode
+                }
                 FilterChip(
-                    selected = connectionMode == mode,
-                    onClick = { viewModel.updateConnectionMode(mode) },
+                    selected = selected,
+                    onClick = {
+                        when (mode) {
+                            "usb" -> viewModel.selectUsbTransport()
+                            AppPreferences.CONNECTION_MODE_CAR_HOTSPOT -> viewModel.selectCarHotspotTransport()
+                            AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT -> viewModel.selectPhoneHotspotTransport()
+                        }
+                    },
                     label = { Text(label) },
                 )
             }
         }
         Text(
-            text = when (connectionMode) {
-                AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT ->
+            text = when {
+                isUsbTransport ->
+                    "Direct wired Android Auto over AOA v2. No companion app or WiFi is required. Plug the phone into the car's USB port and approve the USB permission prompt."
+                connectionMode == AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT ->
                     "Phone is the WiFi access point; the car connects to it. Optimized for one phone."
-                AppPreferences.CONNECTION_MODE_CAR_HOTSPOT ->
+                else ->
                     "Car's hotspot is the WiFi network; phones connect to it. Multiple phones can be online at once and the floating switcher button picks the active one."
-                else -> ""
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
+
+        if (isUsbTransport) {
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.5f))
+            Spacer(modifier = Modifier.height(16.dp))
+            SectionHeader("USB Status")
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = usbStatus,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            Text(
+                text = "OpenAutoLink listens for a phone on the car USB port, requests permission, switches the phone into Android Open Accessory mode, and starts projection directly from the AAOS app.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            return
+        }
 
         // Known phones list — only relevant in Car Hotspot mode.
         if (connectionMode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {

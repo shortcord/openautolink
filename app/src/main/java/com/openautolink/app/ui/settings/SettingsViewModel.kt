@@ -228,6 +228,24 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { preferences.setConnectionMode(mode) }
     }
 
+    fun selectUsbTransport() {
+        viewModelScope.launch { preferences.setDirectTransport("usb") }
+    }
+
+    fun selectPhoneHotspotTransport() {
+        viewModelScope.launch {
+            preferences.setDirectTransport("hotspot")
+            preferences.setConnectionMode(AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT)
+        }
+    }
+
+    fun selectCarHotspotTransport() {
+        viewModelScope.launch {
+            preferences.setDirectTransport("hotspot")
+            preferences.setConnectionMode(AppPreferences.CONNECTION_MODE_CAR_HOTSPOT)
+        }
+    }
+
     fun setDefaultPhoneId(id: String) {
         viewModelScope.launch { preferences.setDefaultPhoneId(id) }
     }

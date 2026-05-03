@@ -329,8 +329,9 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         //     user hasn't told us which phone to prefer, so don't guess).
         // Explicit picks pass overrideIp and bypass this gate entirely.
         if (overrideIp == null) {
+            val transport = directTransport.value
             val mode = connectionMode.value
-            if (mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+            if (transport == "hotspot" && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
                 val noDefault = defaultPhoneId.value.isBlank()
                 val askMode = alwaysAskPhone.value
                 if (noDefault || askMode) {
@@ -415,7 +416,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             //      briefly before giving up.
             //   3. Fall back to the persistent manual-IP setting.
             val mode = preferences.connectionMode.first()
-            val carHotspotPhone = if (overrideIp == null && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+            val carHotspotPhone = if (directTransport == "hotspot" && overrideIp == null && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
                 // Long budget: with directed probing (no /24 sweep) this is
                 // cheap — just one TCP probe per known IP every
                 // [WARM_CACHE_RETRY_GAP_MS]. The user's guidance is to set a
@@ -427,7 +428,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             } else null
             val carHotspotIp: String? = carHotspotPhone?.host
             val manualIp = overrideIp ?: carHotspotIp ?: manualIpFromPrefs
-            if (mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+            if (directTransport == "hotspot" && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
                 OalLog.i(
                     TAG,
                     "Car Hotspot connect: overrideIp=$overrideIp resolved=$carHotspotIp final=$manualIp",
@@ -573,6 +574,12 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         AppPreferences.DEFAULT_CONNECTION_MODE,
     )
 
+    val directTransport: StateFlow<String> = preferences.directTransport.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        AppPreferences.DEFAULT_DIRECT_TRANSPORT,
+    )
+
     /** Persistent known-phones list, surfaced for the chooser + settings. */
     val knownPhones: StateFlow<List<KnownPhone>> = knownPhonesStore.phones.stateIn(
         viewModelScope,
@@ -647,7 +654,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         // switcher button surface phones the moment they appear on the AP.
         viewModelScope.launch {
             connectionMode.collect { mode ->
-                if (mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+                if (directTransport.value == "hotspot" && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
                     phoneDiscovery.start()
                 } else {
                     phoneDiscovery.stop()
@@ -671,7 +678,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 .distinctUntilChanged()
                 .collect { tuples ->
                     val mode = connectionMode.value
-                    if (mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) return@collect
+                    if (directTransport.value != "hotspot" || mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) return@collect
                     tuples.forEach { (id, name) ->
                         knownPhonesStore.touch(
                             phoneId = id,
@@ -730,11 +737,12 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             while (true) {
                 kotlinx.coroutines.delay(IDLE_SWEEP_INTERVAL_MS)
                 try {
+                    val transport = directTransport.value
                     val mode = connectionMode.value
                     val state = sessionManager.sessionState.value
                     val askMode = alwaysAskPhone.value
                     val haveDefault = defaultPhoneId.value.isNotBlank()
-                    val idleAndCarHotspot = mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT &&
+                    val idleAndCarHotspot = transport == "hotspot" && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT &&
                         state == SessionState.IDLE
                     if (!idleAndCarHotspot) continue
                     if (askMode) continue          // user wants to pick manually
@@ -765,7 +773,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             val cb = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     val mode = connectionMode.value
-                    if (mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) return
+                    if (directTransport.value != "hotspot" || mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) return
                     if (sessionManager.sessionState.value != SessionState.IDLE) return
                     if (!defaultPhoneId.value.isNotBlank()) return
                     if (alwaysAskPhone.value) return
@@ -792,7 +800,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 .distinctUntilChanged()
                 .collect { anyResolved ->
                     val mode = connectionMode.value
-                    if (mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) return@collect
+                    if (directTransport.value != "hotspot" || mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) return@collect
                     if (alwaysAskPhone.value) return@collect
                     // No default phone set → don't auto-connect; the user
                     // will pick from the chooser when they're ready.
@@ -828,7 +836,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         defaultId: String,
         askMode: Boolean,
     ): CarHotspotStatus {
-        if (mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+        if (directTransport.value != "hotspot" || mode != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
             _carHotspotStatusDetail.value = null
             return CarHotspotStatus.INACTIVE
         }
@@ -1148,7 +1156,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     fun dismissPhoneChooser() {
         _showPhoneChooser.value = false
         _carHotspotChooserMessage.value = null
-        if (connectionMode.value == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+        if (directTransport.value == "hotspot" && connectionMode.value == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
             // Car Hotspot: chooser was opened over a live session. Do nothing.
             return
         }
