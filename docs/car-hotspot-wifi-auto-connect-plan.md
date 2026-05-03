@@ -1,5 +1,14 @@
 # Car Hotspot WiFi Auto-Connect — Implementation Plan
 
+> **Status note (May 3, 2026):** The implemented companion keeps `TcpAdvertiser`
+> listening on `0.0.0.0:5277/5278/5279` immediately and runs `CarWifiManager`
+> as an additive helper when car Wi-Fi entries exist. It does not bind/recreate
+> the TCP listeners per `Network`; when Android brings up the car Wi-Fi
+> interface, the existing listeners are reachable there. Treat sections below
+> that mention recreating or binding `TcpAdvertiser(network)` as earlier design
+> notes, not current behavior. The current end-to-end app/companion flow is in
+> [architecture.md](architecture.md) and [networking.md](networking.md).
+
 ## Problem
 
 When the phone is connected to home WiFi and the car is nearby (driveway), the phone won't auto-switch to the car's WiFi hotspot. Android doesn't allow non-system apps to programmatically switch WiFi. This blocks Car Hotspot mode from being zero-touch.

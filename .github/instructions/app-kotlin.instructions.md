@@ -13,7 +13,7 @@ When implementing or modifying any app code that communicates with the JNI layer
    - `app/src/main/cpp/aasdk_jni.cpp` — JNI entry point, native method registration
    - `app/src/main/cpp/jni_session.{h,cpp}` — aasdk pipeline: SSL → Cryptor → Messenger → channels
    - `app/src/main/cpp/jni_channel_handlers.{h,cpp}` — audio, sensor, input, nav, mic handlers
-   - `app/src/main/cpp/jni_transport.{h,cpp}` — ITransport backed by Nearby streams
+   - `app/src/main/cpp/jni_transport.{h,cpp}` — ITransport backed by Kotlin stream pipes
    - `external/opencardev-aasdk/include/aasdk/Channel/` — aasdk channel interfaces
 
 ## Architecture
@@ -25,7 +25,7 @@ When implementing or modifying any app code that communicates with the JNI layer
 ## Package Structure
 ```
 com.openautolink.app/
-├── transport/   # aasdk JNI session + Nearby transport
+├── transport/   # aasdk JNI session + TCP/Nearby/USB transport adapters
 ├── video/       # MediaCodec decoder + Surface
 ├── audio/       # AudioTrack management + mic
 ├── input/       # Touch, GNSS, vehicle data
@@ -46,7 +46,7 @@ com.openautolink.app/
 - Every island has unit tests mocking island boundaries
 - Use `kotlinx-coroutines-test` with `UnconfinedTestDispatcher` for coroutine tests
 - Use `Turbine` for Flow testing
-- Integration tests use a mock TCP server (real sockets, test data)
+- Integration tests use a mock TCP server or transport pipe (real sockets, test data)
 - Compose tests use `createComposeRule()` with test tags
 - Name test files: `{ClassName}Test.kt` (unit), `{Feature}IntegrationTest.kt` (integration)
 
@@ -60,4 +60,4 @@ com.openautolink.app/
 - Single DataStore instance via companion `getInstance(context)` — thread-safe singleton
 - Typed keys with defaults — never raw string access
 - Use `Flow<T>` for reactive reads, `suspend` for writes
-- Preferences survive app restart; bridge config echo verifies bridge-side state
+- Preferences survive app restart; SDR-affecting settings require a fresh aasdk session so the phone renegotiates capabilities

@@ -1,5 +1,13 @@
 # OpenAutoLink — Local Testing Guide
 
+> **Needs refresh for the current app/companion architecture.** The early
+> sections below still describe the historical SBC bridge test bench and ports
+> `5288/5289/5290`. The active workflow is the AAOS app connecting to the phone
+> companion on TCP `5277`, with discovery on mDNS, UDP `5279`, and TCP identity
+> probe `5278`; see [architecture.md](architecture.md) and
+> [networking.md](networking.md). The remote diagnostics/no-ADB guidance remains
+> useful.
+
 ## Overview
 
 Full end-to-end testing requires the AAOS app talking to the bridge over a real network. Since the GM head unit has **no ADB access** due to GM restrictions, we use the Android SDK AAOS emulator as a stand-in. The bridge runs on a physical SBC connected to the development PC via two separate network cables.

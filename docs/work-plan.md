@@ -1,5 +1,9 @@
 # OpenAutoLink — Work Plan
 
+> **Status note (May 3, 2026):** This file still contains historical bridge
+> polish and milestone references. The current app/companion architecture is
+> documented in [architecture.md](architecture.md) and [networking.md](networking.md).
+
 All core milestones (B1–B3, M1–M11) are complete. This file tracks remaining polish, future features, and car testing unknowns.
 
 For the completed milestone history, see [work-plan-archive.md](work-plan-archive.md).
