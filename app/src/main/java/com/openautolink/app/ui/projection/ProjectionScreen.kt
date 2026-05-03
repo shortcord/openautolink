@@ -290,34 +290,47 @@ fun ProjectionScreen(
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = 16.dp),
         ) {
-            // Settings button — draggable
-            DraggableOverlayButton(
-                icon = Icons.Default.Settings,
-                contentDescription = "Settings",
-                onClick = { showSettings = true },
-                positionKey = "overlay_settings",
-                modifier = Modifier.testTag("settingsButton"),
-            )
+            var hasVisibleOverlayButton = false
 
-            Spacer(modifier = Modifier.height(8.dp))
+            @Composable
+            fun OverlayButtonGap() {
+                if (hasVisibleOverlayButton) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                hasVisibleOverlayButton = true
+            }
+
+            // Settings button — draggable
+            if (uiState.overlaySettingsButton) {
+                OverlayButtonGap()
+                DraggableOverlayButton(
+                    icon = Icons.Default.Settings,
+                    contentDescription = "Settings",
+                    onClick = { showSettings = true },
+                    positionKey = "overlay_settings",
+                    modifier = Modifier.testTag("settingsButton"),
+                )
+            }
 
             // Video restart button — resets only projected video, audio stays active.
-            DraggableOverlayButton(
-                icon = Icons.Default.Refresh,
-                contentDescription = "Restart video stream",
-                onClick = { viewModel.restartVideoStream() },
-                positionKey = "overlay_restart_video",
-                containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.7f),
-                tint = MaterialTheme.colorScheme.onSecondary,
-                modifier = Modifier.testTag("restartVideoButton"),
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
+            if (uiState.overlayRestartVideoButton) {
+                OverlayButtonGap()
+                DraggableOverlayButton(
+                    icon = Icons.Default.Refresh,
+                    contentDescription = "Restart video stream",
+                    onClick = { viewModel.restartVideoStream() },
+                    positionKey = "overlay_restart_video",
+                    containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.7f),
+                    tint = MaterialTheme.colorScheme.onSecondary,
+                    modifier = Modifier.testTag("restartVideoButton"),
+                )
+            }
 
             // Switch Phone button — Car Hotspot mode only. Tapping opens a
             // centered chooser overlay; the underlying AA session keeps
             // streaming until the user explicitly picks a different phone.
-            if (isCarHotspotMode) {
+            if (isCarHotspotMode && uiState.overlaySwitchPhoneButton) {
+                OverlayButtonGap()
                 DraggableOverlayButton(
                     icon = Icons.Default.PhoneAndroid,
                     contentDescription = "Switch Phone",
@@ -335,50 +348,51 @@ fun ProjectionScreen(
                     },
                     modifier = Modifier.testTag("switchPhoneButton"),
                 )
-
-                Spacer(modifier = Modifier.height(8.dp))
             }
 
             // Stats button — draggable
-            DraggableOverlayButton(
-                icon = Icons.Default.Info,
-                contentDescription = "Stats for nerds",
-                onClick = { viewModel.toggleStats() },
-                positionKey = "overlay_stats",
-                containerColor = if (uiState.showStats) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                },
-                tint = if (uiState.showStats) {
-                    MaterialTheme.colorScheme.onPrimary
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                modifier = Modifier.testTag("statsButton"),
-            )
+            if (uiState.overlayStatsButton) {
+                OverlayButtonGap()
+                DraggableOverlayButton(
+                    icon = Icons.Default.Info,
+                    contentDescription = "Stats for nerds",
+                    onClick = { viewModel.toggleStats() },
+                    positionKey = "overlay_stats",
+                    containerColor = if (uiState.showStats) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                    } else {
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    },
+                    tint = if (uiState.showStats) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    modifier = Modifier.testTag("statsButton"),
+                )
+            }
 
             // File logging button — only shown when enabled in Settings → Diagnostics
             if (uiState.fileLoggingEnabled) {
-            Spacer(modifier = Modifier.height(8.dp))
+                OverlayButtonGap()
 
-            DraggableOverlayButton(
-                icon = Icons.Default.FiberManualRecord,
-                contentDescription = "File Logging",
-                onClick = { viewModel.toggleFileLogging() },
-                positionKey = "overlay_file_log",
-                containerColor = if (uiState.fileLoggingActive) {
-                    Color.Red.copy(alpha = 0.7f)
-                } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                },
-                tint = if (uiState.fileLoggingActive) {
-                    Color.White
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                modifier = Modifier.testTag("fileLogButton"),
-            )
+                DraggableOverlayButton(
+                    icon = Icons.Default.FiberManualRecord,
+                    contentDescription = "File Logging",
+                    onClick = { viewModel.toggleFileLogging() },
+                    positionKey = "overlay_file_log",
+                    containerColor = if (uiState.fileLoggingActive) {
+                        Color.Red.copy(alpha = 0.7f)
+                    } else {
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    },
+                    tint = if (uiState.fileLoggingActive) {
+                        Color.White
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    modifier = Modifier.testTag("fileLogButton"),
+                )
             } // end fileLoggingEnabled
 
         }

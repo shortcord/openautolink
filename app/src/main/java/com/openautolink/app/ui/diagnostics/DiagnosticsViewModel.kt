@@ -140,6 +140,8 @@ data class DiagnosticsUiState(
     val car: CarInfo = CarInfo(),
     val logs: List<LogEntry> = emptyList(),
     val logFilter: LogSeverity = LogSeverity.DEBUG,
+    val fileLoggingEnabled: Boolean = AppPreferences.DEFAULT_FILE_LOGGING_ENABLED,
+    val logcatCaptureEnabled: Boolean = AppPreferences.DEFAULT_LOGCAT_CAPTURE_ENABLED,
     val networkProbe: NetworkProbeState = NetworkProbeState(),
     val debugProbe: DebugProbeState = DebugProbeState(),
 )
@@ -192,6 +194,8 @@ private data class CombinedInner(
     val filter: LogSeverity,
     val probe: NetworkProbeState,
     val debug: DebugProbeState,
+    val fileLoggingEnabled: Boolean = AppPreferences.DEFAULT_FILE_LOGGING_ENABLED,
+    val logcatCaptureEnabled: Boolean = AppPreferences.DEFAULT_LOGCAT_CAPTURE_ENABLED,
 )
 
 class DiagnosticsViewModel(application: Application) : AndroidViewModel(application) {
@@ -221,12 +225,21 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
         _streaming,
         _car,
         combine(
-            com.openautolink.app.diagnostics.DiagnosticLog.localLogs,
-            _logFilter,
-            _networkProbe,
-            _debugProbe,
-        ) { logs, filter, probe, debug ->
-            CombinedInner(logs, filter, probe, debug)
+            combine(
+                com.openautolink.app.diagnostics.DiagnosticLog.localLogs,
+                _logFilter,
+                _networkProbe,
+                _debugProbe,
+            ) { logs, filter, probe, debug ->
+                CombinedInner(logs, filter, probe, debug)
+            },
+            preferences.fileLoggingEnabled,
+            preferences.logcatCaptureEnabled,
+        ) { inner, fileLoggingEnabled, logcatCaptureEnabled ->
+            inner.copy(
+                fileLoggingEnabled = fileLoggingEnabled,
+                logcatCaptureEnabled = logcatCaptureEnabled,
+            )
         },
     ) { system, network, streaming, car, inner ->
         // Map LocalLogEntry → LogEntry for UI
@@ -252,6 +265,8 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             car = car,
             logs = filtered,
             logFilter = inner.filter,
+            fileLoggingEnabled = inner.fileLoggingEnabled,
+            logcatCaptureEnabled = inner.logcatCaptureEnabled,
             networkProbe = inner.probe,
             debugProbe = inner.debug,
         )
@@ -346,6 +361,14 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             adbWifiStatus = com.openautolink.app.diagnostics.DeviceDebugProbe.getAdbWifiStatus(application),
             deviceInfo = com.openautolink.app.diagnostics.DeviceDebugProbe.getDeviceInfo(),
         )
+    }
+
+    fun updateFileLoggingEnabled(enabled: Boolean) {
+        viewModelScope.launch { preferences.setFileLoggingEnabled(enabled) }
+    }
+
+    fun updateLogcatCaptureEnabled(enabled: Boolean) {
+        viewModelScope.launch { preferences.setLogcatCaptureEnabled(enabled) }
     }
 
     // ── Network Probe ─────────────────────────────────────────────────

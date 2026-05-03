@@ -39,6 +39,8 @@ data class SettingsUiState(
     val gpsForwarding: Boolean = AppPreferences.DEFAULT_GPS_FORWARDING,
     val clusterNavigation: Boolean = AppPreferences.DEFAULT_CLUSTER_NAVIGATION,
     val overlaySettingsButton: Boolean = AppPreferences.DEFAULT_OVERLAY_SETTINGS_BUTTON,
+    val overlayRestartVideoButton: Boolean = AppPreferences.DEFAULT_OVERLAY_RESTART_VIDEO_BUTTON,
+    val overlaySwitchPhoneButton: Boolean = AppPreferences.DEFAULT_OVERLAY_SWITCH_PHONE_BUTTON,
     val overlayStatsButton: Boolean = AppPreferences.DEFAULT_OVERLAY_STATS_BUTTON,
     val fileLoggingEnabled: Boolean = AppPreferences.DEFAULT_FILE_LOGGING_ENABLED,
     val logcatCaptureEnabled: Boolean = AppPreferences.DEFAULT_LOGCAT_CAPTURE_ENABLED,
@@ -92,6 +94,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         preferences.gpsForwarding,
         preferences.clusterNavigation,
         preferences.overlaySettingsButton,
+        preferences.overlayRestartVideoButton,
+        preferences.overlaySwitchPhoneButton,
         preferences.overlayStatsButton,
         preferences.fileLoggingEnabled,
         preferences.logcatCaptureEnabled,
@@ -130,26 +134,28 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             gpsForwarding = values[13] as Boolean,
             clusterNavigation = values[14] as Boolean,
             overlaySettingsButton = values[15] as Boolean,
-            overlayStatsButton = values[16] as Boolean,
-            fileLoggingEnabled = values[17] as Boolean,
-            logcatCaptureEnabled = values[18] as Boolean,
-            syncAaTheme = values[19] as Boolean,
-            hideAaClock = values[20] as Boolean,
-            hidePhoneSignal = values[21] as Boolean,
-            hideBatteryLevel = values[22] as Boolean,
-            sendImuSensors = values[23] as Boolean,
-            distanceUnits = values[24] as String,
-            safeAreaTop = values[25] as Int,
-            safeAreaBottom = values[26] as Int,
-            safeAreaLeft = values[27] as Int,
-            safeAreaRight = values[28] as Int,
-            keyRemap = values[29] as String,
-            volumeOffsetMedia = values[30] as Int,
-            volumeOffsetNavigation = values[31] as Int,
-            volumeOffsetAssistant = values[32] as Int,
-            defaultPhoneName = values[33] as String,
-            manualIpEnabled = values[34] as Boolean,
-            manualIpAddress = values[35] as String,
+            overlayRestartVideoButton = values[16] as Boolean,
+            overlaySwitchPhoneButton = values[17] as Boolean,
+            overlayStatsButton = values[18] as Boolean,
+            fileLoggingEnabled = values[19] as Boolean,
+            logcatCaptureEnabled = values[20] as Boolean,
+            syncAaTheme = values[21] as Boolean,
+            hideAaClock = values[22] as Boolean,
+            hidePhoneSignal = values[23] as Boolean,
+            hideBatteryLevel = values[24] as Boolean,
+            sendImuSensors = values[25] as Boolean,
+            distanceUnits = values[26] as String,
+            safeAreaTop = values[27] as Int,
+            safeAreaBottom = values[28] as Int,
+            safeAreaLeft = values[29] as Int,
+            safeAreaRight = values[30] as Int,
+            keyRemap = values[31] as String,
+            volumeOffsetMedia = values[32] as Int,
+            volumeOffsetNavigation = values[33] as Int,
+            volumeOffsetAssistant = values[34] as Int,
+            defaultPhoneName = values[35] as String,
+            manualIpEnabled = values[36] as Boolean,
+            manualIpAddress = values[37] as String,
         )
     }.stateIn(
         viewModelScope,
@@ -364,6 +370,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun updateOverlaySettingsButton(visible: Boolean) {
         viewModelScope.launch { preferences.setOverlaySettingsButton(visible) }
+    }
+
+    fun updateOverlayRestartVideoButton(visible: Boolean) {
+        viewModelScope.launch { preferences.setOverlayRestartVideoButton(visible) }
+    }
+
+    fun updateOverlaySwitchPhoneButton(visible: Boolean) {
+        viewModelScope.launch { preferences.setOverlaySwitchPhoneButton(visible) }
     }
 
     fun updateOverlayStatsButton(visible: Boolean) {

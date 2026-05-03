@@ -25,7 +25,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.DisplaySettings
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.BatteryChargingFull
@@ -64,6 +66,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -84,10 +87,27 @@ private enum class SettingsTab(
     DISPLAY("Display", Icons.Default.DisplaySettings),
     VIDEO("Video", Icons.Default.VideoSettings),
     AUDIO("Audio", Icons.Default.Mic),
-    INPUT("Input", Icons.Default.Keyboard),
     EV("EV", Icons.Default.BatteryChargingFull),
     DIAGNOSTICS("Diagnostics", Icons.Default.BugReport),
+    ABOUT("About", Icons.Default.Info),
 }
+
+private const val sourceRepositoryUrl = "https://github.com/mossyhub/openautolink"
+
+private data class LicenseItem(
+    val name: String,
+    val license: String,
+)
+
+private val licenseItems = listOf(
+    LicenseItem("OpenAutoLink", "License TBD"),
+    LicenseItem("aasdk", "GNU GPLv3"),
+    LicenseItem("AndroidX, Jetpack Compose, Material Icons, Navigation, Lifecycle, DataStore", "Apache License 2.0"),
+    LicenseItem("Kotlin, Kotlin coroutines, Kotlin serialization", "Apache License 2.0"),
+    LicenseItem("Conscrypt", "Apache License 2.0"),
+    LicenseItem("Protocol Buffers", "BSD 3-Clause License"),
+    LicenseItem("Google Nearby Connections / Play services", "Google APIs Terms of Service"),
+)
 
 private data class DisplayModeOption(
     val key: String,
@@ -201,23 +221,13 @@ fun SettingsScreen(
                         )
                         SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
                         SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
-                        SettingsTab.INPUT -> InputTab(viewModel, uiState)
                         SettingsTab.EV -> EvEnergyModelTab()
                         SettingsTab.DIAGNOSTICS -> DiagnosticsSettingsTab(
-                            viewModel, uiState, onNavigateToDiagnostics
+                            onNavigateToDiagnostics
                         )
+                        SettingsTab.ABOUT -> AboutTab()
                     }
                 }
-
-                Text(
-                    text = "Version ${BuildConfig.VERSION_NAME}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
             }
         }
     }
@@ -642,13 +652,13 @@ private fun DisplayTab(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- AA Display Insets ---
-        SectionHeader("AA Display Insets")
+        // --- Safe Area ---
+        SectionHeader("Safe Area")
 
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Insets the AA projection from the display edges.",
+            text = "Keeps Android Auto clear of screen edges and system UI.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
@@ -665,7 +675,7 @@ private fun DisplayTab(
                 onClick = onNavigateToSafeAreaEditor,
                 modifier = Modifier.testTag("editSafeAreaButton"),
             ) {
-                Text("Edit Display Insets")
+                Text("Edit Safe Area")
             }
 
             Text(
@@ -852,6 +862,56 @@ private fun DisplayTab(
                 checked = uiState.overlaySettingsButton,
                 onCheckedChange = { viewModel.updateOverlaySettingsButton(it) },
                 modifier = Modifier.testTag("overlaySettingsToggle"),
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Restart Video Button",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Floating button to restart only the projected video stream.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = uiState.overlayRestartVideoButton,
+                onCheckedChange = { viewModel.updateOverlayRestartVideoButton(it) },
+                modifier = Modifier.testTag("overlayRestartVideoToggle"),
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Switch Phone Button",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Floating button to open the phone chooser in Car Hotspot mode.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = uiState.overlaySwitchPhoneButton,
+                onCheckedChange = { viewModel.updateOverlaySwitchPhoneButton(it) },
+                modifier = Modifier.testTag("overlaySwitchPhoneToggle"),
             )
         }
 
@@ -2111,8 +2171,6 @@ private val logLevelOptions = listOf("DEBUG", "INFO", "WARN", "ERROR")
 
 @Composable
 private fun DiagnosticsSettingsTab(
-    viewModel: SettingsViewModel,
-    uiState: SettingsUiState,
     onNavigateToDiagnostics: () -> Unit,
 ) {
     Column(
@@ -2146,53 +2204,86 @@ private fun DiagnosticsSettingsTab(
             Spacer(modifier = Modifier.width(8.dp))
             Text("Open Diagnostics Dashboard")
         }
+    }
+}
 
-        Spacer(modifier = Modifier.height(24.dp))
+@Composable
+private fun AboutTab() {
+    val uriHandler = LocalUriHandler.current
 
-        SectionHeader("File Logging")
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .testTag("aboutSettingsTab"),
+    ) {
+        SectionHeader("About")
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        SettingRow(
+            label = "Version",
+            value = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+        )
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        SectionHeader("Source")
 
         Row(
-            modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { uriHandler.openUri(sourceRepositoryUrl) }
+                .padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Log to File", style = MaterialTheme.typography.bodyLarge)
+            Icon(
+                imageVector = Icons.Default.Link,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
                 Text(
-                    "Write OAL diagnostic logs (transport, video, audio, sensors, " +
-                        "navigation) to a file in openautolink/logs/. Recommended " +
-                        "only for troubleshooting — turn off for best performance.",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = "GitHub source repository",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = sourceRepositoryUrl,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
-            Switch(
-                checked = uiState.fileLoggingEnabled,
-                onCheckedChange = { viewModel.updateFileLoggingEnabled(it) },
-                modifier = Modifier.testTag("fileLoggingToggle"),
-            )
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Include Full Logcat", style = MaterialTheme.typography.bodyLarge)
+        Spacer(modifier = Modifier.height(18.dp))
+
+        SectionHeader("Licenses")
+
+        licenseItems.forEach { item ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth(0.7f)
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = item.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
                 Text(
-                    "Also capture the full Android logcat for our app's process " +
-                        "(native C++/JNI, AOSP framework, MediaCodec, AudioTrack, " +
-                        "Binder, Surface). Saves to logcat_<timestamp>.log. " +
-                        "AAOS does not allow apps to read system-wide logs without " +
-                        "root, so other apps and PowerManager events are not " +
-                        "included. Significantly larger files — only enable when " +
-                        "actively troubleshooting.",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = item.license,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
-            Switch(
-                checked = uiState.logcatCaptureEnabled,
-                onCheckedChange = { viewModel.updateLogcatCaptureEnabled(it) },
-                modifier = Modifier.testTag("logcatCaptureToggle"),
-            )
+            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
         }
     }
 }

@@ -69,6 +69,10 @@ data class ProjectionUiState(
     val fileLoggingActive: Boolean = false,
     val fileLoggingPath: String? = null,
     val fileLoggingEnabled: Boolean = false,
+    val overlaySettingsButton: Boolean = AppPreferences.DEFAULT_OVERLAY_SETTINGS_BUTTON,
+    val overlayRestartVideoButton: Boolean = AppPreferences.DEFAULT_OVERLAY_RESTART_VIDEO_BUTTON,
+    val overlaySwitchPhoneButton: Boolean = AppPreferences.DEFAULT_OVERLAY_SWITCH_PHONE_BUTTON,
+    val overlayStatsButton: Boolean = AppPreferences.DEFAULT_OVERLAY_STATS_BUTTON,
 )
 
 @OptIn(kotlinx.coroutines.FlowPreview::class)
@@ -177,6 +181,10 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         _fileLoggingActive,
         _fileLoggingPath,
         preferences.fileLoggingEnabled,
+        preferences.overlaySettingsButton,
+        preferences.overlayRestartVideoButton,
+        preferences.overlaySwitchPhoneButton,
+        preferences.overlayStatsButton,
     ) { values ->
         ProjectionUiState(
             sessionState = values[0] as SessionState,
@@ -202,6 +210,10 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             fileLoggingActive = values[20] as Boolean,
             fileLoggingPath = values[21] as? String,
             fileLoggingEnabled = values[22] as Boolean,
+            overlaySettingsButton = values[23] as Boolean,
+            overlayRestartVideoButton = values[24] as Boolean,
+            overlaySwitchPhoneButton = values[25] as Boolean,
+            overlayStatsButton = values[26] as Boolean,
         )
     }.stateIn(
         viewModelScope,

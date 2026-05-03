@@ -42,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -143,7 +144,13 @@ fun DiagnosticsScreen(
                     DiagnosticsTab.NETWORK -> NetworkTab(uiState.network, uiState.networkProbe, viewModel)
                     DiagnosticsTab.CAR -> CarTab(uiState.car)
                     DiagnosticsTab.DEBUG -> DebugTab(uiState.debugProbe, viewModel)
-                    DiagnosticsTab.LOGS -> LogsTab(uiState.logs, uiState.logFilter, viewModel)
+                    DiagnosticsTab.LOGS -> LogsTab(
+                        logs = uiState.logs,
+                        currentFilter = uiState.logFilter,
+                        fileLoggingEnabled = uiState.fileLoggingEnabled,
+                        logcatCaptureEnabled = uiState.logcatCaptureEnabled,
+                        viewModel = viewModel,
+                    )
                 }
               }
             }
@@ -1104,13 +1111,73 @@ private fun distanceUnitsToString(units: Int): String = when (units) {
 private fun LogsTab(
     logs: List<LogEntry>,
     currentFilter: LogSeverity,
+    fileLoggingEnabled: Boolean,
+    logcatCaptureEnabled: Boolean,
     viewModel: DiagnosticsViewModel,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(),
+        ) {
+            SectionHeader("File Logging")
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Log to File", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Write OAL diagnostic logs (transport, video, audio, sensors, " +
+                            "navigation) to a file in openautolink/logs/. Recommended " +
+                            "only for troubleshooting.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = fileLoggingEnabled,
+                    onCheckedChange = { viewModel.updateFileLoggingEnabled(it) },
+                    modifier = Modifier.testTag("fileLoggingToggle"),
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Include Full Logcat", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Also capture the full Android logcat for this app's process " +
+                            "(native C++/JNI, AOSP framework, MediaCodec, AudioTrack, " +
+                            "Binder, Surface). Saves to logcat_<timestamp>.log. " +
+                            "Significantly larger files; enable only while troubleshooting.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = logcatCaptureEnabled,
+                    onCheckedChange = { viewModel.updateLogcatCaptureEnabled(it) },
+                    modifier = Modifier.testTag("logcatCaptureToggle"),
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(8.dp))
+
         // Filter chips row + clear button
         Row(
             modifier = Modifier
-                .fillMaxWidth(0.7f)
+                .fillMaxWidth()
                 .padding(bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
