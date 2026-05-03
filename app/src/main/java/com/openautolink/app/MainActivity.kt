@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ActivityInfo
+import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
@@ -88,6 +89,8 @@ class MainActivity : ComponentActivity() {
                 AppNavHost()
             }
         }
+
+        handleUsbAttachIntent(intent)
     }
 
     override fun onResume() {
@@ -141,6 +144,29 @@ class MainActivity : ComponentActivity() {
             "input",
             "onNewIntent: action=${intent.action} extras=${intent.extras?.keySet()}"
         )
+        handleUsbAttachIntent(intent)
+    }
+
+    private fun handleUsbAttachIntent(intent: Intent?) {
+        if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
+
+        lifecycleScope.launch {
+            val prefs = AppPreferences.getInstance(this@MainActivity)
+            val transport = prefs.directTransport.first()
+            if (transport != "usb") {
+                com.openautolink.app.diagnostics.DiagnosticLog.i(
+                    "usb",
+                    "Ignoring USB attach intent because transport=$transport"
+                )
+                return@launch
+            }
+
+            com.openautolink.app.diagnostics.DiagnosticLog.i(
+                "usb",
+                "Handling USB attach intent for explicit USB transport"
+            )
+            ViewModelProvider(this@MainActivity)[ProjectionViewModel::class.java].connect()
+        }
     }
 
     private fun applyDisplayMode(mode: String) {
