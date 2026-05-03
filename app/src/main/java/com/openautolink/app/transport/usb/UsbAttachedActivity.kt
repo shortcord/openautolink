@@ -6,7 +6,10 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
 import com.openautolink.app.MainActivity
+import com.openautolink.app.data.AppPreferences
 import com.openautolink.app.diagnostics.OalLog
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 /**
  * Invisible activity that receives USB_DEVICE_ATTACHED system intents.
@@ -35,6 +38,14 @@ class UsbAttachedActivity : Activity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
+
+        val transport = runBlocking {
+            AppPreferences.getInstance(this@UsbAttachedActivity).directTransport.first()
+        }
+        if (transport != "usb") {
+            OalLog.i(TAG, "Ignoring USB attach intent because transport=$transport")
+            return
+        }
 
         @Suppress("DEPRECATION")
         val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
