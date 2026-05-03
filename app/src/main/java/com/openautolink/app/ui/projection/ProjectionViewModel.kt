@@ -689,9 +689,11 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             sessionManager.sessionState
                 .debounce(ACTIVE_PHONE_ID_CLEAR_DEBOUNCE_MS)
                 .collect { state ->
-                    if (state == SessionState.IDLE && _activePhoneId.value != null) {
-                        OalLog.d(TAG, "Clearing activePhoneId after debounced IDLE")
-                        _activePhoneId.value = null
+                    if (state == SessionState.IDLE) {
+                        if (_activePhoneId.value != null) {
+                            OalLog.d(TAG, "Clearing activePhoneId after debounced IDLE")
+                            _activePhoneId.value = null
+                        }
                     }
                 }
         }

@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.DisplaySettings
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.BatteryChargingFull
@@ -66,7 +65,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -83,16 +81,14 @@ private enum class SettingsTab(
     val title: String,
     val icon: ImageVector,
 ) {
-    CONNECTION("Connection", Icons.Default.Router),
+    CONNECTION("Connections", Icons.Default.Router),
     DISPLAY("Display", Icons.Default.DisplaySettings),
     VIDEO("Video", Icons.Default.VideoSettings),
     AUDIO("Audio", Icons.Default.Mic),
     EV("EV", Icons.Default.BatteryChargingFull),
-    DIAGNOSTICS("Diagnostics", Icons.Default.BugReport),
     ABOUT("About", Icons.Default.Info),
+    DIAGNOSTICS("Diagnostics", Icons.Default.BugReport),
 }
-
-private const val sourceRepositoryUrl = "https://github.com/mossyhub/openautolink"
 
 private data class LicenseItem(
     val name: String,
@@ -1056,7 +1052,11 @@ private fun DisplayTab(
         }
         } // Column (hide flags)
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+
+        HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         SectionHeader("Distance Units")
 
@@ -2171,8 +2171,6 @@ private fun formatInsetLabel(top: Int, bottom: Int, left: Int, right: Int): Stri
 
 @Composable
 private fun AboutTab() {
-    val uriHandler = LocalUriHandler.current
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2188,38 +2186,10 @@ private fun AboutTab() {
             value = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
         )
 
-        Spacer(modifier = Modifier.height(18.dp))
-
-        SectionHeader("Source")
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth(0.7f)
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { uriHandler.openUri(sourceRepositoryUrl) }
-                .padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Default.Link,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = "GitHub source repository",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = sourceRepositoryUrl,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
+        SettingRow(
+            label = "Git Hash",
+            value = BuildConfig.GIT_HASH,
+        )
 
         Spacer(modifier = Modifier.height(18.dp))
 

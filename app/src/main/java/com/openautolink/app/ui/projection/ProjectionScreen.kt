@@ -1,6 +1,7 @@
 package com.openautolink.app.ui.projection
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -11,6 +12,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,19 +22,23 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,13 +53,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -65,8 +77,8 @@ import com.openautolink.app.BuildConfig
 import com.openautolink.app.R
 import com.openautolink.app.audio.AudioStats
 import com.openautolink.app.session.SessionState
-import com.openautolink.app.ui.components.DraggableOverlayButton
 import com.openautolink.app.video.VideoStats
+import kotlin.math.roundToInt
 
 @Composable
 fun ProjectionScreen(
@@ -95,6 +107,7 @@ fun ProjectionScreen(
     // projection Surface stays alive underneath. Returning to projection avoids
     // a codec/Surface re-init and the black frames that come with it.
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+    var showOverlayActions by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(showSettings) {
         viewModel.setSettingsOpen(showSettings)
@@ -284,118 +297,26 @@ fun ProjectionScreen(
             }
         }
 
-        // Floating overlay buttons — bottom-right, above nav bar. Draggable.
-        Column(
+        FloatingOverlayMenu(
+            expanded = showOverlayActions,
+            onExpandedChange = { showOverlayActions = it },
+            showSettingsButton = uiState.overlaySettingsButton,
+            showRestartVideoButton = uiState.overlayRestartVideoButton,
+            showSwitchPhoneButton = isCarHotspotMode && uiState.overlaySwitchPhoneButton,
+            showStatsButton = uiState.overlayStatsButton,
+            showFileLogButton = uiState.fileLoggingEnabled,
+            statsActive = uiState.showStats,
+            carHotspotSwitching = carHotspotSwitching,
+            fileLoggingActive = uiState.fileLoggingActive,
+            onSettings = { showSettings = true },
+            onRestartVideo = { viewModel.restartVideoStream() },
+            onSwitchPhone = { viewModel.showCarHotspotChooser() },
+            onStats = { viewModel.toggleStats() },
+            onFileLog = { viewModel.toggleFileLogging() },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = 16.dp),
-        ) {
-            var hasVisibleOverlayButton = false
-
-            @Composable
-            fun OverlayButtonGap() {
-                if (hasVisibleOverlayButton) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                hasVisibleOverlayButton = true
-            }
-
-            // Settings button — draggable
-            if (uiState.overlaySettingsButton) {
-                OverlayButtonGap()
-                DraggableOverlayButton(
-                    icon = Icons.Default.Settings,
-                    contentDescription = "Settings",
-                    onClick = { showSettings = true },
-                    positionKey = "overlay_settings",
-                    modifier = Modifier.testTag("settingsButton"),
-                )
-            }
-
-            // Video restart button — resets only projected video, audio stays active.
-            if (uiState.overlayRestartVideoButton) {
-                OverlayButtonGap()
-                DraggableOverlayButton(
-                    icon = Icons.Default.Refresh,
-                    contentDescription = "Restart video stream",
-                    onClick = { viewModel.restartVideoStream() },
-                    positionKey = "overlay_restart_video",
-                    containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.7f),
-                    tint = MaterialTheme.colorScheme.onSecondary,
-                    modifier = Modifier.testTag("restartVideoButton"),
-                )
-            }
-
-            // Switch Phone button — Car Hotspot mode only. Tapping opens a
-            // centered chooser overlay; the underlying AA session keeps
-            // streaming until the user explicitly picks a different phone.
-            if (isCarHotspotMode && uiState.overlaySwitchPhoneButton) {
-                OverlayButtonGap()
-                DraggableOverlayButton(
-                    icon = Icons.Default.PhoneAndroid,
-                    contentDescription = "Switch Phone",
-                    onClick = { viewModel.showCarHotspotChooser() },
-                    positionKey = "overlay_switch_phone",
-                    containerColor = if (carHotspotSwitching) {
-                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
-                    } else {
-                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                    },
-                    tint = if (carHotspotSwitching) {
-                        MaterialTheme.colorScheme.onTertiary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    modifier = Modifier.testTag("switchPhoneButton"),
-                )
-            }
-
-            // Stats button — draggable
-            if (uiState.overlayStatsButton) {
-                OverlayButtonGap()
-                DraggableOverlayButton(
-                    icon = Icons.Default.Info,
-                    contentDescription = "Stats for nerds",
-                    onClick = { viewModel.toggleStats() },
-                    positionKey = "overlay_stats",
-                    containerColor = if (uiState.showStats) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                    } else {
-                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                    },
-                    tint = if (uiState.showStats) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    modifier = Modifier.testTag("statsButton"),
-                )
-            }
-
-            // File logging button — only shown when enabled in Settings → Diagnostics
-            if (uiState.fileLoggingEnabled) {
-                OverlayButtonGap()
-
-                DraggableOverlayButton(
-                    icon = Icons.Default.FiberManualRecord,
-                    contentDescription = "File Logging",
-                    onClick = { viewModel.toggleFileLogging() },
-                    positionKey = "overlay_file_log",
-                    containerColor = if (uiState.fileLoggingActive) {
-                        Color.Red.copy(alpha = 0.7f)
-                    } else {
-                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                    },
-                    tint = if (uiState.fileLoggingActive) {
-                        Color.White
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    modifier = Modifier.testTag("fileLogButton"),
-                )
-            } // end fileLoggingEnabled
-
-        }
+        )
 
         // Stats overlay panel — bottom-left
         if (uiState.showStats) {
@@ -596,6 +517,210 @@ private fun CarHotspotStatusBanner(
                 ) { Text("Try again", fontSize = 13.sp) }
             }
         }
+    }
+}
+
+@Composable
+private fun FloatingOverlayMenu(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    showSettingsButton: Boolean,
+    showRestartVideoButton: Boolean,
+    showSwitchPhoneButton: Boolean,
+    showStatsButton: Boolean,
+    showFileLogButton: Boolean,
+    statsActive: Boolean,
+    carHotspotSwitching: Boolean,
+    fileLoggingActive: Boolean,
+    onSettings: () -> Unit,
+    onRestartVideo: () -> Unit,
+    onSwitchPhone: () -> Unit,
+    onStats: () -> Unit,
+    onFileLog: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val prefs = remember {
+        context.getSharedPreferences("overlay_positions", Context.MODE_PRIVATE)
+    }
+    var offset by remember {
+        mutableStateOf(
+            Offset(
+                prefs.getFloat("overlay_actions_x", 0f),
+                prefs.getFloat("overlay_actions_y", 0f),
+            )
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragEnd = {
+                        prefs.edit()
+                            .putFloat("overlay_actions_x", offset.x)
+                            .putFloat("overlay_actions_y", offset.y)
+                            .apply()
+                    },
+                ) { change, dragAmount ->
+                    change.consume()
+                    offset = Offset(
+                        x = offset.x + dragAmount.x,
+                        y = offset.y + dragAmount.y,
+                    )
+                }
+            },
+        horizontalAlignment = Alignment.End,
+    ) {
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .background(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+                        shape = RoundedCornerShape(18.dp),
+                    )
+                    .padding(8.dp),
+            ) {
+                if (showSettingsButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        onClick = {
+                            onExpandedChange(false)
+                            onSettings()
+                        },
+                        modifier = Modifier.testTag("settingsButton"),
+                    )
+                }
+
+                if (showSwitchPhoneButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.PhoneAndroid,
+                        contentDescription = "Switch Phone",
+                        onClick = {
+                            onExpandedChange(false)
+                            onSwitchPhone()
+                        },
+                        containerColor = if (carHotspotSwitching) {
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.88f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
+                        },
+                        tint = if (carHotspotSwitching) {
+                            MaterialTheme.colorScheme.onTertiary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.testTag("switchPhoneButton"),
+                    )
+                }
+
+                if (showRestartVideoButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.Refresh,
+                        contentDescription = "Restart video stream",
+                        onClick = {
+                            onExpandedChange(false)
+                            onRestartVideo()
+                        },
+                        modifier = Modifier.testTag("restartVideoButton"),
+                    )
+                }
+
+                if (showStatsButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.Info,
+                        contentDescription = "Stats for nerds",
+                        onClick = {
+                            onExpandedChange(false)
+                            onStats()
+                        },
+                        containerColor = if (statsActive) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
+                        },
+                        tint = if (statsActive) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.testTag("statsButton"),
+                    )
+                }
+
+                if (showFileLogButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.FiberManualRecord,
+                        contentDescription = "File Logging",
+                        onClick = {
+                            onExpandedChange(false)
+                            onFileLog()
+                        },
+                        containerColor = if (fileLoggingActive) {
+                            Color.Red.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
+                        },
+                        tint = if (fileLoggingActive) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("fileLogButton"),
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(1.dp))
+            }
+        }
+
+        if (expanded) {
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        Box(modifier = Modifier.padding(horizontal = 8.dp)) {
+            OverlayActionButton(
+                icon = Icons.Default.BugReport,
+                contentDescription = "Projection controls",
+                onClick = { onExpandedChange(!expanded) },
+                containerColor = if (expanded) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                } else {
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                },
+                tint = if (expanded) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                modifier = Modifier.testTag("overlayMenuButton"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun OverlayActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+) {
+    FilledTonalIconButton(
+        onClick = onClick,
+        modifier = modifier.size(56.dp),
+        colors = IconButtonDefaults.filledTonalIconButtonColors(
+            containerColor = containerColor,
+            contentColor = tint,
+        ),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(24.dp),
+        )
     }
 }
 
@@ -1074,6 +1199,7 @@ private fun VideoStatsOverlay(
 ) {
     Box(
         modifier = modifier
+            .widthIn(min = 360.dp, max = 520.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(Color.Black.copy(alpha = 0.72f))
             .padding(14.dp)
@@ -1198,6 +1324,8 @@ private fun StatLine(
             fontFamily = FontFamily.Monospace,
             lineHeight = if (header) 20.sp else 16.sp,
             modifier = Modifier.width(if (header) 200.dp else 100.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
         )
         if (value.isNotEmpty()) {
             Spacer(modifier = Modifier.width(6.dp))
@@ -1207,6 +1335,8 @@ private fun StatLine(
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
                 lineHeight = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
             )
         }
     }

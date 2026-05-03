@@ -16,6 +16,11 @@ android {
         targetSdk = 36
         versionCode = (findProperty("oalVersionCode") as? String)?.toIntOrNull() ?: 1
         versionName = (findProperty("oalVersionName") as? String) ?: "0.1.0"
+        val gitHash = (findProperty("oalGitHash") as? String)
+            ?: providers.exec {
+                commandLine("git", "rev-parse", "--short", "HEAD")
+            }.standardOutput.asText.map { it.trim() }.getOrElse("unknown")
+        buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -90,6 +95,7 @@ android {
         // but lint can't resolve it through the library's class hierarchy.
         disable += "Instantiatable"
     }
+    buildToolsVersion = "37.0.0"
 }
 
 protobuf {

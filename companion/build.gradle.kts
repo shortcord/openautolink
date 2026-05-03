@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = findProperty("appId") as? String ?: "com.openautolink.companion"
-        minSdk = 26
+        minSdk = 31
         targetSdk = 36
         versionCode = (findProperty("appVersionCode") as? String)?.toIntOrNull() ?: 1
         versionName = (findProperty("appVersionName") as? String) ?: "0.1.0"
@@ -62,6 +62,8 @@ android {
         // This lint check is a false positive for Compose-only apps without Fragment dependency.
         disable += "InvalidFragmentVersionForActivityResult"
     }
+    ndkVersion = "28.2.13676358"
+    buildToolsVersion = "37.0.0"
 }
 
 dependencies {

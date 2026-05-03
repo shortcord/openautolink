@@ -186,6 +186,7 @@ echo "Building OpenAutoLink..."
 if ./gradlew :app:bundleRelease \
     -PoalVersionCode="$(grep -E '^oalVersionCode=' "${_versionPath}" | cut -d= -f2)" \
     -PoalVersionName="$(grep -E '^oalVersionName=' "${_versionPath}" | cut -d= -f2)" \
+    -PoalGitHash="${_currentGitRev}" \
     -PoalAppId="$(grep -E '^oalAppId=' "${_versionPath}" | cut -d= -f2)" \
     2>&1 | tee "${_buildOutputDir}/logs/assemble-app.log"; then
     echo "OpenAutoLink build succeeded. Moving Output to Build Directory..."
@@ -208,4 +209,3 @@ else
     rm -f "${_buildOutputDir}/../latest"
     ln -s "$(basename "${_buildOutputDir}")" "${_buildOutputDir}/../latest"
 fi
-
