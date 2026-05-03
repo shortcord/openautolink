@@ -154,16 +154,14 @@ class AasdkSession(
         OalLog.i(TAG, "Starting aasdk session (USB transport)")
         _usbConnectionManager?.stop()
         _usbConnectionManager = UsbConnectionManager(context, scope) { usbTransportPipe ->
-            scope.launch(Dispatchers.IO) {
-                OalLog.i(TAG, "USB transport ready — starting aasdk native session")
-                handleUsbConnection(usbTransportPipe)
-            }
+            OalLog.i(TAG, "USB transport ready — starting aasdk native session")
+            handleUsbConnection(usbTransportPipe)
         }
         _usbConnectionManager?.start()
     }
 
-    private fun handleUsbConnection(pipe: AasdkTransportPipe) {
-        if (!beginSessionStart("USB", pipe)) return
+    private fun handleUsbConnection(pipe: AasdkTransportPipe): Boolean {
+        if (!beginSessionStart("USB", pipe)) return false
         _connectionState.value = ConnectionState.CONNECTING
 
         OalLog.i(TAG, "Starting native aasdk session (USB): ${sdrConfig.videoWidth}x${sdrConfig.videoHeight}")
@@ -171,10 +169,12 @@ class AasdkSession(
         try {
             AasdkNative.nativeCreateSession()
             AasdkNative.nativeStartSession(pipe, this, sdrConfig)
+            return true
         } catch (e: Exception) {
             OalLog.e(TAG, "Native session start failed (USB): ${e.message}")
             finishSessionStartFailure(pipe)
             _connectionState.value = ConnectionState.DISCONNECTED
+            return false
         }
     }
 
