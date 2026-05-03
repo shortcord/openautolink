@@ -69,8 +69,6 @@ class MainActivity : ComponentActivity() {
 
         // Observe display mode changes reactively — applies immediately when
         // the user changes the setting, no app restart needed.
-        // Re-sends app_hello so the bridge can recompute pixel_aspect for the
-        // new usable display area (system bars visible vs hidden).
         lifecycleScope.launch {
             prefs.displayMode.collectLatest { mode ->
                 applyDisplayMode(mode)

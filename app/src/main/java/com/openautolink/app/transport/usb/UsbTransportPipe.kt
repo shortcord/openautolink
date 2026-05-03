@@ -24,7 +24,6 @@ class UsbTransportPipe(
     companion object {
         private const val TAG = "UsbTransportPipe"
         private const val BULK_TIMEOUT_MS = 1000
-        private const val READ_BUFFER_SIZE = 16384
     }
 
     @Volatile

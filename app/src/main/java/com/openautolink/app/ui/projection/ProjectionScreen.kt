@@ -181,7 +181,7 @@ fun ProjectionScreen(
                 .testTag("projectionSurface")
         }
 
-        // SurfaceView for video rendering — intercepts touch for forwarding to bridge
+        // SurfaceView for video rendering — intercepts touch for forwarding to Android Auto
         // Key on videoScalingMode so Compose recreates the SurfaceView when mode changes.
         // Without this, the old SurfaceView keeps its dimensions after switching modes.
         @SuppressLint("ClickableViewAccessibility")

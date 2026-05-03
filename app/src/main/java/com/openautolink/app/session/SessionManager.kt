@@ -54,7 +54,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Session orchestrator -- connects component islands, manages lifecycle.
- * aasdk JNI mode -- native aasdk C++ handles AA protocol via Nearby transport.
+ * aasdk JNI mode -- native aasdk C++ handles AA protocol over the selected
+ * USB or WiFi transport.
  */
 class SessionManager(
     externalScope: CoroutineScope,

@@ -14,12 +14,10 @@ import com.openautolink.app.diagnostics.OalLog
 import com.openautolink.app.transport.aasdk.AasdkTransportPipe
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -43,7 +41,8 @@ enum class UsbConnectionState {
  *   4. Opens bulk endpoints and creates AasdkTransportPipe
  *   5. Delivers the pipe to the session via [onTransportReady]
  *
- * Mirrors the lifecycle pattern of AaNearbyManager/TcpConnector.
+ * Note: [status], [connectionState], and [deviceDescription] live in the
+ * companion object so the UI can observe one global USB bring-up state.
  */
 class UsbConnectionManager(
     private val context: Context,
@@ -83,8 +82,6 @@ class UsbConnectionManager(
 
     @Volatile
     private var connectInFlight = false
-
-    private var scanJob: Job? = null
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -143,8 +140,6 @@ class UsbConnectionManager(
     fun stop() {
         if (!isRunning) return
         isRunning = false
-        scanJob?.cancel()
-        scanJob = null
         try {
             context.unregisterReceiver(usbReceiver)
         } catch (_: IllegalArgumentException) { }

@@ -844,7 +844,7 @@ private fun DisplayTab(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "Send accelerometer, gyroscope, and compass data to the bridge.",
+                    text = "Send accelerometer, gyroscope, and compass data to Android Auto.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

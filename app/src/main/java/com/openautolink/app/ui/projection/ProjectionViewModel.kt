@@ -94,7 +94,10 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     @Volatile private var lastTransportNetworkEventAt: Long = 0L
     private val trackedTransportNetworks = mutableSetOf<Long>()
 
-    /** Suppress config_echo DataStore writes while Settings is open. */
+    /**
+     * Kept for overlay API compatibility. Settings no longer need special
+     * ViewModel-side suppression when opened.
+     */
     fun setSettingsOpen(open: Boolean) {
     }
 

@@ -28,12 +28,11 @@ import java.net.Socket
 /**
  * AA session backed by native aasdk via JNI.
  *
- * Replaces DirectAaSession — same Nearby transport, but the AA wire protocol
- * is handled by the proven aasdk C++ library instead of the Kotlin port.
+ * Replaces DirectAaSession. The AA wire protocol is handled by the proven
+ * aasdk C++ library instead of the old Kotlin port.
  *
  * Data flow:
- *   Phone ←→ Nearby (companion app) ←→ AaNearbyManager ←→ streams
- *     → AasdkTransportPipe → JNI → aasdk C++ → JNI callbacks
+ *   Phone transport (USB or WiFi) → AasdkTransportPipe → JNI → aasdk C++ → JNI callbacks
  *     → AasdkSession flows → SessionManager → VideoDecoder/AudioPlayer
  */
 class AasdkSession(
