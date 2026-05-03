@@ -106,6 +106,8 @@ class AasdkSession(
     private var lastFailureWasProtocolError = false
 
     private var transportPipe: AasdkTransportPipe? = null
+    private val sessionStartLock = Any()
+    @Volatile private var sessionStartInFlight = false
 
     // -- Lifecycle --
 
@@ -162,40 +164,37 @@ class AasdkSession(
     }
 
     private fun handleUsbConnection(pipe: AasdkTransportPipe) {
+        if (!beginSessionStart("USB", pipe)) return
         _connectionState.value = ConnectionState.CONNECTING
 
         OalLog.i(TAG, "Starting native aasdk session (USB): ${sdrConfig.videoWidth}x${sdrConfig.videoHeight}")
-
-        transportPipe = pipe
 
         try {
             AasdkNative.nativeCreateSession()
             AasdkNative.nativeStartSession(pipe, this, sdrConfig)
         } catch (e: Exception) {
             OalLog.e(TAG, "Native session start failed (USB): ${e.message}")
-            pipe.close()
-            transportPipe = null
+            finishSessionStartFailure(pipe)
             _connectionState.value = ConnectionState.DISCONNECTED
         }
     }
 
     private fun handleConnection(socket: Socket) {
+        val candidatePipe = AasdkTransportPipe(socket.getInputStream(), socket.getOutputStream())
+        if (!beginSessionStart("transport", candidatePipe)) {
+            candidatePipe.close()
+            return
+        }
         _connectionState.value = ConnectionState.CONNECTING
-
-        val input = socket.getInputStream()
-        val output = socket.getOutputStream()
 
         OalLog.i(TAG, "Starting native aasdk session: ${sdrConfig.videoWidth}x${sdrConfig.videoHeight}")
 
-        transportPipe = AasdkTransportPipe(input, output)
-
         try {
             AasdkNative.nativeCreateSession()
-            AasdkNative.nativeStartSession(transportPipe!!, this, sdrConfig)
+            AasdkNative.nativeStartSession(candidatePipe, this, sdrConfig)
         } catch (e: Exception) {
             OalLog.e(TAG, "Native session start failed: ${e.message}")
-            transportPipe?.close()
-            transportPipe = null
+            finishSessionStartFailure(candidatePipe)
             _connectionState.value = ConnectionState.DISCONNECTED
         }
     }
@@ -212,6 +211,7 @@ class AasdkSession(
         AasdkNative.nativeStopSession()
         transportPipe?.close()
         transportPipe = null
+        sessionStartInFlight = false
         _connectionState.value = ConnectionState.DISCONNECTED
     }
 
@@ -237,6 +237,7 @@ class AasdkSession(
         AasdkNative.nativeStopSession()
         transportPipe?.close()
         transportPipe = null
+        sessionStartInFlight = false
         _connectionState.value = ConnectionState.DISCONNECTED
         // Now clear the explicitStop flag so the freshly-started session can
         // auto-reconnect normally if its connection later dies.
@@ -317,6 +318,7 @@ class AasdkSession(
         OalLog.i(TAG, "AA session started (native)")
         consecutiveReconnectFailures = 0
         lastFailureWasProtocolError = false
+        sessionStartInFlight = false
         scope.launch {
             _connectionState.value = ConnectionState.CONNECTED
             _controlMessages.emit(ControlMessage.PhoneConnected(phoneName = "", phoneType = "wireless"))
@@ -328,6 +330,7 @@ class AasdkSession(
         // Clean up dead transport
         transportPipe?.close()
         transportPipe = null
+        sessionStartInFlight = false
 
         scope.launch {
             _connectionState.value = ConnectionState.DISCONNECTED
@@ -598,5 +601,31 @@ class AasdkSession(
             "native",
             "event=$label ts=$timestampNs payload=$payloadText"
         )
+    }
+
+    private fun beginSessionStart(label: String, pipe: AasdkTransportPipe): Boolean {
+        synchronized(sessionStartLock) {
+            if (explicitStop) {
+                OalLog.i(TAG, "Ignoring $label transport because session is stopping")
+                pipe.close()
+                return false
+            }
+            if (sessionStartInFlight || transportPipe != null || _connectionState.value != ConnectionState.DISCONNECTED) {
+                OalLog.w(TAG, "Ignoring duplicate $label transport while session startup is already in progress")
+                pipe.close()
+                return false
+            }
+            sessionStartInFlight = true
+            transportPipe = pipe
+            return true
+        }
+    }
+
+    private fun finishSessionStartFailure(pipe: AasdkTransportPipe) {
+        pipe.close()
+        if (transportPipe === pipe) {
+            transportPipe = null
+        }
+        sessionStartInFlight = false
     }
 }

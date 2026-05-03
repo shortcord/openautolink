@@ -78,6 +78,12 @@ class UsbConnectionManager(
     @Volatile
     private var currentConnection: UsbDeviceConnection? = null
 
+    @Volatile
+    private var aoaSwitchInFlight = false
+
+    @Volatile
+    private var connectInFlight = false
+
     private var scanJob: Job? = null
 
     private val usbReceiver = object : BroadcastReceiver() {
@@ -120,6 +126,8 @@ class UsbConnectionManager(
         _connectionState.value = UsbConnectionState.IDLE
         _status.value = "Waiting for USB device..."
         _deviceDescription.value = null
+        aoaSwitchInFlight = false
+        connectInFlight = false
 
         val filter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
@@ -144,6 +152,8 @@ class UsbConnectionManager(
         _connectionState.value = UsbConnectionState.IDLE
         _status.value = "Stopped"
         _deviceDescription.value = null
+        aoaSwitchInFlight = false
+        connectInFlight = false
     }
 
     private fun scanExistingDevices() {
@@ -194,6 +204,8 @@ class UsbConnectionManager(
         _connectionState.value = UsbConnectionState.IDLE
         _status.value = "USB device disconnected"
         _deviceDescription.value = null
+        aoaSwitchInFlight = false
+        connectInFlight = false
     }
 
     private fun requestPermissionOrConnect(device: UsbDevice) {
@@ -213,12 +225,22 @@ class UsbConnectionManager(
 
     private fun onPermissionGranted(device: UsbDevice) {
         if (UsbConstants.isAccessoryDevice(device.vendorId, device.productId)) {
+            if (connectInFlight || currentPipe != null) {
+                OalLog.i(TAG, "Ignoring duplicate accessory connect callback for ${describeDevice(device)}")
+                return
+            }
             // Already in accessory mode — open endpoints
+            connectInFlight = true
             scope.launch(Dispatchers.IO) {
                 connectToAccessory(device)
             }
         } else {
+            if (aoaSwitchInFlight) {
+                OalLog.i(TAG, "Ignoring duplicate AOA switch request for ${describeDevice(device)}")
+                return
+            }
             // Need AOA switch first
+            aoaSwitchInFlight = true
             _connectionState.value = UsbConnectionState.SWITCHING_TO_ACCESSORY
             _status.value = "Switching to accessory mode..."
             scope.launch(Dispatchers.IO) {
@@ -233,6 +255,7 @@ class UsbConnectionManager(
             OalLog.e(TAG, "AOA switch failed")
             _status.value = "AOA switch failed"
             _connectionState.value = UsbConnectionState.IDLE
+            aoaSwitchInFlight = false
             return
         }
 
@@ -248,6 +271,7 @@ class UsbConnectionManager(
                 if (UsbConstants.isAccessoryDevice(d.vendorId, d.productId)) {
                     OalLog.i(TAG, "Accessory device found after AOA switch: ${d.deviceName}")
                     _connectionState.value = UsbConnectionState.ACCESSORY_DETECTED
+                    aoaSwitchInFlight = false
                     requestPermissionOrConnect(d)
                     return
                 }
@@ -258,6 +282,7 @@ class UsbConnectionManager(
         OalLog.e(TAG, "Accessory device not found after AOA switch ($attempts attempts)")
         _status.value = "Accessory not found after switch"
         _connectionState.value = UsbConnectionState.IDLE
+        aoaSwitchInFlight = false
     }
 
     private fun connectToAccessory(device: UsbDevice) {
@@ -269,6 +294,7 @@ class UsbConnectionManager(
             OalLog.e(TAG, "Failed to open accessory device: ${describeDevice(device)}")
             _status.value = "Failed to open device"
             _connectionState.value = UsbConnectionState.IDLE
+            connectInFlight = false
             return
         }
 
@@ -279,6 +305,7 @@ class UsbConnectionManager(
             connection.close()
             _status.value = "No bulk endpoints"
             _connectionState.value = UsbConnectionState.IDLE
+            connectInFlight = false
             return
         }
 
@@ -287,6 +314,7 @@ class UsbConnectionManager(
             connection.close()
             _status.value = "Failed to claim interface"
             _connectionState.value = UsbConnectionState.IDLE
+            connectInFlight = false
             return
         }
 
@@ -301,6 +329,7 @@ class UsbConnectionManager(
 
         _connectionState.value = UsbConnectionState.CONNECTED
         _status.value = "Connected via USB"
+        connectInFlight = false
 
         onTransportReady(transportPipe)
     }
@@ -337,6 +366,7 @@ class UsbConnectionManager(
         currentPipe?.close()
         currentPipe = null
         currentConnection = null
+        connectInFlight = false
     }
 
     private fun isHubOrSystemDevice(device: UsbDevice): Boolean {
