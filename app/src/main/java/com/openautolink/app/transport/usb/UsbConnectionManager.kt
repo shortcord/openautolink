@@ -299,7 +299,7 @@ class UsbConnectionManager(
         }
 
         // Find the bulk interface and endpoints
-        val (iface, epIn, epOut) = findBulkEndpoints(device)
+        val (iface, epIn, epOut, interfaceIndex) = findBulkEndpoints(device)
         if (iface == null || epIn == null || epOut == null) {
             OalLog.e(TAG, "No bulk endpoints found on accessory device: ${describeDevice(device)}")
             connection.close()
@@ -318,7 +318,11 @@ class UsbConnectionManager(
             return
         }
 
-        OalLog.i(TAG, "USB endpoints opened — IN: ${epIn.address} OUT: ${epOut.address} " +
+        if (!connection.setInterface(iface)) {
+            OalLog.w(TAG, "setInterface failed for interface #$interfaceIndex; continuing with claimed interface")
+        }
+
+        OalLog.i(TAG, "USB endpoints opened on interface #$interfaceIndex — IN: ${epIn.address} OUT: ${epOut.address} " +
                 "maxPacket: ${epIn.maxPacketSize}/${epOut.maxPacketSize}")
 
         currentConnection = connection
@@ -338,16 +342,20 @@ class UsbConnectionManager(
         val iface: UsbInterface?,
         val endpointIn: UsbEndpoint?,
         val endpointOut: UsbEndpoint?,
+        val interfaceIndex: Int,
     )
 
     private fun findBulkEndpoints(device: UsbDevice): BulkEndpoints {
+        val candidates = mutableListOf<BulkEndpoints>()
         for (i in 0 until device.interfaceCount) {
             val iface = device.getInterface(i)
             var epIn: UsbEndpoint? = null
             var epOut: UsbEndpoint? = null
+            var bulkCount = 0
             for (j in 0 until iface.endpointCount) {
                 val ep = iface.getEndpoint(j)
                 if (ep.type == android.hardware.usb.UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                    bulkCount++
                     if (ep.direction == android.hardware.usb.UsbConstants.USB_DIR_IN) {
                         epIn = ep
                     } else {
@@ -356,10 +364,25 @@ class UsbConnectionManager(
                 }
             }
             if (epIn != null && epOut != null) {
-                return BulkEndpoints(iface, epIn, epOut)
+                OalLog.i(
+                    TAG,
+                    "Bulk candidate interface #$i class=${iface.interfaceClass} bulkCount=$bulkCount " +
+                        "IN=${epIn.address}/${epIn.maxPacketSize} OUT=${epOut.address}/${epOut.maxPacketSize}"
+                )
+                candidates += BulkEndpoints(iface, epIn, epOut, i)
             }
         }
-        return BulkEndpoints(null, null, null)
+
+        if (candidates.isEmpty()) return BulkEndpoints(null, null, null, -1)
+
+        // AOA accessory+ADB devices (0x2D01) expose the accessory channel on interface 0.
+        if (device.productId == UsbConstants.ACC_ADB_PID) {
+            candidates.firstOrNull { it.interfaceIndex == 0 }?.let { return it }
+        }
+
+        // Prefer the simplest standard AOAP layout: first interface with one IN and one OUT bulk endpoint.
+        candidates.firstOrNull { it.interfaceIndex == 0 }?.let { return it }
+        return candidates.first()
     }
 
     private fun closePipe() {
