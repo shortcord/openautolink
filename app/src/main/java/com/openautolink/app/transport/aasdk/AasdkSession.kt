@@ -321,7 +321,12 @@ class AasdkSession(
         sessionStartInFlight = false
         scope.launch {
             _connectionState.value = ConnectionState.CONNECTED
-            _controlMessages.emit(ControlMessage.PhoneConnected(phoneName = "", phoneType = "wireless"))
+            _controlMessages.emit(
+                ControlMessage.PhoneConnected(
+                    phoneName = "",
+                    phoneType = if (transportMode == "usb") "usb" else "wireless"
+                )
+            )
         }
     }
 
