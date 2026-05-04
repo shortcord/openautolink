@@ -350,6 +350,7 @@ class SessionManager(
     private var screenReceiver: android.content.BroadcastReceiver? = null
     /** True when we proactively stopped the session for sleep; restart on wake. */
     @Volatile private var pausedForSleep = false
+    @Volatile private var pausedForSleepStopJob: Job? = null
     @Volatile private var videoClosedForAppFocusLoss = false
     /** Timestamp of the most recent SCREEN_ON / USER_PRESENT — used to suppress
      *  SCREEN_OFF that AAOS sometimes delivers seconds AFTER wake (queued during
@@ -1117,6 +1118,8 @@ class SessionManager(
             DiagnosticLog.i("transport", "Wake: restart paused session (${elapsed / 1000}s)")
             // Run on IO — start() reaches into JNI/SSL init.
             scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                pausedForSleepStopJob?.join()
+                pausedForSleepStopJob = null
                 aasdkSession?.start()
             }
             _clusterManager?.ensureAlive()
@@ -1184,7 +1187,7 @@ class SessionManager(
                             // Run aasdkSession.stop() off Main — it joins the C++
                             // io_thread via JNI and can take 100s of ms. Doing this
                             // on Main causes ANRs which are reported as crashes.
-                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            pausedForSleepStopJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                 aasdkSession?.stop()
                             }
                         }
@@ -1248,6 +1251,10 @@ class SessionManager(
 
     suspend fun restartVideoStreamAfterAppFocusGain() {
         if (!videoClosedForAppFocusLoss) return
+        if (_sessionState.value != SessionState.CONNECTED && _sessionState.value != SessionState.STREAMING) {
+            OalLog.i(TAG, "App focus gained — deferring video restart until session reconnects")
+            return
+        }
         videoClosedForAppFocusLoss = false
         OalLog.i(TAG, "App focus gained — restarting video stream")
         _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "App focus gained: restart video stream")
@@ -1390,6 +1397,11 @@ class SessionManager(
                 aasdkSession?.let { startLocationForwarding(it) }
                 _vehicleDataForwarder?.start()
                 _imuForwarder?.start()
+                if (videoClosedForAppFocusLoss) {
+                    scope.launch {
+                        restartVideoStreamAfterAppFocusGain()
+                    }
+                }
             }
             is ControlMessage.PhoneDisconnected -> {
                 _remoteDiagnostics?.log(DiagnosticLevel.INFO, "session", "Phone disconnected: ${message.reason}")
