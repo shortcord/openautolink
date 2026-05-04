@@ -29,6 +29,8 @@ class ClusterManager(private val context: Context) {
         private const val RELAUNCH_DELAY_MS = 2000L
         private const val RETRY_DELAY_MS = 4000L
         private const val BRING_BACK_DELAY_MS = 1000L
+        private const val BINDING_WATCHDOG_POLL_MS = 250L
+        private const val BINDING_WATCHDOG_TIMEOUT_MS = 3000L
         private const val PERMISSIONS_RETRY_DELAY_MS = 3000L
         private const val HEALTH_CHECK_DELAY_MS = 5000L
         private const val MAX_HEALTH_RETRIES = 3
@@ -45,6 +47,7 @@ class ClusterManager(private val context: Context) {
     private var enabled = false
     private var healthRetryCount = 0
     private var relaunching = false
+    private var bindingAttemptGeneration = 0
 
     /**
      * Enable or disable the cluster CarAppService component.
@@ -117,23 +120,17 @@ class ClusterManager(private val context: Context) {
             Log.i(TAG, "Launched CarAppActivity for Templates Host binding")
             DiagnosticLog.i("cluster", "Launched CarAppActivity for Templates Host binding")
 
-            // Schedule health check — if session doesn't come alive, retry
-            scheduleHealthCheck()
+            val bindingGeneration = ++bindingAttemptGeneration
 
-            // Bring main activity back — binding is IPC-based, doesn't need foreground
+            // Schedule health check — if session doesn't come alive, retry
+            scheduleHealthCheck(bindingGeneration)
+            scheduleBindingWatchdog(bindingGeneration)
+
+            // Always restore the projection activity after a short delay even if
+            // the host never completes binding; otherwise the temporary translucent
+            // CarAppActivity can sit above the video surface and steal touch.
             handler.postDelayed({
-                try {
-                    val mainActivity = Class.forName("${context.packageName}.MainActivity")
-                    val bringBack = Intent(context, mainActivity).apply {
-                        flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                                Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_NO_ANIMATION
-                    }
-                    context.startActivity(bringBack)
-                    Log.i(TAG, "Brought main activity back to foreground")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to bring main activity back: ${e.message}")
-                }
+                restoreProjectionForeground(removeBindingTask = false)
             }, BRING_BACK_DELAY_MS)
         } catch (e: Exception) {
             // Cluster service blocked or not available — graceful degradation
@@ -148,11 +145,13 @@ class ClusterManager(private val context: Context) {
      * If the cluster session hasn't come alive after HEALTH_CHECK_DELAY_MS,
      * tear down the stale task and retry the full binding chain.
      */
-    private fun scheduleHealthCheck() {
+    private fun scheduleHealthCheck(bindingGeneration: Int) {
         handler.postDelayed({
+            if (bindingGeneration != bindingAttemptGeneration) return@postDelayed
             if (!enabled) return@postDelayed
             if (ClusterBindingState.sessionAlive) {
                 Log.i(TAG, "Health check: cluster session alive")
+                restoreProjectionForeground(removeBindingTask = true)
                 healthRetryCount = 0
                 relaunching = false
                 return@postDelayed
@@ -161,6 +160,7 @@ class ClusterManager(private val context: Context) {
             if (healthRetryCount > MAX_HEALTH_RETRIES) {
                 Log.w(TAG, "Health check: max retries ($MAX_HEALTH_RETRIES) exceeded \u2014 giving up")
                 DiagnosticLog.w("cluster", "Cluster binding failed after $MAX_HEALTH_RETRIES retries")
+                restoreProjectionForeground(removeBindingTask = true)
                 healthRetryCount = 0
                 relaunching = false
                 return@postDelayed
@@ -171,6 +171,65 @@ class ClusterManager(private val context: Context) {
         }, HEALTH_CHECK_DELAY_MS)
     }
 
+    private fun scheduleBindingWatchdog(bindingGeneration: Int) {
+        fun poll(elapsedMs: Long) {
+            if (!enabled || bindingGeneration != bindingAttemptGeneration) return
+
+            if (ClusterBindingState.sessionAlive) {
+                Log.i(TAG, "Binding watchdog: cluster session alive")
+                restoreProjectionForeground(removeBindingTask = true)
+                return
+            }
+
+            if (elapsedMs >= BINDING_WATCHDOG_TIMEOUT_MS) {
+                Log.w(TAG, "Binding watchdog: session still not alive after ${elapsedMs}ms")
+                restoreProjectionForeground(removeBindingTask = false)
+                return
+            }
+
+            handler.postDelayed(
+                { poll(elapsedMs + BINDING_WATCHDOG_POLL_MS) },
+                BINDING_WATCHDOG_POLL_MS
+            )
+        }
+
+        handler.postDelayed({ poll(BINDING_WATCHDOG_POLL_MS) }, BINDING_WATCHDOG_POLL_MS)
+    }
+
+    private fun restoreProjectionForeground(removeBindingTask: Boolean) {
+        if (removeBindingTask) {
+            finishBindingTask()
+        }
+
+        try {
+            val mainActivity = Class.forName("${context.packageName}.MainActivity")
+            val bringBack = Intent(context, mainActivity).apply {
+                flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_NO_ANIMATION
+            }
+            context.startActivity(bringBack)
+            Log.i(TAG, "Brought main activity back to foreground")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to bring main activity back: ${e.message}")
+        }
+    }
+
+    private fun finishBindingTask() {
+        try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            for (appTask in am.appTasks) {
+                if (appTask.taskInfo.baseActivity?.className == CAR_APP_ACTIVITY_CLASS) {
+                    Log.i(TAG, "Finishing CarAppActivity task")
+                    appTask.finishAndRemoveTask()
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to finish CarAppActivity task: ${e.message}")
+        }
+    }
+
     /**
      * Tear down and re-establish the cluster binding chain.
      * Called when the cluster session is detected as dead, or when nav state needs reset.
@@ -179,21 +238,11 @@ class ClusterManager(private val context: Context) {
         Log.w(TAG, "Restarting cluster binding chain")
         DiagnosticLog.w("cluster", "Restarting cluster binding chain")
         ClusterNavigationState.clear()
+        bindingAttemptGeneration += 1
 
         // Find and finish the CarAppActivity task
-        try {
-            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            for (appTask in am.appTasks) {
-                if (appTask.taskInfo.baseActivity?.className == CAR_APP_ACTIVITY_CLASS) {
-                    Log.i(TAG, "Finishing CarAppActivity task")
-                    DiagnosticLog.w("cluster", "GM killed cluster session — finishing task and rebinding")
-                    appTask.finishAndRemoveTask()
-                    break
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to finish CarAppActivity task: ${e.message}")
-        }
+        DiagnosticLog.w("cluster", "GM killed cluster session — finishing task and rebinding")
+        finishBindingTask()
 
         handler.postDelayed({
             launchClusterBinding()
@@ -221,6 +270,8 @@ class ClusterManager(private val context: Context) {
     fun release() {
         setClusterEnabled(false)
         handler.removeCallbacksAndMessages(null)
+        bindingAttemptGeneration += 1
+        ClusterBindingState.clear()
         healthRetryCount = 0
         relaunching = false
     }

@@ -60,8 +60,15 @@ class OalClusterSession : Session() {
     private var scope: CoroutineScope? = null
     private var isNavigating = false
     private var hasSeenActiveNav = false
+    private var sessionRegistered = false
 
     override fun onCreateScreen(intent: Intent): Screen {
+        if (!sessionRegistered) {
+            val activeSessions = ClusterBindingState.onSessionCreated()
+            sessionRegistered = true
+            Log.i(TAG, "Session created; activeSessions=$activeSessions")
+        }
+
         val clusterScreen = OalClusterScreen(carContext)
         screen = clusterScreen
 
@@ -93,6 +100,11 @@ class OalClusterSession : Session() {
                 if (isNavigating) {
                     try { navigationManager?.navigationEnded() } catch (_: Exception) {}
                     isNavigating = false
+                }
+                if (sessionRegistered) {
+                    val activeSessions = ClusterBindingState.onSessionDestroyed()
+                    sessionRegistered = false
+                    Log.i(TAG, "Session destroyed; activeSessions=$activeSessions")
                 }
                 scope?.cancel()
                 scope = null

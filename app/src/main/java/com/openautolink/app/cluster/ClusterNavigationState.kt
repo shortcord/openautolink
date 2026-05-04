@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * Shared navigation state for cluster sessions.
  *
  * Singleton — populated by SessionManager when nav_state arrives from the bridge.
- * Consumed by [ClusterMainSession] to relay Trip data via NavigationManager.
+ * Consumed by the cluster service sessions to relay Trip data via NavigationManager.
  *
  * Separate from NavigationDisplay (which is per-session) because the cluster service
  * runs in its own process/session lifecycle independent of the main activity.
@@ -36,12 +36,32 @@ object ClusterNavigationState {
 }
 
 /**
- * Tracks whether a live ClusterMainSession exists.
+ * Tracks whether any live cluster session exists.
  *
  * Used by the activity to know whether it needs to re-launch CarAppActivity
  * to re-establish the Templates Host binding chain after teardown.
  */
 object ClusterBindingState {
     @Volatile
-    var sessionAlive = false
+    private var activeSessionCount = 0
+
+    val sessionAlive: Boolean
+        get() = activeSessionCount > 0
+
+    @Synchronized
+    fun onSessionCreated(): Int {
+        activeSessionCount += 1
+        return activeSessionCount
+    }
+
+    @Synchronized
+    fun onSessionDestroyed(): Int {
+        activeSessionCount = maxOf(0, activeSessionCount - 1)
+        return activeSessionCount
+    }
+
+    @Synchronized
+    fun clear() {
+        activeSessionCount = 0
+    }
 }

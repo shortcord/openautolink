@@ -64,9 +64,14 @@ class ClusterMainSession : Session() {
     private var isPrimary = false
     private var hasSeenActiveNav = false
     private var arrivalTimeoutJob: Job? = null
+    private var sessionRegistered = false
 
     override fun onCreateScreen(intent: Intent): Screen {
-        ClusterBindingState.sessionAlive = true
+        if (!sessionRegistered) {
+            val activeSessions = ClusterBindingState.onSessionCreated()
+            sessionRegistered = true
+            DiagnosticLog.i("cluster", "Cluster session created; activeSessions=$activeSessions")
+        }
 
         isPrimary = primarySession == null
         if (isPrimary) {
@@ -141,7 +146,11 @@ class ClusterMainSession : Session() {
                     scope = null
                     navigationManager = null
                 }
-                ClusterBindingState.sessionAlive = false
+                if (sessionRegistered) {
+                    val activeSessions = ClusterBindingState.onSessionDestroyed()
+                    sessionRegistered = false
+                    DiagnosticLog.i("cluster", "Cluster session destroyed; activeSessions=$activeSessions")
+                }
             }
         })
 

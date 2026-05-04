@@ -9,12 +9,11 @@ import androidx.car.app.validation.HostValidator
 /**
  * CarAppService for cluster navigation display.
  *
- * Returns [ClusterMainSession] which relays Trip data via NavigationManager.updateTrip().
- * This is the GM AAOS path — GM's internal OnStarTurnByTurnManager consumes the Trip data
- * and renders turn-by-turn on the instrument cluster using its own icon set.
+ * Returns either [ClusterMainSession] for GM-style relay hosts or [OalClusterSession]
+ * for standard AAOS hosts that render the cluster template directly.
  *
- * For standard AAOS platforms that render Screen.onGetTemplate() directly on the cluster,
- * a different session type would be needed (future work).
+ * GM's internal OnStarTurnByTurnManager consumes NavigationManager Trip data and renders
+ * turn-by-turn on the instrument cluster using its own icon set.
  *
  * This service does NOT initialize video, audio, or TCP connections.
  * It only consumes navigation state from [ClusterNavigationState].
@@ -35,6 +34,10 @@ class OalClusterService : CarAppService() {
 
     override fun onCreateSession(sessionInfo: SessionInfo): Session {
         Log.i(TAG, "Creating session: displayType=${sessionInfo.displayType}")
-        return ClusterMainSession()
+        return if (sessionInfo.displayType == SessionInfo.DISPLAY_TYPE_CLUSTER) {
+            OalClusterSession()
+        } else {
+            ClusterMainSession()
+        }
     }
 }
