@@ -18,7 +18,7 @@ class NavigationDisplayImpl : NavigationDisplay {
         // Turn events and distance events arrive as separate JNI callbacks with
         // partial fields.  Merge incoming fields onto the previous ManeuverState
         // so the cluster (and UI) always sees a complete snapshot.
-        val prev = _currentManeuver.value
+        val prev = if (state.replaceExisting) null else _currentManeuver.value
 
         val type = if (state.maneuver != null) ManeuverMapper.fromWire(state.maneuver) else prev?.type ?: ManeuverType.UNKNOWN
         val distanceMeters = state.distanceMeters ?: prev?.distanceMeters

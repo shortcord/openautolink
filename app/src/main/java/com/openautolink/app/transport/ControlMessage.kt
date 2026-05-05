@@ -45,7 +45,8 @@ sealed class ControlMessage {
         val timeToArrivalSeconds: Long? = null,
         val destDistanceMeters: Int? = null,
         val destDistanceDisplay: String? = null,
-        val destDistanceUnit: String? = null
+        val destDistanceUnit: String? = null,
+        val replaceExisting: Boolean = false
     ) : ControlMessage()
 
     object NavStateClear : ControlMessage()

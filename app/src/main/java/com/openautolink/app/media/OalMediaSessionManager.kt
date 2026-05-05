@@ -32,6 +32,7 @@ class OalMediaSessionManager(private val context: Context) {
 
     // Dedup: avoid redundant pushes to MediaSession
     private var lastPushedPlaying: Boolean? = null
+    private var lastPushedPositionMs: Long? = null
 
     // Album art cache: avoid redundant BitmapFactory decodes
     private var cachedArtHash = 0
@@ -138,6 +139,7 @@ class OalMediaSessionManager(private val context: Context) {
             cachedArtHash = 0
             cachedBitmap = null
             lastPushedPlaying = null
+            lastPushedPositionMs = null
             Log.i(TAG, "MediaSession released")
         }
     }
@@ -200,14 +202,18 @@ class OalMediaSessionManager(private val context: Context) {
                     builder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, bitmap)
                 }
             } else {
-                // Playback-only update (no new art) — preserve cached bitmap
-                cachedBitmap?.let { bitmap ->
-                    builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
-                    builder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, bitmap)
-                }
+                cachedArtHash = 0
+                cachedBitmap = null
             }
 
             session.setMetadata(builder.build())
+
+            // Some AAOS dashboard widgets do not repaint metadata changes until the
+            // playback state also changes. Re-push the latest known playback snapshot.
+            lastPushedPlaying?.let { playing ->
+                val state = if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+                session.setPlaybackState(buildPlaybackState(state, lastPushedPositionMs ?: 0))
+            }
         }
     }
 
@@ -217,8 +223,9 @@ class OalMediaSessionManager(private val context: Context) {
     fun updatePlaybackState(playing: Boolean, positionMs: Long) {
         synchronized(sessionLock) {
             val session = mediaSession ?: return
-            if (playing == lastPushedPlaying) return
+            if (playing == lastPushedPlaying && positionMs == lastPushedPositionMs) return
             lastPushedPlaying = playing
+            lastPushedPositionMs = positionMs
 
             val state = if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
             session.setPlaybackState(buildPlaybackState(state, positionMs))

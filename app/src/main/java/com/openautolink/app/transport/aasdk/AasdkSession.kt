@@ -478,7 +478,8 @@ class AasdkSession(
                 timeToArrivalSeconds = if (timeToArrivalSeconds > 0) timeToArrivalSeconds else null,
                 destDistanceMeters = if (destDistanceMeters > 0) destDistanceMeters else null,
                 destDistanceDisplay = destDistDisplay,
-                destDistanceUnit = destDistUnit
+                destDistanceUnit = destDistUnit,
+                replaceExisting = true
             ))
         }
     }
