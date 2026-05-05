@@ -1,8 +1,8 @@
 # OpenAutoLink Architecture
 
-Last reviewed against code: May 3, 2026.
+Last reviewed against code: May 5, 2026.
 
-OpenAutoLink is currently a bridgeless AAOS projection stack. The AAOS app runs the Android Auto head-unit protocol through aasdk C++ in-process via JNI. The phone companion app does not decode or interpret Android Auto; it starts a local Android Auto wireless session on the phone and relays that byte stream to the car app.
+OpenAutoLink is currently a bridgeless AAOS projection stack. The AAOS app runs the Android Auto head-unit protocol through aasdk C++ in-process via JNI. For the established WiFi modes, the phone companion app does not decode or interpret Android Auto; it starts a local Android Auto wireless session on the phone and relays that byte stream to the car app. The app also contains an experimental head-unit-native wireless mode where the AAOS app itself performs the Bluetooth and WiFi Direct bootstrap and accepts the Android Auto socket directly.
 
 The older SBC bridge and three-channel OAL protocol are not part of the active branch. See [protocol.md](protocol.md) only when working on historical bridge-mode code.
 
@@ -37,13 +37,35 @@ The TCP socket between the apps is a single bidirectional AA byte pipe. Video, a
 | Area | Current code | Responsibility |
 |------|--------------|----------------|
 | Discovery | `transport/PhoneDiscovery.kt`, `transport/direct/TcpConnector.kt` | Finds a running companion with mDNS, UDP broadcast, TCP identity probes, gateway fallback, or manual IP. |
+| Native wireless bootstrap | `transport/direct/AaBtHandshakeManager.kt`, `AaWifiDirectManager.kt` | Experimental no-companion path: exposes the AA Bluetooth RFCOMM bootstrap, creates a WiFi Direct group, and advertises `_aawireless._tcp`. |
 | AA transport | `transport/aasdk/AasdkSession.kt`, `AasdkTransportPipe.kt` | Wraps a connected `Socket` or USB pipe as blocking streams for native aasdk. |
 | AA protocol | `app/src/main/cpp/jni_session.*`, `jni_channel_handlers.*`, `jni_transport.*` | Version exchange, TLS/auth, service discovery response, heartbeat, channel handling, JNI callbacks. |
 | Session orchestration | `session/SessionManager.kt` | Connects transport output to video, audio, input, navigation, diagnostics, VHAL, GNSS, and IMU islands. |
 | Media | `video/`, `audio/` | Decodes projected video, plays per-purpose audio, captures mic audio when requested. |
 | Vehicle/input forwarding | `input/` | Sends touch, steering wheel, GNSS, IMU, and VHAL sensor data to the phone through aasdk. |
 
-`AasdkSession.transportMode` supports `"hotspot"`, `"nearby"`, and `"usb"` in code, but the app/companion workflow reviewed here is the TCP/hotspot path. Nearby transport code remains in the tree, while the phone companion UI currently forces stale Nearby preferences back to TCP.
+`AasdkSession.transportMode` supports `"native"`, `"hotspot"`, `"nearby"`, and `"usb"` in code. The maintained production workflow is still TCP/hotspot or USB; `native` is an experimental no-companion wireless mode, and Nearby transport code remains in the tree while the phone companion UI currently forces stale Nearby preferences back to TCP.
+
+## Experimental Native Wireless Topology
+
+```
+Android phone                                      AAOS head unit
+┌─────────────────────────────────────────┐        ┌──────────────────────────────────────┐
+│ Google Android Auto / Gearhead          │        │ OpenAutoLink AAOS app                 │
+│   pairs over Bluetooth                  │◄──────►│ AaBtHandshakeManager                  │
+│   joins WiFi Direct group               │◄──────►│ AaWifiDirectManager (group owner)     │
+│   connects to _aawireless._tcp :5288    │◄──────►│ AasdkSession server socket :5288      │
+│                 │                       │        │                 │                    │
+│                 ▼                       │        │                 ▼                    │
+│      stock Android Auto transport       │        │ JNI JniTransport + JniSession         │
+└─────────────────────────────────────────┘        │                 │                    │
+                                                   │ aasdk control/video/audio/etc.        │
+                                                   │                 │                    │
+                                                   │ SessionManager routes frames/events   │
+                                                   └──────────────────────────────────────┘
+```
+
+This mode avoids the companion app entirely. The hardest part is not the AA protocol itself, but getting the phone to recognize the AAOS app as a valid wireless head unit and initiate the connection on its own.
 
 ### Phone Companion (`companion/`)
 

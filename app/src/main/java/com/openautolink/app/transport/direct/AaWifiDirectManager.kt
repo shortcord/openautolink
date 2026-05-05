@@ -14,6 +14,9 @@ import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.openautolink.app.diagnostics.OalLog
 import java.net.Inet4Address
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Creates and manages a WiFi Direct P2P group for Native AA mode.
@@ -33,6 +36,9 @@ class AaWifiDirectManager(private val context: Context) :
 
     companion object {
         private const val TAG = "AaWifiDirect"
+
+        private val _status = MutableStateFlow("Idle")
+        val status: StateFlow<String> = _status.asStateFlow()
     }
 
     private val manager: WifiP2pManager? =
@@ -65,11 +71,14 @@ class AaWifiDirectManager(private val context: Context) :
         if (isRunning) return
         if (manager == null) {
             OalLog.e(TAG, "WiFi P2P not supported on this device")
+            _status.value = "WiFi Direct unsupported"
             return
         }
 
         isRunning = true
+        groupInfoRetries = 0
         channel = manager.initialize(context, context.mainLooper, null)
+        _status.value = "Starting WiFi Direct"
 
         val filter = IntentFilter().apply {
             addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
@@ -83,6 +92,8 @@ class AaWifiDirectManager(private val context: Context) :
     fun stop() {
         if (!isRunning) return
         isRunning = false
+        _status.value = "Idle"
+        handler.removeCallbacksAndMessages(null)
         try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
         manager?.removeGroup(channel, null)
         OalLog.i(TAG, "Stopped")
@@ -90,6 +101,7 @@ class AaWifiDirectManager(private val context: Context) :
 
     @SuppressLint("MissingPermission")
     private fun removeGroupAndCreate() {
+        _status.value = "Resetting old WiFi Direct group"
         manager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 OalLog.d(TAG, "Old group removed")
@@ -109,9 +121,12 @@ class AaWifiDirectManager(private val context: Context) :
     @SuppressLint("MissingPermission")
     private fun createNewGroup(retryCount: Int) {
         OalLog.i(TAG, "createGroup attempt ${retryCount + 1}")
+        _status.value = "Creating WiFi Direct group (attempt ${retryCount + 1})"
         manager?.createGroup(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 OalLog.i(TAG, "P2P Group created successfully!")
+                _status.value = "WiFi Direct group created; reading credentials"
+                handler.postDelayed({ manager?.requestGroupInfo(channel, this@AaWifiDirectManager) }, 500L)
             }
             override fun onFailure(reason: Int) {
                 val reasonStr = when (reason) {
@@ -122,9 +137,11 @@ class AaWifiDirectManager(private val context: Context) :
                 }
                 if (reason == WifiP2pManager.BUSY && retryCount < 5) {
                     OalLog.w(TAG, "createGroup BUSY — retrying in 2s (attempt ${retryCount + 1}/5)")
+                    _status.value = "WiFi Direct busy; retrying"
                     handler.postDelayed({ createNewGroup(retryCount + 1) }, 2000L)
                 } else {
                     OalLog.e(TAG, "createGroup FAILED: $reasonStr")
+                    _status.value = "WiFi Direct failed: $reasonStr"
                 }
             }
         })
@@ -135,9 +152,11 @@ class AaWifiDirectManager(private val context: Context) :
         if (info.groupFormed && info.isGroupOwner) {
             val goIp = info.groupOwnerAddress?.hostAddress ?: "unknown"
             OalLog.i(TAG, "Group formed — we are Group Owner. IP: $goIp")
+            _status.value = "WiFi Direct group formed"
             manager?.requestGroupInfo(channel, this)
         } else if (info.groupFormed) {
             OalLog.w(TAG, "Group formed but we are NOT the owner")
+            _status.value = "WiFi Direct group formed on peer"
         }
     }
 
@@ -150,6 +169,7 @@ class AaWifiDirectManager(private val context: Context) :
             val bssid = getP2pMac(group.`interface`)
 
             OalLog.i(TAG, "Group info: SSID=$ssid, BSSID=$bssid, interface=${group.`interface`}")
+            _status.value = "WiFi Direct credentials readying"
 
             if (ssid.isNotEmpty()) {
                 // Wait for IP to be assigned to the P2P interface
@@ -159,15 +179,18 @@ class AaWifiDirectManager(private val context: Context) :
                         var retries = 0
                         while (ip == null && retries < 15) {
                             OalLog.d(TAG, "Waiting for IP on ${group.`interface`} (${retries + 1}/15)")
+                            _status.value = "Waiting for WiFi Direct IP (${retries + 1}/15)"
                             Thread.sleep(1000)
                             ip = getP2pIp(group.`interface`)
                             retries++
                         }
                         val finalIp = ip ?: "192.168.49.1"
                         OalLog.i(TAG, "WiFi Direct ready: SSID=$ssid IP=$finalIp")
+                        _status.value = "WiFi Direct ready"
                         onCredentialsReady?.invoke(ssid, psk, finalIp, bssid)
                     } catch (e: Exception) {
                         OalLog.e(TAG, "Error getting P2P IP: ${e.message}")
+                        _status.value = "WiFi Direct IP lookup failed"
                     }
                 }.start()
             }
@@ -175,9 +198,11 @@ class AaWifiDirectManager(private val context: Context) :
             if (groupInfoRetries < 20) {
                 groupInfoRetries++
                 OalLog.w(TAG, "Group info null — retrying ($groupInfoRetries/20)")
+                _status.value = "Waiting for WiFi Direct group info ($groupInfoRetries/20)"
                 handler.postDelayed({ manager?.requestGroupInfo(channel, this) }, 1000L)
             } else {
                 OalLog.e(TAG, "Group info remained null after 20 retries")
+                _status.value = "WiFi Direct group info unavailable"
             }
         }
     }

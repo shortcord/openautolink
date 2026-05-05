@@ -1420,6 +1420,7 @@ private fun ConnectionHud(
 
             Text(
                 text = when (uiState.directTransport) {
+                    "native" -> "Native Wireless"
                     "usb" -> "USB"
                     "hotspot" -> "WiFi Hotspot"
                     "nearby" -> "Nearby"

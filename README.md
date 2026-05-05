@@ -63,6 +63,14 @@ OpenAutoLink embeds the [aasdk](https://github.com/opencardev/aasdk) v1.6 C++ li
 
 OpenAutoLink supports three transport options. Pick the one that matches how you want the phone and car to connect.
 
+**Native Wireless mode (experimental):**
+The AAOS app itself tries to behave like a wireless Android Auto head unit. It creates a WiFi Direct group, listens for the phone's Bluetooth RFCOMM bootstrap, advertises `_aawireless._tcp`, and accepts the Android Auto socket directly in the car app.
+
+- ✅ **No companion app required** when it works
+- ✅ Reuses the same native `aasdk` projection stack as the other modes once the phone connects
+- Requires the phone to already be paired to the car over Bluetooth
+- Experimental: behavior may vary across phones and AAOS builds
+
 **Car Hotspot mode (default, recommended):**
 The car's built-in WiFi hotspot is the network. One or more phones join it as clients. The companion app on each phone advertises itself via mDNS and a tiny identity probe; the car app discovers all connected phones, picks the preferred one (or shows a picker), and dials it directly over TCP.
 
@@ -101,6 +109,7 @@ The phone is plugged directly into the head unit's USB port. The AAOS app reques
 
 - **Car Hotspot mode (default)** — phones join the car's built-in WiFi like home WiFi. Multi-phone support: switch the active phone with one tap, no hotspot toggling
 - **Phone Hotspot mode** — phone is the AP, car is the client. Simpler single-phone fallback for cars without a built-in hotspot
+- **Native Wireless mode (experimental)** — no companion app; AAOS app boots Bluetooth RFCOMM + WiFi Direct and accepts Android Auto directly
 - **USB mode** — AOA v2 direct connection for wired setups
 - **aasdk v1.6 native protocol** — battle-tested C++ AA library via JNI, not a reimplementation
 - **EV battery data in Android Auto** — battery %, range, fuel type, charge port forwarded from VHAL into AA. Google Maps shows battery level alongside navigation
@@ -143,7 +152,7 @@ Open it from **Settings → EV** (its own tab in the Settings screen).
 |------|-------|
 | **AAOS vehicle** | Tested on 2024 Chevrolet Blazer EV. Other GM EVs likely work |
 | **Android phone** | Required for every transport |
-| **OpenAutoLink Companion app** | Required for Car Hotspot and Phone Hotspot modes |
+| **OpenAutoLink Companion app** | Required for Car Hotspot and Phone Hotspot modes. Not required for USB or Native Wireless |
 | **USB cable** | Required for USB mode |
 | **Google Play Console account** | To publish the AAOS app to your car |
 
@@ -157,7 +166,7 @@ Install the **OpenAutoLink Companion** app on your phone. It handles:
 
 You can either download a prebuilt APK from [GitHub Actions](https://github.com/mossyhub/openautolink/actions/workflows/build-companion.yml) (click the latest run → Artifacts → `companion-debug-apk`) or build it yourself from the `companion/` directory.
 
-If you only plan to use **USB mode**, you can skip the companion app entirely.
+If you only plan to use **USB mode** or **Native Wireless mode**, you can skip the companion app entirely.
 
 ## Quick Start
 
@@ -167,6 +176,7 @@ Pick one of these before setup:
 
 - **Car Hotspot**: recommended when the car has a built-in WiFi hotspot
 - **Phone Hotspot**: fallback for cars without a built-in hotspot
+- **Native Wireless**: experimental no-companion mode using Bluetooth + WiFi Direct from the AAOS app itself
 - **USB**: direct wired connection, no companion app required for transport
 
 ### 2. Install the Companion App (Phone, WiFi Modes Only)
@@ -193,7 +203,7 @@ adb install -r build/outputs/apk/debug/*.apk
 
 The companion APK is signed with the Android debug key, which is fine for sideloading.
 
-If you only plan to use **USB mode**, skip this step.
+If you only plan to use **USB mode** or **Native Wireless mode**, skip this step.
 
 ### 3. Build and Publish the Car App (AAOS)
 
@@ -321,6 +331,7 @@ The original architecture used an SBC (single-board computer) running a C++ brid
 | Doc | Purpose |
 |-----|---------|
 | [Architecture](docs/architecture.md) | Component islands and system structure |
+| [Native Wireless](docs/native-wireless.md) | Experimental no-companion wireless bootstrap on AAOS |
 | [Embedded Knowledge](docs/embedded-knowledge.md) | Lessons from real-car testing — **read before touching video/audio/VHAL** |
 | [USB Mode](docs/usb-mode.md) | Current USB transport architecture, AOA flow, and lifecycle |
 | [USB Transport Plan](docs/usb-transport-plan.md) | Original implementation plan kept for historical context |
@@ -332,6 +343,7 @@ The original architecture used an SBC (single-board computer) running a C++ brid
 ## Known Issues
 
 - **H.265 video may appear green-tinted** on first connection for 30–45 seconds. May be Qualcomm-specific — not yet confirmed on other SoCs
+- **Native Wireless mode is experimental** and not yet validated end-to-end on the production GM head unit. It depends on both WiFi Direct group creation and the phone accepting the Bluetooth wireless-AA bootstrap. Use USB or hotspot modes if you need a known-good path.
 
 If you encounter other problems, please [open an issue](https://github.com/mossyhub/openautolink/issues).
 

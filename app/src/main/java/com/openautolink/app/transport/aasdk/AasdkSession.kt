@@ -1,13 +1,17 @@
 package com.openautolink.app.transport.aasdk
 
 import android.content.Context
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.util.Log
 import com.openautolink.app.audio.AudioFrame
 import com.openautolink.app.diagnostics.OalLog
 import com.openautolink.app.transport.AudioPurpose
 import com.openautolink.app.transport.ConnectionState
 import com.openautolink.app.transport.ControlMessage
+import com.openautolink.app.transport.direct.AaBtHandshakeManager
 import com.openautolink.app.transport.direct.AaNearbyManager
+import com.openautolink.app.transport.direct.AaWifiDirectManager
 import com.openautolink.app.transport.direct.TcpConnector
 import com.openautolink.app.transport.usb.UsbConnectionManager
 import com.openautolink.app.video.VideoFrame
@@ -21,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.net.ServerSocket
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.Socket
@@ -42,6 +47,9 @@ class AasdkSession(
 
     companion object {
         private const val TAG = "AasdkSession"
+        private const val NATIVE_WIRELESS_PORT = 5288
+        private const val NATIVE_NSD_SERVICE_TYPE = "_aawireless._tcp."
+        private const val NATIVE_NSD_SERVICE_NAME = "OpenAutoLink"
         private const val NATIVE_EVENT_SESSION_STARTED = 1
         private const val NATIVE_EVENT_SESSION_STOPPED = 2
         private const val NATIVE_EVENT_ERROR = 3
@@ -86,7 +94,15 @@ class AasdkSession(
     // USB connection manager — only used in "usb" transport mode
     private var _usbConnectionManager: UsbConnectionManager? = null
 
-    /** Current transport mode: "nearby", "hotspot", or "usb" */
+    // Head-unit-native wireless bootstrap: BT RFCOMM + WiFi Direct + inbound TCP
+    private val btHandshake = AaBtHandshakeManager(scope)
+    private var wifiDirectManager: AaWifiDirectManager? = null
+    private var serverSocket: ServerSocket? = null
+    private var nativeServerJob: kotlinx.coroutines.Job? = null
+    private var nsdManager: NsdManager? = null
+    private var nsdRegistered = false
+
+    /** Current transport mode: "native", "nearby", "hotspot", or "usb" */
     var transportMode: String = "hotspot"
 
     /** Manual IP address for testing (emulator). Overrides gateway/mDNS discovery. */
@@ -117,9 +133,56 @@ class AasdkSession(
         _connectionState.value = ConnectionState.DISCONNECTED
 
         when (transportMode) {
+            "native" -> startNativeWireless()
             "hotspot" -> startTcp()
             "usb" -> startUsb()
             else -> startNearby()
+        }
+    }
+
+    private fun startNativeWireless() {
+        OalLog.i(TAG, "Starting aasdk session (native wireless transport)")
+        explicitStop = false
+        stopNativeWirelessBootstrap()
+
+        wifiDirectManager = AaWifiDirectManager(context).apply {
+            onCredentialsReady = { ssid, psk, ip, bssid ->
+                OalLog.i(TAG, "WiFi Direct ready: ssid=$ssid ip=$ip bssid=$bssid")
+                btHandshake.hotspotSsid = ssid
+                btHandshake.hotspotPassword = psk
+                btHandshake.hotspotBssid = bssid
+                btHandshake.hotspotIpAddress = ip
+                btHandshake.tcpPort = NATIVE_WIRELESS_PORT
+                sdrConfig.nativeWirelessEnabled = true
+                sdrConfig.nativeWirelessSsid = ssid
+                sdrConfig.nativeWirelessPassword = psk
+                sdrConfig.nativeWirelessBssid = bssid
+                sdrConfig.nativeWirelessIpAddress = ip
+                btHandshake.start()
+            }
+        }
+        wifiDirectManager?.start()
+
+        nativeServerJob = scope.launch(Dispatchers.IO) {
+            try {
+                serverSocket = ServerSocket(NATIVE_WIRELESS_PORT).apply { reuseAddress = true }
+                registerNativeWirelessNsd()
+                _connectionState.value = ConnectionState.DISCONNECTED
+                OalLog.i(TAG, "Listening for native wireless AA on port $NATIVE_WIRELESS_PORT")
+
+                while (true) {
+                    val client = serverSocket?.accept() ?: break
+                    OalLog.i(TAG, "Native wireless phone connected from ${client.inetAddress?.hostAddress}")
+                    handleConnection(client)
+                }
+            } catch (e: Exception) {
+                if (serverSocket != null && serverSocket?.isClosed == false) {
+                    OalLog.e(TAG, "Native wireless server error: ${e.message}")
+                }
+            } finally {
+                unregisterNativeWirelessNsd()
+                _connectionState.value = ConnectionState.DISCONNECTED
+            }
         }
     }
 
@@ -201,6 +264,7 @@ class AasdkSession(
     fun stop() {
         explicitStop = true
         OalLog.i(TAG, "Stopping aasdk session")
+        stopNativeWirelessBootstrap()
         _nearbyManager?.stop()
         _nearbyManager = null
         _tcpConnector?.stop()
@@ -243,10 +307,63 @@ class AasdkSession(
         explicitStop = false
         // Restart transport.
         when (transportMode) {
+            "native" -> startNativeWireless()
             "hotspot" -> startTcp()
             "usb" -> startUsb()
             else -> startNearby()
         }
+    }
+
+    private fun stopNativeWirelessBootstrap() {
+        btHandshake.stop()
+        wifiDirectManager?.stop()
+        wifiDirectManager = null
+        nativeServerJob?.cancel()
+        nativeServerJob = null
+        try { serverSocket?.close() } catch (_: Exception) {}
+        serverSocket = null
+        unregisterNativeWirelessNsd()
+    }
+
+    private fun registerNativeWirelessNsd() {
+        try {
+            nsdManager = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
+            val serviceInfo = NsdServiceInfo().apply {
+                serviceName = NATIVE_NSD_SERVICE_NAME
+                serviceType = NATIVE_NSD_SERVICE_TYPE
+                port = NATIVE_WIRELESS_PORT
+            }
+            nsdManager?.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, nativeNsdListener)
+            OalLog.i(TAG, "Native wireless NSD registered on port $NATIVE_WIRELESS_PORT")
+        } catch (e: Exception) {
+            OalLog.e(TAG, "Native wireless NSD registration failed: ${e.message}")
+        }
+    }
+
+    private fun unregisterNativeWirelessNsd() {
+        if (nsdRegistered) {
+            try {
+                nsdManager?.unregisterService(nativeNsdListener)
+            } catch (_: Exception) {}
+            nsdRegistered = false
+        }
+    }
+
+    private val nativeNsdListener = object : NsdManager.RegistrationListener {
+        override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
+            nsdRegistered = true
+            OalLog.i(TAG, "Native wireless NSD service registered: ${serviceInfo.serviceName}")
+        }
+
+        override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+            OalLog.e(TAG, "Native wireless NSD registration failed: error $errorCode")
+        }
+
+        override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {
+            nsdRegistered = false
+        }
+
+        override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
     }
 
     // -- Input forwarding (app → phone via native aasdk) --
@@ -359,6 +476,7 @@ class AasdkSession(
                 if (!explicitStop) {
                     OalLog.i(TAG, "Restarting transport connector")
                     when (transportMode) {
+                        "native" -> startNativeWireless()
                         "hotspot" -> startTcp()
                         "usb" -> startUsb()
                         else -> startNearby()

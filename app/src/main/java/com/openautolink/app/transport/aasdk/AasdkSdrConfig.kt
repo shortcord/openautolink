@@ -33,6 +33,21 @@ class AasdkSdrConfig(
     /** Bluetooth MAC address of the car (for BT pairing service). */
     @JvmField val btMacAddress: String = "",
 
+    /** Experimental no-companion wireless mode: advertise wifi projection service. */
+    @JvmField var nativeWirelessEnabled: Boolean = false,
+
+    /** WiFi Direct SSID to return via aasdk WifiProjectionService. */
+    @JvmField var nativeWirelessSsid: String = "",
+
+    /** WiFi Direct passphrase to return via aasdk WifiProjectionService. */
+    @JvmField var nativeWirelessPassword: String = "",
+
+    /** WiFi Direct BSSID to advertise in SDR. */
+    @JvmField var nativeWirelessBssid: String = "",
+
+    /** WiFi Direct group-owner IPv4 address (for diagnostics / future use). */
+    @JvmField var nativeWirelessIpAddress: String = "",
+
     /** Vehicle make (e.g. "Chevrolet"). */
     @JvmField val vehicleMake: String = "OpenAutoLink",
 

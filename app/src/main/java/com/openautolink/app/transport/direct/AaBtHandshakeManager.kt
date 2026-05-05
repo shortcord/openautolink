@@ -16,10 +16,11 @@ import kotlinx.coroutines.launch
 import java.io.DataInputStream
 import java.io.IOException
 import java.io.OutputStream
-import java.net.Inet4Address
-import java.net.NetworkInterface
 import java.nio.ByteBuffer
 import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Manages the AA wireless Bluetooth RFCOMM handshake for Direct Mode.
@@ -39,16 +40,20 @@ class AaBtHandshakeManager(private val scope: CoroutineScope) {
     companion object {
         private const val TAG = "AaBtHandshake"
         private val AA_UUID = UUID.fromString("4de17a00-52cb-11e6-bdf4-0800200c9a66")
-        private val HFP_UUID = UUID.fromString("0000111e-0000-1000-8000-00805f9b34fb")
+
+        private val _status = MutableStateFlow("Idle")
+        val status: StateFlow<String> = _status.asStateFlow()
     }
 
     private var aaServerSocket: BluetoothServerSocket? = null
-    private var hfpServerSocket: BluetoothServerSocket? = null
     private var serverJob: Job? = null
     private var isRunning = false
 
     var hotspotSsid: String = ""
     var hotspotPassword: String = ""
+    var hotspotBssid: String = "00:00:00:00:00:00"
+    var hotspotIpAddress: String = ""
+    var tcpPort: Int = 5288
 
     @SuppressLint("MissingPermission")
     fun checkCompatibility(): Boolean {
@@ -68,55 +73,42 @@ class AaBtHandshakeManager(private val scope: CoroutineScope) {
     @SuppressLint("MissingPermission")
     fun start() {
         if (isRunning) return
-        isRunning = true
 
         val adapter = BluetoothAdapter.getDefaultAdapter()
         if (adapter == null || !adapter.isEnabled) {
             OalLog.e(TAG, "Bluetooth not available or disabled")
+            _status.value = "Bluetooth unavailable"
             return
         }
 
-        serverJob = scope.launch(Dispatchers.IO) {
-            launch {
-                try {
-                    aaServerSocket = adapter.listenUsingRfcommWithServiceRecord("OpenAutoLink AA", AA_UUID)
-                    OalLog.i(TAG, "Listening on AA UUID")
-                    while (isRunning && isActive) {
-                        val socket = aaServerSocket?.accept() ?: break
-                        OalLog.i(TAG, "Phone connected via BT: ${socket.remoteDevice?.name}")
-                        launch(Dispatchers.IO) { handleHandshake(socket) }
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: IOException) {
-                    if (isRunning) OalLog.d(TAG, "AA server closed: ${e.message}")
-                }
-            }
+        isRunning = true
+        _status.value = "Listening for phone over Bluetooth"
 
-            launch {
-                try {
-                    hfpServerSocket = adapter.listenUsingRfcommWithServiceRecord("OpenAutoLink HFP", HFP_UUID)
-                    while (isRunning && isActive) {
-                        val socket = hfpServerSocket?.accept() ?: break
-                        launch(Dispatchers.IO) {
-                            try { socket.inputStream.read(ByteArray(1024)) }
-                            catch (_: Exception) {}
-                            finally { try { socket.close() } catch (_: Exception) {} }
-                        }
-                    }
-                } catch (_: IOException) {}
+        serverJob = scope.launch(Dispatchers.IO) {
+            try {
+                aaServerSocket = adapter.listenUsingRfcommWithServiceRecord("OpenAutoLink AA", AA_UUID)
+                OalLog.i(TAG, "Listening on AA UUID")
+                while (isRunning && isActive) {
+                    val socket = aaServerSocket?.accept() ?: break
+                    OalLog.i(TAG, "Phone connected via BT: ${socket.remoteDevice?.name}")
+                    _status.value = "Bluetooth handshake with ${socket.remoteDevice?.name ?: "phone"}"
+                    launch(Dispatchers.IO) { handleHandshake(socket) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                if (isRunning) OalLog.d(TAG, "AA server closed: ${e.message}")
             }
         }
     }
 
     fun stop() {
         isRunning = false
+        _status.value = "Idle"
         serverJob?.cancel()
         serverJob = null
         try { aaServerSocket?.close() } catch (_: Exception) {}
-        try { hfpServerSocket?.close() } catch (_: Exception) {}
         aaServerSocket = null
-        hfpServerSocket = null
     }
 
     @SuppressLint("MissingPermission")
@@ -128,10 +120,19 @@ class AaBtHandshakeManager(private val scope: CoroutineScope) {
             val input = DataInputStream(socket.inputStream)
             val output = socket.outputStream
 
-            val carIp = findCarIp() ?: run {
-                OalLog.e(TAG, "No car IP on WiFi - is car connected to phone hotspot?")
+            if (hotspotSsid.isBlank()) {
+                OalLog.e(TAG, "WiFi Direct credentials not ready yet")
+                _status.value = "WiFi Direct not ready"
                 return
             }
+
+            if (hotspotIpAddress.isBlank()) {
+                OalLog.e(TAG, "WiFi Direct IP not ready yet")
+                _status.value = "WiFi Direct IP not ready"
+                return
+            }
+
+            val carIp = hotspotIpAddress
             OalLog.i(TAG, "Car IP: $carIp")
 
             // Step 1: Wait for phone to send WifiInfoRequest (type 2)
@@ -153,7 +154,7 @@ class AaBtHandshakeManager(private val scope: CoroutineScope) {
             val wifiResponse = Wireless.WifiInfoResponse.newBuilder()
                 .setSsid(hotspotSsid)
                 .setKey(hotspotPassword)
-                .setBssid("00:00:00:00:00:00")
+                .setBssid(hotspotBssid)
                 .setSecurityMode(
                     if (hotspotPassword.isEmpty()) Wireless.SecurityMode.OPEN
                     else Wireless.SecurityMode.WPA2_PERSONAL
@@ -166,14 +167,15 @@ class AaBtHandshakeManager(private val scope: CoroutineScope) {
             // Step 3: Send WifiStartRequest (type 1) with car's IP and port
             val startRequest = Wireless.WifiStartRequest.newBuilder()
                 .setIpAddress(carIp)
-                .setPort(5288)
+                .setPort(tcpPort)
                 .setStatus(0)
                 .build()
             sendProtobuf(output, startRequest.toByteArray(), 1)
-            OalLog.i(TAG, "Sent WifiStartRequest (ip=$carIp, port=5288)")
+            OalLog.i(TAG, "Sent WifiStartRequest (ip=$carIp, port=$tcpPort)")
 
             // Step 4: Wait for phone's response/status
             OalLog.i(TAG, "BT handshake complete — waiting for phone to connect TCP")
+            _status.value = "Waiting for phone WiFi/TCP connect"
 
             // Keep socket alive during WiFi transition
             while (isRunning && socket.isConnected) {
@@ -183,6 +185,7 @@ class AaBtHandshakeManager(private val scope: CoroutineScope) {
             throw e
         } catch (e: Exception) {
             OalLog.e(TAG, "Handshake error: ${e.message}")
+            _status.value = "Handshake failed: ${e.message ?: "unknown"}"
         } finally {
             try { socket.close() } catch (_: Exception) {}
             OalLog.i(TAG, "BT socket closed")
@@ -208,42 +211,6 @@ class AaBtHandshakeManager(private val scope: CoroutineScope) {
             ByteArray(size).also { input.readFully(it) }
         } else ByteArray(0)
         return ProtobufMessage(type, payload)
-    }
-
-    private fun findCarIp(): String? {
-        try {
-            // Log all interfaces for diagnostics
-            for (ni in NetworkInterface.getNetworkInterfaces()) {
-                for (addr in ni.inetAddresses) {
-                    if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                        OalLog.d(TAG, "Interface ${ni.name}: ${addr.hostAddress}")
-                    }
-                }
-            }
-            // Check p2p interfaces first (WiFi Direct native mode)
-            for (ni in NetworkInterface.getNetworkInterfaces()) {
-                if (!ni.name.contains("p2p")) continue
-                for (addr in ni.inetAddresses) {
-                    if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                        OalLog.i(TAG, "Using P2P IP: ${addr.hostAddress} on ${ni.name}")
-                        return addr.hostAddress
-                    }
-                }
-            }
-            // Then any non-loopback IPv4 (wlan, eth, etc.)
-            for (ni in NetworkInterface.getNetworkInterfaces()) {
-                if (ni.name == "lo") continue
-                for (addr in ni.inetAddresses) {
-                    if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                        OalLog.i(TAG, "Using IP: ${addr.hostAddress} on ${ni.name}")
-                        return addr.hostAddress
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            OalLog.e(TAG, "Error enumerating interfaces: ${e.message}")
-        }
-        return null
     }
 
     private data class ProtobufMessage(val type: Int, val payload: ByteArray)

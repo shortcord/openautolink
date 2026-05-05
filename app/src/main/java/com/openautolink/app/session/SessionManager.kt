@@ -34,7 +34,9 @@ import com.openautolink.app.transport.ConnectionState
 import com.openautolink.app.transport.ControlMessage
 import com.openautolink.app.transport.aasdk.AasdkSession
 import com.openautolink.app.transport.aasdk.AasdkSdrConfig
+import com.openautolink.app.transport.direct.AaBtHandshakeManager
 import com.openautolink.app.transport.direct.AaNearbyManager
+import com.openautolink.app.transport.direct.AaWifiDirectManager
 import com.openautolink.app.transport.usb.UsbConnectionManager
 import com.openautolink.app.video.DecoderState
 import com.openautolink.app.video.MediaCodecDecoder
@@ -62,6 +64,16 @@ class SessionManager(
     private val context: Context? = null,
     private val audioManager: AudioManager? = null
 ) {
+
+    private fun nativeWirelessStatusLabel(): String {
+        val wifi = AaWifiDirectManager.status.value
+        val bt = AaBtHandshakeManager.status.value
+        return when {
+            wifi == "WiFi Direct ready" -> "Native wireless: $bt"
+            wifi == "Idle" -> "Native wireless: $bt"
+            else -> "Native wireless: $wifi"
+        }
+    }
 
     companion object {
         private const val TAG = "SessionManager"
@@ -228,7 +240,7 @@ class SessionManager(
     private val _transportMode = MutableStateFlow("hotspot")
     val transportMode: StateFlow<String> = _transportMode.asStateFlow()
 
-    // Multi-phone (only active in Nearby mode)
+    // Multi-phone / wireless identity helpers
     private val _phoneName = MutableStateFlow<String?>(null)
     val phoneName: StateFlow<String?> = _phoneName.asStateFlow()
     val connectedPhoneName: StateFlow<String?> = AaNearbyManager.connectedPhoneName
@@ -734,7 +746,7 @@ class SessionManager(
         _touchWidth.value = resW
         _touchHeight.value = resH
 
-        // Multi-phone: only relevant in nearby mode
+        // Phone-name auto-persist: only relevant in discovery-based wireless modes.
         if (directTransport == "nearby") {
             session.defaultPhoneName = _defaultPhoneName
             session.onPhoneConnected = { phoneName ->
@@ -759,6 +771,7 @@ class SessionManager(
                 _sessionState.value = newState
                 _statusMessage.value = when (newState) {
                     SessionState.IDLE -> when (directTransport) {
+                        "native" -> nativeWirelessStatusLabel()
                         "nearby" -> "Nearby: ${AaNearbyManager.status.value}"
                         "usb" -> "USB: ${UsbConnectionManager.status.value}"
                         else -> "Searching for phone…"
@@ -814,6 +827,23 @@ class SessionManager(
                 AaNearbyManager.status.collect { nearbyStatus ->
                     if (_sessionState.value == SessionState.IDLE) {
                         _statusMessage.value = "Nearby: $nearbyStatus"
+                    }
+                }
+            }
+        }
+
+        if (directTransport == "native") {
+            scope.launch {
+                AaBtHandshakeManager.status.collect { nativeStatus ->
+                    if (_sessionState.value == SessionState.IDLE) {
+                        _statusMessage.value = nativeWirelessStatusLabel()
+                    }
+                }
+            }
+            scope.launch {
+                AaWifiDirectManager.status.collect {
+                    if (_sessionState.value == SessionState.IDLE) {
+                        _statusMessage.value = nativeWirelessStatusLabel()
                     }
                 }
             }

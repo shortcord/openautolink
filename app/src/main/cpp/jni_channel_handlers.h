@@ -31,6 +31,8 @@
 #include <aasdk/Channel/PhoneStatus/PhoneStatusService.hpp>
 #include <aasdk/Channel/Bluetooth/IBluetoothServiceEventHandler.hpp>
 #include <aasdk/Channel/Bluetooth/BluetoothService.hpp>
+#include <aasdk/Channel/WifiProjection/IWifiProjectionServiceEventHandler.hpp>
+#include <aasdk/Channel/WifiProjection/WifiProjectionService.hpp>
 #include <aasdk/Channel/Promise.hpp>
 
 namespace openautolink::jni {
@@ -259,6 +261,32 @@ private:
 
     boost::asio::io_service::strand& strand_;
     std::shared_ptr<aasdk::channel::bluetooth::BluetoothService> channel_;
+    JniSession& session_;
+};
+
+// ============================================================================
+// WiFi Projection Handler
+// ============================================================================
+
+class JniWifiProjectionHandler
+    : public aasdk::channel::wifiprojection::IWifiProjectionServiceEventHandler
+    , public std::enable_shared_from_this<JniWifiProjectionHandler>
+{
+public:
+    JniWifiProjectionHandler(boost::asio::io_service::strand& strand,
+                             std::shared_ptr<aasdk::channel::wifiprojection::WifiProjectionService> channel,
+                             JniSession& session);
+
+    void start();
+
+private:
+    void onWifiCredentialsRequest(
+        const aap_protobuf::service::wifiprojection::message::WifiCredentialsRequest& request) override;
+    void onChannelOpenRequest(const aap_protobuf::service::control::message::ChannelOpenRequest& request) override;
+    void onChannelError(const aasdk::error::Error& e) override;
+
+    boost::asio::io_service::strand& strand_;
+    std::shared_ptr<aasdk::channel::wifiprojection::WifiProjectionService> channel_;
     JniSession& session_;
 };
 

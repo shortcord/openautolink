@@ -39,6 +39,7 @@
 #include <aap_protobuf/service/inputsource/InputSourceService.pb.h>
 #include <aap_protobuf/service/bluetooth/BluetoothService.pb.h>
 #include <aap_protobuf/service/bluetooth/message/BluetoothPairingMethod.pb.h>
+#include <aap_protobuf/service/wifiprojection/WifiProjectionService.pb.h>
 #include <aap_protobuf/service/inputsource/message/TouchScreenType.pb.h>
 #include <aap_protobuf/service/navigationstatus/NavigationStatusService.pb.h>
 #include <aap_protobuf/shared/MessageStatus.pb.h>
@@ -288,6 +289,7 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     sdrConfig_.marginHeight = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "marginHeight", "I"));
     sdrConfig_.pixelAspectE4 = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "pixelAspectE4", "I"));
     sdrConfig_.driverPosition = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "driverPosition", "I"));
+    sdrConfig_.nativeWirelessEnabled = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "nativeWirelessEnabled", "Z"));
 
     // Read string fields
     auto readString = [&](const char* field) -> std::string {
@@ -301,6 +303,10 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
         return result;
     };
     sdrConfig_.btMac = readString("btMacAddress");
+    sdrConfig_.nativeWirelessSsid = readString("nativeWirelessSsid");
+    sdrConfig_.nativeWirelessPassword = readString("nativeWirelessPassword");
+    sdrConfig_.nativeWirelessBssid = readString("nativeWirelessBssid");
+    sdrConfig_.nativeWirelessIpAddress = readString("nativeWirelessIpAddress");
     sdrConfig_.vehicleMake = readString("vehicleMake");
     sdrConfig_.vehicleModel = readString("vehicleModel");
     sdrConfig_.vehicleYear = readString("vehicleYear");
@@ -417,6 +423,11 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
         // Bluetooth channel (only if BT MAC configured)
         if (!sdrConfig_.btMac.empty()) {
             bluetoothChannel_ = std::make_shared<aasdk::channel::bluetooth::BluetoothService>(
+                *strand_, messenger_);
+        }
+
+        if (sdrConfig_.nativeWirelessEnabled) {
+            wifiProjectionChannel_ = std::make_shared<aasdk::channel::wifiprojection::WifiProjectionService>(
                 *strand_, messenger_);
         }
 
@@ -1125,7 +1136,13 @@ void JniSession::startAllHandlers()
         bluetoothHandler_->start();
     }
 
-    LOGI("All %d handlers started", 9);
+    if (wifiProjectionChannel_) {
+        wifiProjectionHandler_ = std::make_shared<JniWifiProjectionHandler>(
+            *strand_, wifiProjectionChannel_, *this);
+        wifiProjectionHandler_->start();
+    }
+
+    LOGI("All handlers started");
 
     // Send initial ping (bridge does this — phone expects HU to initiate pings)
     sendPing();
@@ -1420,6 +1437,13 @@ void JniSession::buildServiceDiscoveryResponse(
             aap_protobuf::service::bluetooth::message::BLUETOOTH_PAIRING_PIN);
         bs->add_supported_pairing_methods(
             aap_protobuf::service::bluetooth::message::BLUETOOTH_PAIRING_NUMERIC_COMPARISON);
+    }
+
+    if (sdrConfig_.nativeWirelessEnabled && !sdrConfig_.nativeWirelessBssid.empty()) {
+        auto* svc = response.add_channels();
+        svc->set_id(static_cast<int32_t>(aasdk::messenger::ChannelId::WIFI_PROJECTION));
+        auto* ws = svc->mutable_wifi_projection_service();
+        ws->set_car_wifi_bssid(sdrConfig_.nativeWirelessBssid);
     }
 
     // ---- Navigation Status (IMAGE mode, matches bridge) ----

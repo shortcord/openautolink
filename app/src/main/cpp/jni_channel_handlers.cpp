@@ -41,6 +41,8 @@
 #include <aap_protobuf/service/bluetooth/message/BluetoothPairingRequest.pb.h>
 #include <aap_protobuf/service/bluetooth/message/BluetoothPairingResponse.pb.h>
 #include <aap_protobuf/service/bluetooth/message/BluetoothAuthenticationData.pb.h>
+#include <aap_protobuf/service/wifiprojection/message/WifiCredentialsRequest.pb.h>
+#include <aap_protobuf/service/wifiprojection/message/WifiCredentialsResponse.pb.h>
 #include <aap_protobuf/service/media/sink/message/KeyBindingResponse.pb.h>
 #include <aap_protobuf/shared/MessageStatus.pb.h>
 
@@ -1044,16 +1046,42 @@ void JniBluetoothHandler::onChannelOpenRequest(
 void JniBluetoothHandler::onBluetoothPairingRequest(
     const aap_protobuf::service::bluetooth::message::BluetoothPairingRequest& request)
 {
-    LOGI("Bluetooth pairing request");
+    LOGI("Bluetooth pairing request: phone=%s method=%d",
+         request.phone_address().c_str(), static_cast<int>(request.pairing_method()));
     logProtoRaw("BTPairing", request);
-    // In JNI mode, BT pairing is handled by Nearby Ã¢â‚¬â€ just acknowledge
+
+    aap_protobuf::service::bluetooth::message::BluetoothPairingResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    response.set_already_paired(true);
+
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    const auto pairingMethod = request.pairing_method();
+    promise->then(
+        [this, pairingMethod]() {
+            LOGI("Sending Bluetooth authentication data (method=%d)", static_cast<int>(pairingMethod));
+            aap_protobuf::service::bluetooth::message::BluetoothAuthenticationData data;
+
+            // Mirror OpenAuto's minimal known-good flow: acknowledge pairing,
+            // then provide placeholder auth data immediately so the phone can
+            // advance to its Bluetooth auth result step.
+            data.set_auth_data("123456");
+            data.set_pairing_method(pairingMethod);
+
+            auto authPromise = aasdk::channel::SendPromise::defer(strand_);
+            authPromise->then([]() {}, [this](const auto& e) { this->onChannelError(e); });
+            channel_->sendBluetoothAuthenticationData(data, std::move(authPromise));
+            channel_->receive(shared_from_this());
+        },
+        [this](const auto& e) { this->onChannelError(e); }
+    );
+    channel_->sendBluetoothPairingResponse(response, std::move(promise));
     channel_->receive(shared_from_this());
 }
 
 void JniBluetoothHandler::onBluetoothAuthenticationResult(
     const aap_protobuf::service::bluetooth::message::BluetoothAuthenticationResult& result)
 {
-    LOGI("Bluetooth auth result");
+    LOGI("Bluetooth auth result: status=%d", static_cast<int>(result.status()));
     logProtoRaw("BTAuth", result);
     channel_->receive(shared_from_this());
 }
@@ -1061,6 +1089,65 @@ void JniBluetoothHandler::onBluetoothAuthenticationResult(
 void JniBluetoothHandler::onChannelError(const aasdk::error::Error& e)
 {
     session_.reportChannelError("bluetooth", e);
+}
+
+// ============================================================================
+// WiFi Projection Handler
+// ============================================================================
+
+JniWifiProjectionHandler::JniWifiProjectionHandler(
+    boost::asio::io_service::strand& strand,
+    std::shared_ptr<aasdk::channel::wifiprojection::WifiProjectionService> channel,
+    JniSession& session)
+    : strand_(strand), channel_(std::move(channel)), session_(session)
+{
+}
+
+void JniWifiProjectionHandler::start()
+{
+    channel_->receive(shared_from_this());
+}
+
+void JniWifiProjectionHandler::onChannelOpenRequest(
+    const aap_protobuf::service::control::message::ChannelOpenRequest& request)
+{
+    LOGI("WiFi projection channel open");
+    logProtoRaw("WifiProjectionOpen", request);
+    aap_protobuf::service::control::message::ChannelOpenResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([]() {}, [this](const auto& e) { this->onChannelError(e); });
+    channel_->sendChannelOpenResponse(response, std::move(promise));
+    channel_->receive(shared_from_this());
+}
+
+void JniWifiProjectionHandler::onWifiCredentialsRequest(
+    const aap_protobuf::service::wifiprojection::message::WifiCredentialsRequest& request)
+{
+    LOGI("WiFi credentials request");
+    logProtoRaw("WifiCredentialsRequest", request);
+
+    aap_protobuf::service::wifiprojection::message::WifiCredentialsResponse response;
+    if (!session_.nativeWirelessPassword().empty()) {
+        response.set_car_wifi_password(session_.nativeWirelessPassword());
+        response.set_car_wifi_security_mode(
+            aap_protobuf::service::wifiprojection::message::WPA2_PERSONAL);
+    } else {
+        response.set_car_wifi_security_mode(
+            aap_protobuf::service::wifiprojection::message::OPEN);
+    }
+    response.set_car_wifi_ssid(session_.nativeWirelessSsid());
+    response.set_access_point_type(aap_protobuf::service::wifiprojection::message::STATIC);
+
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([]() {}, [this](const auto& e) { this->onChannelError(e); });
+    channel_->sendWifiCredentialsResponse(response, std::move(promise));
+    channel_->receive(shared_from_this());
+}
+
+void JniWifiProjectionHandler::onChannelError(const aasdk::error::Error& e)
+{
+    session_.reportChannelError("wifi-projection", e);
 }
 
 } // namespace openautolink::jni

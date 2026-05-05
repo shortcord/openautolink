@@ -232,6 +232,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { preferences.setDirectTransport("usb") }
     }
 
+    fun selectNativeWirelessTransport() {
+        viewModelScope.launch { preferences.setDirectTransport("native") }
+    }
+
     fun selectPhoneHotspotTransport() {
         viewModelScope.launch {
             preferences.setDirectTransport("hotspot")

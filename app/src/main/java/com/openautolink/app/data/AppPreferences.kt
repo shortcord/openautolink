@@ -158,7 +158,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_VIDEO_SCALING_MODE = "crop" // "letterbox" or "crop"
         const val DEFAULT_HOTSPOT_SSID = ""
         const val DEFAULT_HOTSPOT_PASSWORD = ""
-        const val DEFAULT_DIRECT_TRANSPORT = "hotspot" // "nearby", "hotspot", "usb"
+        const val DEFAULT_DIRECT_TRANSPORT = "hotspot" // "native", "nearby", "hotspot", "usb"
         const val DEFAULT_MANUAL_IP_ENABLED = false
         const val DEFAULT_MANUAL_IP_ADDRESS = ""
         const val DEFAULT_AA_RESOLUTION = "1080p" // "480p", "720p", "1080p", "1440p", "4k"
@@ -286,7 +286,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         // Migrate any saved "nearby" preference to "hotspot" — Nearby mode is
         // disabled in the UI for now (see SettingsScreen) because the system
         // permissions needed for the BT→WiFi handoff aren't grantable on GM
-        // AAOS.
+        // AAOS. The experimental head-unit-native mode uses "native" instead.
         val raw = prefs[DIRECT_TRANSPORT] ?: DEFAULT_DIRECT_TRANSPORT
         if (raw == "nearby") "hotspot" else raw
     }

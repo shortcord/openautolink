@@ -52,6 +52,8 @@
 #include <aasdk/Channel/MediaPlaybackStatus/IMediaPlaybackStatusServiceEventHandler.hpp>
 #include <aasdk/Channel/PhoneStatus/PhoneStatusService.hpp>
 #include <aasdk/Channel/PhoneStatus/IPhoneStatusServiceEventHandler.hpp>
+#include <aasdk/Channel/WifiProjection/WifiProjectionService.hpp>
+#include <aasdk/Channel/WifiProjection/IWifiProjectionServiceEventHandler.hpp>
 
 namespace openautolink::jni {
 
@@ -64,6 +66,7 @@ class JniMicHandler;
 class JniMediaStatusHandler;
 class JniPhoneStatusHandler;
 class JniBluetoothHandler;
+class JniWifiProjectionHandler;
 
 /**
  * Owns the aasdk session lifecycle. Implements control + video handler
@@ -253,6 +256,7 @@ private:
     std::shared_ptr<aasdk::channel::mediaplaybackstatus::MediaPlaybackStatusService> mediaStatusChannel_;
     std::shared_ptr<aasdk::channel::phonestatus::PhoneStatusService> phoneStatusChannel_;
     std::shared_ptr<aasdk::channel::bluetooth::BluetoothService> bluetoothChannel_;
+    std::shared_ptr<aasdk::channel::wifiprojection::WifiProjectionService> wifiProjectionChannel_;
 
     // Separate handler instances (one per channel type)
     std::shared_ptr<JniAudioSinkHandler> mediaAudioHandler_;
@@ -266,6 +270,7 @@ private:
     std::shared_ptr<JniMediaStatusHandler> mediaStatusHandler_;
     std::shared_ptr<JniPhoneStatusHandler> phoneStatusHandler_;
     std::shared_ptr<JniBluetoothHandler> bluetoothHandler_;
+    std::shared_ptr<JniWifiProjectionHandler> wifiProjectionHandler_;
 
     std::atomic<bool> stopped_{false};
     std::atomic<bool> streaming_{false};
@@ -296,6 +301,11 @@ public:
      */
     void reportChannelError(const char* channelName, const aasdk::error::Error& e);
 
+    const std::string& nativeWirelessSsid() const { return sdrConfig_.nativeWirelessSsid; }
+    const std::string& nativeWirelessPassword() const { return sdrConfig_.nativeWirelessPassword; }
+    const std::string& nativeWirelessBssid() const { return sdrConfig_.nativeWirelessBssid; }
+    bool nativeWirelessEnabled() const { return sdrConfig_.nativeWirelessEnabled; }
+
     /**
      * Force-stop the session asynchronously without joining ioThread (safe
      * to call from io thread). Notifies Kotlin via onSessionStopped, which
@@ -316,6 +326,11 @@ private:
         int marginHeight = 0;
         int pixelAspectE4 = 0;
         std::string btMac;
+        bool nativeWirelessEnabled = false;
+        std::string nativeWirelessSsid;
+        std::string nativeWirelessPassword;
+        std::string nativeWirelessBssid;
+        std::string nativeWirelessIpAddress;
         std::string vehicleMake;
         std::string vehicleModel;
         std::string vehicleYear;

@@ -75,6 +75,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.openautolink.app.BuildConfig
 import com.openautolink.app.session.SessionState
 import com.openautolink.app.data.AppPreferences
+import com.openautolink.app.transport.direct.AaBtHandshakeManager
+import com.openautolink.app.transport.direct.AaWifiDirectManager
 import com.openautolink.app.transport.usb.UsbConnectionManager
 import androidx.compose.material3.FilterChip
 
@@ -322,6 +324,9 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
         val knownPhones by viewModel.knownPhones.collectAsStateWithLifecycle()
         val defaultPhoneId by viewModel.defaultPhoneId.collectAsStateWithLifecycle()
         val isUsbTransport = uiState.directTransport == "usb"
+        val isNativeTransport = uiState.directTransport == "native"
+        val nativeBtStatus by AaBtHandshakeManager.status.collectAsStateWithLifecycle()
+        val nativeWifiStatus by AaWifiDirectManager.status.collectAsStateWithLifecycle()
 
         SectionHeader("Transport")
         Spacer(modifier = Modifier.height(8.dp))
@@ -330,19 +335,23 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             listOf(
+                "native" to "Native Wireless",
                 "usb" to "USB",
                 AppPreferences.CONNECTION_MODE_CAR_HOTSPOT to "Car Hotspot",
                 AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT to "Phone Hotspot",
             ).forEach { (mode, label) ->
                 val selected = if (mode == "usb") {
                     isUsbTransport
+                } else if (mode == "native") {
+                    isNativeTransport
                 } else {
-                    !isUsbTransport && connectionMode == mode
+                    !isUsbTransport && !isNativeTransport && connectionMode == mode
                 }
                 FilterChip(
                     selected = selected,
                     onClick = {
                         when (mode) {
+                            "native" -> viewModel.selectNativeWirelessTransport()
                             "usb" -> viewModel.selectUsbTransport()
                             AppPreferences.CONNECTION_MODE_CAR_HOTSPOT -> viewModel.selectCarHotspotTransport()
                             AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT -> viewModel.selectPhoneHotspotTransport()
@@ -354,6 +363,8 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
         }
         Text(
             text = when {
+                isNativeTransport ->
+                    "Experimental no-companion wireless Android Auto. The AAOS app behaves like a wireless head unit: it brings up WiFi Direct, waits for the phone's Bluetooth RFCOMM handshake, then accepts Android Auto directly on the car. Pair the phone over Bluetooth first."
                 isUsbTransport ->
                     "Direct wired Android Auto over AOA v2. No companion app or WiFi is required. Plug the phone into the car's USB port and approve the USB permission prompt."
                 connectionMode == AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT ->
@@ -380,6 +391,32 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             )
             Text(
                 text = "OpenAutoLink listens for a phone on the car USB port, requests permission, switches the phone into Android Open Accessory mode, and starts projection directly from the AAOS app.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            return
+        }
+
+        if (isNativeTransport) {
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.5f))
+            Spacer(modifier = Modifier.height(16.dp))
+            SectionHeader("Native Wireless Status")
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "WiFi Direct: $nativeWifiStatus",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            Text(
+                text = "Bluetooth: $nativeBtStatus",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            Text(
+                text = "This mode is experimental. Pair the phone to the car over Bluetooth, leave Android Auto installed on the phone, then tap Save & Reconnect. OpenAutoLink first has to create a WiFi Direct group and obtain its credentials, then it exposes the Android Auto Bluetooth RFCOMM bootstrap and waits for the phone to connect.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
