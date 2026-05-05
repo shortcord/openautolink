@@ -70,6 +70,7 @@ class SessionManager(
         val bt = AaBtHandshakeManager.status.value
         return when {
             wifi == "WiFi Direct ready" -> "Native wireless: $bt"
+            wifi.startsWith("Using car hotspot") -> "Native wireless: $bt"
             wifi == "Idle" -> "Native wireless: $bt"
             else -> "Native wireless: $wifi"
         }
@@ -572,13 +573,31 @@ class SessionManager(
             callStateJob?.cancel()
             callStateJob = launch { watchCallState() }
 
+            val prefs = context?.let { AppPreferences.getInstance(it) }
+            val currentConnectionMode = try {
+                prefs?.connectionMode?.first() ?: AppPreferences.DEFAULT_CONNECTION_MODE
+            } catch (_: Exception) {
+                AppPreferences.DEFAULT_CONNECTION_MODE
+            }
+            val nativeHotspotAutoInterface = try {
+                prefs?.carHotspotAutoInterface?.first() ?: AppPreferences.DEFAULT_CAR_HOTSPOT_AUTO_INTERFACE
+            } catch (_: Exception) {
+                AppPreferences.DEFAULT_CAR_HOTSPOT_AUTO_INTERFACE
+            }
+            val nativeHotspotInterfaceName = try {
+                prefs?.carHotspotInterfaceName?.first() ?: AppPreferences.DEFAULT_CAR_HOTSPOT_INTERFACE_NAME
+            } catch (_: Exception) {
+                AppPreferences.DEFAULT_CAR_HOTSPOT_INTERFACE_NAME
+            }
+
             // Start direct mode session
             startSession(directTransport, hotspotSsid, hotspotPassword,
                 videoAutoNegotiate, codecPreference, aaResolution, aaDpi,
                 aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp, videoFps,
                 driveSide, hideClock, hideSignal, hideBattery, scalingMode,
                 manualIpAddress,
-                safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight)
+                safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
+                currentConnectionMode, nativeHotspotAutoInterface, nativeHotspotInterfaceName)
         }
 
         // Listen for system sleep so we can gracefully tear down before the
@@ -597,6 +616,9 @@ class SessionManager(
         scalingMode: String = "letterbox",
         manualIpAddress: String? = null,
         safeAreaTop: Int = 0, safeAreaBottom: Int = 0, safeAreaLeft: Int = 0, safeAreaRight: Int = 0,
+        connectionMode: String = AppPreferences.DEFAULT_CONNECTION_MODE,
+        nativeHotspotAutoInterface: Boolean = AppPreferences.DEFAULT_CAR_HOTSPOT_AUTO_INTERFACE,
+        nativeHotspotInterfaceName: String = AppPreferences.DEFAULT_CAR_HOTSPOT_INTERFACE_NAME,
     ) {
         aasdkSession?.stop()
         _transportMode.value = directTransport
@@ -715,6 +737,13 @@ class SessionManager(
 
         val session = AasdkSession(scope, ctx)
         session.transportMode = directTransport
+        session.nativeWirelessBackend = if (
+            directTransport == "native" && connectionMode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
+        ) "car_hotspot" else "p2p"
+        session.nativeWirelessHotspotSsid = hotspotSsid
+        session.nativeWirelessHotspotPassword = hotspotPassword
+        session.nativeWirelessAutoInterface = nativeHotspotAutoInterface
+        session.nativeWirelessInterfaceName = nativeHotspotInterfaceName
         session.manualIpAddress = manualIpAddress
         session.sdrConfig = AasdkSdrConfig(
             videoWidth = resW,

@@ -364,7 +364,7 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
         Text(
             text = when {
                 isNativeTransport ->
-                    "Experimental no-companion wireless Android Auto. The AAOS app behaves like a wireless head unit: it brings up WiFi Direct, waits for the phone's Bluetooth RFCOMM handshake, then accepts Android Auto directly on the car. Pair the phone over Bluetooth first."
+                    "Experimental no-companion wireless Android Auto. The AAOS app behaves like a wireless head unit: it prefers WiFi Direct when available and falls back to the car hotspot when configured, then waits for the phone's Bluetooth RFCOMM handshake and accepts Android Auto directly on the car. Pair the phone over Bluetooth first."
                 isUsbTransport ->
                     "Direct wired Android Auto over AOA v2. No companion app or WiFi is required. Plug the phone into the car's USB port and approve the USB permission prompt."
                 connectionMode == AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT ->
@@ -405,7 +405,7 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             SectionHeader("Native Wireless Status")
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "WiFi Direct: $nativeWifiStatus",
+                text = "Network: $nativeWifiStatus",
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -416,7 +416,7 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
             Text(
-                text = "This mode is experimental. Pair the phone to the car over Bluetooth, leave Android Auto installed on the phone, then tap Save & Reconnect. OpenAutoLink first has to create a WiFi Direct group and obtain its credentials, then it exposes the Android Auto Bluetooth RFCOMM bootstrap and waits for the phone to connect.",
+                text = "This mode is experimental. Pair the phone to the car over Bluetooth, leave Android Auto installed on the phone, then tap Save & Reconnect. OpenAutoLink first tries to prepare a WiFi network for the phone, either via WiFi Direct or the configured car hotspot interface, then it exposes the Android Auto Bluetooth RFCOMM bootstrap and waits for the phone to connect.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

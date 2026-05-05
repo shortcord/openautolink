@@ -39,6 +39,10 @@ class AaWifiDirectManager(private val context: Context) :
 
         private val _status = MutableStateFlow("Idle")
         val status: StateFlow<String> = _status.asStateFlow()
+
+        fun publishStatus(status: String) {
+            _status.value = status
+        }
     }
 
     private val manager: WifiP2pManager? =

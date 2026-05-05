@@ -105,6 +105,15 @@ class AasdkSession(
     /** Current transport mode: "native", "nearby", "hotspot", or "usb" */
     var transportMode: String = "hotspot"
 
+    /** Native wireless network backend: "p2p" or "car_hotspot". */
+    var nativeWirelessBackend: String = "p2p"
+
+    /** Car hotspot SSID/password reused by native wireless car-AP fallback. */
+    var nativeWirelessHotspotSsid: String = ""
+    var nativeWirelessHotspotPassword: String = ""
+    var nativeWirelessAutoInterface: Boolean = true
+    var nativeWirelessInterfaceName: String = ""
+
     /** Manual IP address for testing (emulator). Overrides gateway/mDNS discovery. */
     var manualIpAddress: String? = null
 
@@ -144,24 +153,65 @@ class AasdkSession(
         OalLog.i(TAG, "Starting aasdk session (native wireless transport)")
         explicitStop = false
         stopNativeWirelessBootstrap()
+        sdrConfig.nativeWirelessEnabled = false
+        sdrConfig.nativeWirelessSsid = ""
+        sdrConfig.nativeWirelessPassword = ""
+        sdrConfig.nativeWirelessBssid = ""
+        sdrConfig.nativeWirelessIpAddress = ""
 
-        wifiDirectManager = AaWifiDirectManager(context).apply {
-            onCredentialsReady = { ssid, psk, ip, bssid ->
-                OalLog.i(TAG, "WiFi Direct ready: ssid=$ssid ip=$ip bssid=$bssid")
-                btHandshake.hotspotSsid = ssid
-                btHandshake.hotspotPassword = psk
-                btHandshake.hotspotBssid = bssid
-                btHandshake.hotspotIpAddress = ip
-                btHandshake.tcpPort = NATIVE_WIRELESS_PORT
-                sdrConfig.nativeWirelessEnabled = true
-                sdrConfig.nativeWirelessSsid = ssid
-                sdrConfig.nativeWirelessPassword = psk
-                sdrConfig.nativeWirelessBssid = bssid
-                sdrConfig.nativeWirelessIpAddress = ip
-                btHandshake.start()
+        if (nativeWirelessBackend == "car_hotspot") {
+            if (nativeWirelessHotspotSsid.isBlank()) {
+                AaWifiDirectManager.publishStatus("Car hotspot SSID not configured")
+                OalLog.e(TAG, "Native wireless car-hotspot backend: hotspot SSID missing")
+                return
             }
+
+            val iface = com.openautolink.app.transport.PhoneDiscovery
+                .getInstance(context)
+                .resolvePreferredInterface(
+                    autoDetect = nativeWirelessAutoInterface,
+                    forcedInterfaceName = nativeWirelessInterfaceName,
+                )
+
+            if (iface == null) {
+                AaWifiDirectManager.publishStatus("Car hotspot interface unavailable")
+                OalLog.e(TAG, "Native wireless car-hotspot backend: no usable interface")
+                return
+            }
+
+            AaWifiDirectManager.publishStatus("Using car hotspot ${iface.iface} (${iface.ip})")
+            btHandshake.hotspotSsid = nativeWirelessHotspotSsid
+            btHandshake.hotspotPassword = nativeWirelessHotspotPassword
+            btHandshake.hotspotBssid = iface.mac ?: "00:00:00:00:00:00"
+            btHandshake.hotspotIpAddress = iface.ip
+            btHandshake.tcpPort = NATIVE_WIRELESS_PORT
+            sdrConfig.nativeWirelessEnabled = true
+            sdrConfig.nativeWirelessSsid = nativeWirelessHotspotSsid
+            sdrConfig.nativeWirelessPassword = nativeWirelessHotspotPassword
+            sdrConfig.nativeWirelessBssid = iface.mac ?: "00:00:00:00:00:00"
+            sdrConfig.nativeWirelessIpAddress = iface.ip
+            btHandshake.start()
+        } else {
+            AaWifiDirectManager.publishStatus("Starting WiFi Direct")
+
+            wifiDirectManager = AaWifiDirectManager(context).apply {
+                onCredentialsReady = { ssid, psk, ip, bssid ->
+                    OalLog.i(TAG, "WiFi Direct ready: ssid=$ssid ip=$ip bssid=$bssid")
+                    btHandshake.hotspotSsid = ssid
+                    btHandshake.hotspotPassword = psk
+                    btHandshake.hotspotBssid = bssid
+                    btHandshake.hotspotIpAddress = ip
+                    btHandshake.tcpPort = NATIVE_WIRELESS_PORT
+                    sdrConfig.nativeWirelessEnabled = true
+                    sdrConfig.nativeWirelessSsid = ssid
+                    sdrConfig.nativeWirelessPassword = psk
+                    sdrConfig.nativeWirelessBssid = bssid
+                    sdrConfig.nativeWirelessIpAddress = ip
+                    btHandshake.start()
+                }
+            }
+            wifiDirectManager?.start()
         }
-        wifiDirectManager?.start()
 
         nativeServerJob = scope.launch(Dispatchers.IO) {
             try {
@@ -318,6 +368,7 @@ class AasdkSession(
         btHandshake.stop()
         wifiDirectManager?.stop()
         wifiDirectManager = null
+        AaWifiDirectManager.publishStatus("Idle")
         nativeServerJob?.cancel()
         nativeServerJob = null
         try { serverSocket?.close() } catch (_: Exception) {}

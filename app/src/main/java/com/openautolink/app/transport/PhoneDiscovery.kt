@@ -464,6 +464,31 @@ class PhoneDiscovery private constructor(private val context: Context) {
     fun listRealInterfaces(): List<Pair<String, String>> =
         currentIpv4Addresses().map { it.iface to it.ip }
 
+    fun resolvePreferredInterface(
+        autoDetect: Boolean,
+        forcedInterfaceName: String?,
+    ): LocalInterface? {
+        val all = currentIpv4Addresses()
+        if (all.isEmpty()) return null
+
+        val chosen = if (!autoDetect) {
+            val forced = forcedInterfaceName?.takeIf { it.isNotBlank() } ?: return null
+            all.firstOrNull { it.iface == forced }
+        } else {
+            all.firstOrNull { it.iface.startsWithAny(PREFERRED_AP_INTERFACES) } ?: all.firstOrNull()
+        } ?: return null
+
+        val mac = try {
+            java.net.NetworkInterface.getByName(chosen.iface)
+                ?.hardwareAddress
+                ?.joinToString(":") { "%02X".format(it) }
+        } catch (_: Exception) {
+            null
+        }
+
+        return LocalInterface(chosen.iface, chosen.ip, mac)
+    }
+
     /**
      * Run the sweep over [candidates], probing every host on each /24.
      * Returns the count of phones added to the discovery state.
@@ -702,6 +727,8 @@ class PhoneDiscovery private constructor(private val context: Context) {
 
     /** (interface name, IPv4 address) pair for sweep planning. */
     private data class IfaceAddress(val iface: String, val ip: String)
+
+    data class LocalInterface(val iface: String, val ip: String, val mac: String?)
     /**
      * Enumerate every plausible non-loopback IPv4 address the device has,
      * paired with its interface name. AAOS head units have lots of virtual
