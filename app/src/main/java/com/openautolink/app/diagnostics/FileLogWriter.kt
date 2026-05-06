@@ -32,6 +32,7 @@ class FileLogWriter(private val context: Context) {
         private const val DIR_NAME = "openautolink/logs"
         private const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB per file
         private const val MIN_FREE_SPACE_BYTES = 10L * 1024 * 1024 // stop if < 10 MB free
+        private const val FLUSH_EVERY_LINES = 64
     }
 
     @Volatile
@@ -47,6 +48,13 @@ class FileLogWriter(private val context: Context) {
     private val lock = Any()
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private val fileNameFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US)
+
+    /** Bytes written since file open. Tracked locally so the hot path doesn't
+     *  do a `File.length()` syscall per log line. */
+    private var bytesWritten: Long = 0L
+
+    /** Lines since last flush — flushed in batches to avoid per-line fsync churn. */
+    private var linesSinceFlush: Int = 0
 
     /**
      * Start writing logs to a new file. Returns the file path or null on failure.
@@ -66,6 +74,8 @@ class FileLogWriter(private val context: Context) {
             return try {
                 val fos = FileOutputStream(file, true)
                 writer = BufferedWriter(OutputStreamWriter(fos, Charsets.UTF_8), 8192)
+                bytesWritten = file.length()
+                linesSinceFlush = 0
                 currentFilePath = file.absolutePath
                 isActive = true
                 OalLog.i(TAG, "File logging started: ${file.absolutePath}")
@@ -103,10 +113,9 @@ class FileLogWriter(private val context: Context) {
         synchronized(lock) {
             val w = writer ?: return
             try {
-                // Check file size limit
-                val path = currentFilePath ?: return
-                val fileSize = File(path).length()
-                if (fileSize >= MAX_FILE_SIZE_BYTES) {
+                // Bail when we hit the per-file cap. Tracked locally to avoid
+                // a stat() syscall on the hot path.
+                if (bytesWritten >= MAX_FILE_SIZE_BYTES) {
                     OalLog.w(TAG, "File log reached ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB limit, stopping")
                     stop()
                     return
@@ -119,15 +128,22 @@ class FileLogWriter(private val context: Context) {
                     DiagnosticLevel.ERROR -> 'E'
                 }
 
-                w.write(timeFormat.format(Date(entry.timestamp)))
-                w.write(" ")
-                w.write(levelChar.toString())
-                w.write("/")
-                w.write(entry.tag)
-                w.write(": ")
-                w.write(entry.message)
-                w.newLine()
-                w.flush()
+                val ts = timeFormat.format(Date(entry.timestamp))
+                // Build the line once so we can both write it and account for
+                // its bytes accurately without a second formatter pass.
+                val line = "$ts $levelChar/${entry.tag}: ${entry.message}\n"
+                w.write(line)
+                bytesWritten += line.length
+
+                // Flush in batches to avoid per-line fsync. WARN/ERROR flush
+                // immediately so we don't lose them on crash.
+                linesSinceFlush++
+                if (entry.level == DiagnosticLevel.WARN ||
+                    entry.level == DiagnosticLevel.ERROR ||
+                    linesSinceFlush >= FLUSH_EVERY_LINES) {
+                    w.flush()
+                    linesSinceFlush = 0
+                }
             } catch (e: Exception) {
                 // Don't recurse through OalLog — just stop silently
                 isActive = false
