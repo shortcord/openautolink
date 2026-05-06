@@ -49,6 +49,16 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val MANUAL_IP_ADDRESS = stringPreferencesKey("manual_ip_address")
         val AA_RESOLUTION = stringPreferencesKey("aa_resolution")
         val AA_DPI = intPreferencesKey("aa_dpi")
+        // When true (default), ignore AA_DPI and compute density at
+        // session start from the live render rect so AA UI ends up at the
+        // same physical size as native AAOS apps on the same panel.
+        // Formula mirrors GM's getScaledDensity:
+        //   fWidth = renderRectWidthPx / (codecW - widthMargin)
+        //   density = round(panelDpi / fWidth)
+        // The render rect is full panel in fullscreen_immersive mode and
+        // the inset-shrunk rect in system_ui_visible mode — so this
+        // automatically tracks the user's display-mode choice.
+        val AA_AUTO_DPI = booleanPreferencesKey("aa_auto_dpi")
         val AA_WIDTH_MARGIN = intPreferencesKey("aa_width_margin")
         val AA_HEIGHT_MARGIN = intPreferencesKey("aa_height_margin")
         val AA_AUTO_MARGINS = booleanPreferencesKey("aa_auto_margins")
@@ -162,6 +172,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_MANUAL_IP_ADDRESS = ""
         const val DEFAULT_AA_RESOLUTION = "1080p" // "480p", "720p", "1080p", "1440p", "4k"
         const val DEFAULT_AA_DPI = 160
+        const val DEFAULT_AA_AUTO_DPI = true
         const val DEFAULT_AA_WIDTH_MARGIN = 0
         const val DEFAULT_AA_HEIGHT_MARGIN = 0
         // When true, ignore the WIDTH/HEIGHT_MARGIN values and compute
@@ -320,6 +331,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[AA_DPI] ?: DEFAULT_AA_DPI
     }
 
+    val aaAutoDpi: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[AA_AUTO_DPI] ?: DEFAULT_AA_AUTO_DPI
+    }
+
     val aaWidthMargin: Flow<Int> = dataStore.data.map { prefs ->
         prefs[AA_WIDTH_MARGIN] ?: DEFAULT_AA_WIDTH_MARGIN
     }
@@ -426,6 +441,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setAaDpi(dpi: Int) {
         dataStore.edit { it[AA_DPI] = dpi }
+    }
+
+    suspend fun setAaAutoDpi(value: Boolean) {
+        dataStore.edit { it[AA_AUTO_DPI] = value }
     }
 
     suspend fun setAaWidthMargin(margin: Int) {

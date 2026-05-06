@@ -1407,7 +1407,43 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         // Slider for custom DPI (80-640 range)
         var sliderDpi by remember(uiState.aaDpi) { mutableIntStateOf(uiState.aaDpi) }
-        val dpiSliderEnabled = !(uiState.aaTargetLayoutWidthDp > 0 && uiState.videoAutoNegotiate)
+        // Slider is disabled either when:
+        //  - target-dp mode is active in auto-negotiate (existing behaviour), or
+        //  - aaAutoDpi is on (auto-DPI overrides whatever the slider says).
+        val dpiSliderEnabled =
+            !(uiState.aaTargetLayoutWidthDp > 0 && uiState.videoAutoNegotiate) &&
+            !uiState.aaAutoDpi
+
+        // Auto-DPI toggle. When ON, density is computed at session start
+        // from panel DPI + render rect + codec margins so AA UI lands at
+        // native physical sizes regardless of display mode. When OFF, the
+        // manual slider value is sent literally.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Auto DPI",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Compute density from panel DPI, render rect, and codec margins. " +
+                        "Tracks display mode (fullscreen vs system UI visible) automatically.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = uiState.aaAutoDpi,
+                onCheckedChange = { viewModel.updateAaAutoDpi(it) },
+                modifier = Modifier.testTag("aaAutoDpi"),
+            )
+        }
+
         Text(
             text = "DPI: $sliderDpi",
             style = MaterialTheme.typography.titleMedium,

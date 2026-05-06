@@ -131,6 +131,21 @@ class SessionManager(
         sysInsetRight = right.coerceAtLeast(0)
     }
 
+    // Last-known live render-rect dimensions in pixels — the actual size
+    // of the projection Box AFTER displayMode padding. In
+    // fullscreen_immersive this is the full panel; in system_ui_visible
+    // it's the panel minus AAOS chrome. Fed by ProjectionScreen via
+    // [setRenderRect]. Used by auto-DPI to compute density that produces
+    // the same physical size as native AAOS apps regardless of mode.
+    @Volatile private var renderRectWPx: Int = 0
+    @Volatile private var renderRectHPx: Int = 0
+    @Volatile private var panelDensityDpi: Int = 0
+    fun setRenderRect(widthPx: Int, heightPx: Int, panelDpi: Int) {
+        renderRectWPx = widthPx.coerceAtLeast(0)
+        renderRectHPx = heightPx.coerceAtLeast(0)
+        panelDensityDpi = panelDpi.coerceAtLeast(0)
+    }
+
     // Audio player
     private var _audioPlayer: AudioPlayer? = null
     val audioPlayer: AudioPlayer? get() = _audioPlayer
@@ -306,6 +321,7 @@ class SessionManager(
         videoAutoNegotiate: Boolean = true,
         aaResolution: String = "1080p",
         aaDpi: Int = 160,
+        aaAutoDpi: Boolean = true,
         aaWidthMargin: Int = 0,
         aaHeightMargin: Int = 0,
         aaPixelAspect: Int = -1,
@@ -477,7 +493,7 @@ class SessionManager(
 
             // Start direct mode session
             startSession(directTransport, hotspotSsid, hotspotPassword,
-                videoAutoNegotiate, codecPreference, aaResolution, aaDpi,
+                videoAutoNegotiate, codecPreference, aaResolution, aaDpi, aaAutoDpi,
                 aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
                 aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins,
                 videoFps,
@@ -494,7 +510,7 @@ class SessionManager(
     private fun startSession(
         directTransport: String, hotspotSsid: String, hotspotPassword: String,
         videoAutoNegotiate: Boolean = true, codec: String = "h264",
-        aaResolution: String = "1080p", aaDpi: Int = 160,
+        aaResolution: String = "1080p", aaDpi: Int = 160, aaAutoDpi: Boolean = true,
         aaWidthMargin: Int = 0, aaHeightMargin: Int = 0, aaPixelAspect: Int = -1,
         aaTargetLayoutWidthDp: Int = 0,
         aaViewingDistanceMm: Int = 0, aaDecoderAdditionalDepth: Int = 0,
@@ -594,9 +610,43 @@ class SessionManager(
             effectiveDpi = maxOf((resW * 160) / aaTargetLayoutWidthDp, 80)
             computedTargetLayoutWidthDp = 0 // C++ doesn't need it — single tier
             OalLog.i(TAG, "Per-tier DPI (manual): ${resW}px / ${aaTargetLayoutWidthDp}dp → DPI $effectiveDpi")
+        } else if (aaAutoDpi) {
+            // Mirror GM's GALDisplayManager.getScaledDensity:
+            //   fWidth = renderRectWidthPx / (codecW - widthMargin)
+            //   density = round(panelDpi / fWidth)
+            // This makes AA UI elements come out the same physical size as
+            // native AAOS apps on the same panel, regardless of:
+            //   - panel aspect ratio (margins absorb the AR difference),
+            //   - displayMode (renderRect shrinks for system_ui_visible),
+            //   - chosen codec resolution (math uses the live codec dims).
+            // Falls back to user's [aaDpi] when the renderer hasn't yet
+            // reported a render rect (first connect before composition).
+            val rrW = renderRectWPx
+            val rrH = renderRectHPx
+            val pDpi = if (panelDensityDpi > 0) panelDensityDpi else
+                ctx.resources.displayMetrics.densityDpi
+            // Use the inner rect at the picked codec tier so margins are
+            // accounted for. Same formula as MarginAutoCalc / C++ side.
+            val (autoWm, autoHm) = if (rrW > 0 && rrH > 0) {
+                // Use the actual render rect, not the panel rect, so
+                // system_ui_visible mode (where the rect is smaller) gives
+                // a different DPI than fullscreen.
+                com.openautolink.app.video.MarginAutoCalc.compute(resW, resH, rrW, rrH)
+            } else 0 to 0
+            val innerW = (resW - (if (computedWidthMargin > 0) computedWidthMargin else autoWm)).coerceAtLeast(1)
+            val auto = if (rrW > 0 && innerW > 0 && pDpi > 0) {
+                val fWidth = rrW.toFloat() / innerW.toFloat()
+                if (fWidth > 0f) (pDpi / fWidth).toInt().coerceAtLeast(96) else aaDpi
+            } else aaDpi
+            effectiveDpi = auto
+            computedTargetLayoutWidthDp = aaTargetLayoutWidthDp
+            OalLog.i(TAG, "Auto-DPI: renderRect=${rrW}x${rrH} panelDpi=$pDpi " +
+                    "innerW=$innerW → DPI $effectiveDpi (user manual=$aaDpi ignored)")
         } else {
+            // Manual: user picked the DPI; honour exactly.
             effectiveDpi = aaDpi
             computedTargetLayoutWidthDp = aaTargetLayoutWidthDp
+            OalLog.i(TAG, "Manual DPI: $effectiveDpi")
         }
 
         OalLog.i(TAG, "SDR AR config: scalingMode=$scalingMode marginW=$computedWidthMargin marginH=$computedHeightMargin pixelAspectE4=$computedPixelAspect")
@@ -862,6 +912,7 @@ class SessionManager(
         videoAutoNegotiate: Boolean = true,
         aaResolution: String = "1080p",
         aaDpi: Int = 160,
+        aaAutoDpi: Boolean = true,
         aaWidthMargin: Int = 0,
         aaHeightMargin: Int = 0,
         aaPixelAspect: Int = -1,
@@ -888,7 +939,7 @@ class SessionManager(
             start(
                 codecPreference, micSourcePreference, scalingMode, directTransport,
                 hotspotSsid, hotspotPassword, videoAutoNegotiate, aaResolution,
-                aaDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
+                aaDpi, aaAutoDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
                 aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins, videoFps,
                 driveSide, hideClock, hideSignal, hideBattery,
                 volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
@@ -923,7 +974,7 @@ class SessionManager(
                 doReconnectAfterCancel(
                     codecPreference, micSourcePreference, scalingMode, directTransport,
                     hotspotSsid, hotspotPassword, videoAutoNegotiate, aaResolution,
-                    aaDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
+                    aaDpi, aaAutoDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
                     aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins,
                     videoFps, driveSide, hideClock, hideSignal, hideBattery,
                     volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
@@ -942,6 +993,7 @@ class SessionManager(
         codecPreference: String, micSourcePreference: String, scalingMode: String,
         directTransport: String, hotspotSsid: String, hotspotPassword: String,
         videoAutoNegotiate: Boolean, aaResolution: String, aaDpi: Int,
+        aaAutoDpi: Boolean,
         aaWidthMargin: Int, aaHeightMargin: Int, aaPixelAspect: Int,
         aaTargetLayoutWidthDp: Int,
         aaViewingDistanceMm: Int, aaDecoderAdditionalDepth: Int,
@@ -996,7 +1048,7 @@ class SessionManager(
             callStateJob = launch { watchCallState() }
 
             startSession(directTransport, hotspotSsid, hotspotPassword,
-                videoAutoNegotiate, codecPreference, aaResolution, aaDpi,
+                videoAutoNegotiate, codecPreference, aaResolution, aaDpi, aaAutoDpi,
                 aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
                 aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins,
                 videoFps,

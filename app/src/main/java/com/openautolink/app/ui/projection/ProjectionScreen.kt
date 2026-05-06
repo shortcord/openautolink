@@ -190,6 +190,24 @@ fun ProjectionScreen(
             .padding(displayModePadding)
             .testTag("projectionScreen")
     ) {
+        // The Box's content area = the "render rect" — the region where the
+        // AA SurfaceView actually lands after displayMode padding. Push it
+        // (plus the panel's reported DPI) to SessionManager so auto-DPI can
+        // mirror GM's getScaledDensity formula:
+        //   density = panelDpi / (renderRectWidth / (codecW − widthMargin))
+        // The same formula is used for fullscreen and system_ui_visible
+        // modes; only the renderRect changes between them, which makes
+        // auto-DPI track displayMode automatically.
+        val panelDpi = androidx.compose.ui.platform.LocalConfiguration.current.densityDpi
+        androidx.compose.foundation.layout.BoxWithConstraints(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            val rrW = constraints.maxWidth
+            val rrH = constraints.maxHeight
+            LaunchedEffect(rrW, rrH, panelDpi) {
+                viewModel.setRenderRect(rrW, rrH, panelDpi)
+            }
+        }
         // ── Video surface rendering ────────────────────────────────────────
         // Two modes:
         //

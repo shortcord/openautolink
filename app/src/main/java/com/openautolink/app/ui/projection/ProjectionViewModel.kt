@@ -103,6 +103,16 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         sessionManager.setSystemInsets(top, bottom, left, right)
     }
 
+    /**
+     * Push the live render-rect dims (Compose Box content area after
+     * displayMode padding) and the panel's reported DPI down to
+     * SessionManager so auto-DPI math can pick a density that produces
+     * native-AAOS-equivalent UI sizes regardless of displayMode.
+     */
+    fun setRenderRect(widthPx: Int, heightPx: Int, panelDpi: Int) {
+        sessionManager.setRenderRect(widthPx, heightPx, panelDpi)
+    }
+
     private val touchForwarder: TouchForwarder = TouchForwarderImpl { touchMessage ->
         viewModelScope.launch {
             sessionManager.sendControlMessage(touchMessage)
@@ -364,7 +374,8 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             val videoAutoNeg = preferences.videoAutoNegotiate.first()
             val aaRes = preferences.aaResolution.first()
             val aaDpi = preferences.aaDpi.first()
-            OalLog.i(TAG, "Connect with aaDpi=$aaDpi aaRes=$aaRes codec=$codec autoNeg=$videoAutoNeg")
+            val aaAutoDpi = preferences.aaAutoDpi.first()
+            OalLog.i(TAG, "Connect with aaDpi=$aaDpi (auto=$aaAutoDpi) aaRes=$aaRes codec=$codec autoNeg=$videoAutoNeg")
             val aaWM = preferences.aaWidthMargin.first()
             val aaHM = preferences.aaHeightMargin.first()
             val aaPA = preferences.aaPixelAspect.first()
@@ -475,6 +486,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 videoAutoNegotiate = videoAutoNeg,
                 aaResolution = aaRes,
                 aaDpi = aaDpi,
+                aaAutoDpi = aaAutoDpi,
                 aaWidthMargin = aaWM,
                 aaHeightMargin = aaHM,
                 aaPixelAspect = aaPA,

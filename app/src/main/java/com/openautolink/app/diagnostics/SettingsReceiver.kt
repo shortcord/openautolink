@@ -27,6 +27,7 @@ import kotlinx.coroutines.runBlocking
  *
  * Supported keys:
  *   aa_dpi              --ei value <int>       160, 200, 321, 400
+ *   aa_auto_dpi         --ez bvalue <bool>     true/false
  *   aa_pixel_aspect     --ei value <int>       -1=auto, 0=off, >0=manual e4
  *   aa_resolution       --es svalue <str>      480p, 720p, 1080p, 1440p, 4k
  *   aa_width_margin     --ei value <int>       0+
@@ -60,6 +61,12 @@ class SettingsReceiver : BroadcastReceiver() {
                 "aa_dpi" -> {
                     val v = intent.getIntExtra("value", -1)
                     if (v > 0) { prefs.setAaDpi(v); log("aa_dpi=$v") }
+                }
+                "aa_auto_dpi" -> {
+                    if (intent.hasExtra("bvalue")) {
+                        val v = intent.getBooleanExtra("bvalue", true)
+                        prefs.setAaAutoDpi(v); log("aa_auto_dpi=$v")
+                    }
                 }
                 "aa_pixel_aspect" -> {
                     val v = intent.getIntExtra("value", Int.MIN_VALUE)
@@ -165,6 +172,7 @@ class SettingsReceiver : BroadcastReceiver() {
                     videoAutoNegotiate = prefs.videoAutoNegotiate.first(),
                     aaResolution = prefs.aaResolution.first(),
                     aaDpi = prefs.aaDpi.first(),
+                    aaAutoDpi = prefs.aaAutoDpi.first(),
                     aaWidthMargin = prefs.aaWidthMargin.first(),
                     aaHeightMargin = prefs.aaHeightMargin.first(),
                     aaPixelAspect = prefs.aaPixelAspect.first(),
