@@ -1951,10 +1951,10 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
     if (captureTarget != null) {
         val target = captureTarget!!
 
-        // Subscribe to the global Activity-level key bus while the dialog is
-        // open. Compose `onKeyEvent` does NOT receive steering-wheel / remote
-        // keys inside an AlertDialog (different window, no focus), so we hook
-        // MainActivity.dispatchKeyEvent via KeyCaptureBus instead.
+        // Subscribe to the global key bus while the dialog is open. Compose
+        // `onKeyEvent` does NOT receive steering-wheel / remote keys, and an
+        // AlertDialog runs in its own Window so `Activity.dispatchKeyEvent`
+        // is also bypassed — we have to hook the dialog window's callback.
         DisposableEffect(target) {
             com.openautolink.app.input.KeyCaptureBus.listener = { code ->
                 val name = android.view.KeyEvent.keyCodeToString(code)
@@ -1962,6 +1962,28 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                 lastDetectedKey = code to name
             }
             onDispose { com.openautolink.app.input.KeyCaptureBus.listener = null }
+        }
+
+        // Hook the dialog's own Window so steering-wheel keys delivered to
+        // the dialog window get routed into KeyCaptureBus.
+        val dialogView = androidx.compose.ui.platform.LocalView.current
+        DisposableEffect(target, dialogView) {
+            val provider = generateSequence<Any?>(dialogView.parent) { (it as? android.view.View)?.parent }
+                .firstOrNull { it is androidx.compose.ui.window.DialogWindowProvider }
+                    as? androidx.compose.ui.window.DialogWindowProvider
+            val window = provider?.window
+            val original = window?.callback
+            if (window != null && original != null) {
+                window.callback = object : android.view.Window.Callback by original {
+                    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+                        if (com.openautolink.app.input.KeyCaptureBus.handle(event)) return true
+                        return original.dispatchKeyEvent(event)
+                    }
+                }
+            }
+            onDispose {
+                if (window != null && original != null) window.callback = original
+            }
         }
 
         androidx.compose.material3.AlertDialog(
