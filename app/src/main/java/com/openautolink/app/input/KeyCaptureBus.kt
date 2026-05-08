@@ -31,9 +31,9 @@ object KeyCaptureBus {
                     "deviceId=${event.deviceId} scanCode=${event.scanCode} flags=0x${Integer.toHexString(event.flags)} " +
                     "meta=0x${Integer.toHexString(event.metaState)}"
         )
-        // Consume both DOWN and UP so the press doesn't leak to the projection
-        // pipeline. Report the keycode on the first event we see.
-        if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) {
+        // Consume DOWN, UP, and MULTIPLE so the press doesn't leak to the projection
+        // pipeline. Report the keycode on the first DOWN event we see.
+        if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP || event.action == KeyEvent.ACTION_MULTIPLE) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 DiagnosticLog.i("input", "KeyCaptureBus reporting keycode=${event.keyCode} ($keyName)")
                 cb(event.keyCode)
