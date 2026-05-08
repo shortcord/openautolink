@@ -210,10 +210,9 @@ class OalMediaSessionManager(private val context: Context) {
 
             // Some AAOS dashboard widgets do not repaint metadata changes until the
             // playback state also changes. Re-push the latest known playback snapshot.
-            lastPushedPlaying?.let { playing ->
-                val state = if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
-                session.setPlaybackState(buildPlaybackState(state, lastPushedPositionMs ?: 0))
-            }
+            // This ensures the widget refreshes even when the actual playback state is stale.
+            val state = PlaybackStateCompat.STATE_PLAYING
+            session.setPlaybackState(buildPlaybackState(state, lastPushedPositionMs ?: 0L))
         }
     }
 

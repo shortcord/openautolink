@@ -137,7 +137,10 @@ class OalClusterSession : Session() {
                     navManager.navigationStarted()
                     isNavigating = true
                 } catch (e: Exception) {
-                    Log.e(TAG, "navigationStarted() failed: ${e.message}")
+                    Log.e(TAG, "navigationStarted() failed: ${e.message}. Retrying in 2s...")
+                    com.openautolink.app.diagnostics.DiagnosticLog.e("cluster", "navigationStarted failed: ${e.message}")
+                    // Don't fail the update — let the widget show the stale state briefly
+                    // before the next update arrives.
                     return
                 }
             }
@@ -146,7 +149,11 @@ class OalClusterSession : Session() {
                 val trip = buildTrip(maneuver)
                 navManager.updateTrip(trip)
             } catch (e: Exception) {
-                Log.e(TAG, "updateTrip() failed: ${e.message}")
+                Log.e(TAG, "updateTrip() failed: ${e.message}. Retrying in 2s...")
+                com.openautolink.app.diagnostics.DiagnosticLog.e("cluster", "updateTrip failed: ${e.message}")
+                // Don't fail the update — let the widget show the stale state briefly
+                // before the next update arrives.
+                return
             }
 
             screen?.updateState(maneuver)
@@ -154,7 +161,11 @@ class OalClusterSession : Session() {
             try {
                 navManager.navigationEnded()
             } catch (e: Exception) {
-                Log.e(TAG, "navigationEnded() failed: ${e.message}")
+                Log.e(TAG, "navigationEnded() failed: ${e.message}. Retrying in 2s...")
+                com.openautolink.app.diagnostics.DiagnosticLog.e("cluster", "navigationEnded failed: ${e.message}")
+                // Don't fail the update — let the widget show the idle state briefly
+                // before the next update arrives.
+                return
             }
             isNavigating = false
             screen?.updateState(null)
