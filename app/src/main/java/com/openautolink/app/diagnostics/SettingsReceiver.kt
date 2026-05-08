@@ -34,7 +34,7 @@ import kotlinx.coroutines.runBlocking
  *   aa_target_layout_dp --ei value <int>       0=off, 960/1280/1920
  *   video_scaling_mode  --es svalue <str>      crop, letterbox
  *   video_auto_negotiate --ez bvalue <bool>    true/false
- *   video_codec         --es svalue <str>      h264, h265
+ *   video_codec         --es svalue <str>      h264, h265, vp9
  *   video_fps           --ei value <int>       30, 60
  *   direct_transport    --es svalue <str>      hotspot, nearby
  *   drive_side          --es svalue <str>      left, right

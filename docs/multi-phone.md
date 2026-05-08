@@ -1,5 +1,12 @@
 # Multi-Phone Support — Feature Specification
 
+> **Historical bridge-mode document.** This spec describes the old SBC bridge
+> pairing model. The active app/companion implementation identifies phones by
+> companion-generated `phone_id` over mDNS/UDP/TCP identity probes, stores the
+> preferred phone in app preferences, and switches by reconnecting to the
+> selected companion IP. See [architecture.md](architecture.md) and
+> [networking.md](networking.md) for the current app/companion flow.
+
 ## Overview
 
 OpenAutoLink supports pairing multiple Bluetooth phones with the bridge, with one phone active at a time. This document defines the as-built design, expected behavior, and edge cases for multi-phone management.

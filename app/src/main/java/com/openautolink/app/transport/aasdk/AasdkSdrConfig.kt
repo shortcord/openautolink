@@ -57,7 +57,7 @@ class AasdkSdrConfig(
     /** Auto-negotiate video: true = send all resolutions/codecs, false = send only the configured one. */
     @JvmField val autoNegotiate: Boolean = true,
 
-    /** Video codec preference for manual mode: "h264" or "h265". */
+    /** Video codec preference for manual mode: "h264", "h265", or "vp9". */
     @JvmField val videoCodec: String = "h265",
 
     /** Physical pixel density of the AAOS display (from DisplayMetrics.densityDpi). */

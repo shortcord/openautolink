@@ -118,6 +118,12 @@ public:
     /** Request a video keyframe (IDR). */
     void requestKeyframe();
 
+    /** Close only the projected video stream without tearing down audio channels. */
+    void closeVideoStream();
+
+    /** Restart only the projected video stream without tearing down audio channels. */
+    void restartVideoStream();
+
     // Typed vehicle sensor methods — each builds a SensorBatch and sends
     void sendSpeedSensor(int speedMmPerS);
     void sendGearSensor(int gear);
@@ -212,9 +218,14 @@ private:
     JNIEnv* getEnv(bool& attached);
     void releaseEnv(bool attached);
     void callVoidCallback(jmethodID method);
+    void emitNativeEvent(int type, const uint8_t* payload, size_t length, int64_t timestampNs);
+    void emitNativeEvent(int type, const std::string& payload);
+    void clearCallbackException(JNIEnv* env, const char* callbackName);
 
     JavaVM* jvm_;
     jobject callbackRef_ = nullptr;
+    std::mutex callbackMutex_;
+    bool callbacksClosed_ = false;
 
     // Boost.Asio event loop
     std::unique_ptr<boost::asio::io_service> ioService_;
@@ -263,7 +274,10 @@ private:
     std::atomic<bool> aborted_{false};
     std::atomic<bool> sessionStoppedFired_{false};
     std::atomic<int> negotiatedCodecType_{0};
+    // Video stream session id (from Start indication). Used for media ACK flow control.
+    std::atomic<int> videoSessionId_{0};
     std::atomic<int64_t> pingSentAtMs_{0};
+    std::atomic<int64_t> keyframeRequestedAtMs_{0};
 
     // Channel-error coalescing + escalation tracking (guarded by errorMu_)
     std::mutex errorMu_;
@@ -341,6 +355,7 @@ private:
         jmethodID onVoiceSession = nullptr;
         jmethodID onAudioFocusRequest = nullptr;
         jmethodID onError = nullptr;
+        jmethodID onNativeEvent = nullptr;
     };
     CallbackMethods cbMethods_;
 };

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add USB as a third transport option alongside Nearby Connections and WiFi Hotspot. When a phone is plugged into the car's USB port, our app performs the AOA v2 (Android Open Accessory) handshake to switch the phone into accessory mode, then feeds the raw USB byte pipe into our existing aasdk JNI transport layer.
+Add USB as another transport option alongside the current TCP companion path. When a phone is plugged into the car's USB port, our app performs the AOA v2 (Android Open Accessory) handshake to switch the phone into accessory mode, then feeds the raw USB byte pipe into our existing aasdk JNI transport layer.
 
 ```
 Phone (USB cable) → Car USB Port
@@ -168,7 +168,7 @@ Add to Settings → Connection tab:
 ### Step 4: Session Integration
 
 Modify `AasdkSession` to accept USB transport:
-- Currently `AasdkSession.start()` creates `AasdkTransportPipe` from Nearby streams
+- Currently `AasdkSession.start()` creates `AasdkTransportPipe` from TCP companion, Nearby, or USB streams depending on transport mode
 - Add `startUsb(connection: UsbDeviceConnection, endpointIn, endpointOut)` variant
 - Creates `UsbTransportPipe` → `AasdkTransportPipe` → same JNI path
 - The entire C++ aasdk layer is transport-agnostic — no changes needed there

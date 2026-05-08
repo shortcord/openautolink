@@ -43,6 +43,14 @@ object AasdkNative {
     @JvmStatic
     external fun nativeStopSession()
 
+    /** Close only projected video on the active AA session. */
+    @JvmStatic
+    external fun nativeCloseVideoStream()
+
+    /** Restart only projected video on the active AA session. */
+    @JvmStatic
+    external fun nativeRestartVideoStream()
+
     // -- Input (app → phone) --
 
     @JvmStatic

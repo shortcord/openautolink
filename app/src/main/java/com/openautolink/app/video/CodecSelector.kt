@@ -20,9 +20,9 @@ object CodecSelector {
     /**
      * Maps a codec preference string (from settings) to a MIME type.
      */
-    fun codecToMime(codec: String): String = when (codec.lowercase()) {
-        "h264", "avc" -> MIME_H264
-        "h265", "hevc" -> MIME_H265
+    fun codecToMime(codec: String): String = when (with(AaVideoCodec) { codec.normalizedPreference() }) {
+        "h264" -> MIME_H264
+        "h265" -> MIME_H265
         "vp9" -> MIME_VP9
         "av1" -> MIME_AV1
         else -> MIME_H264
@@ -31,8 +31,8 @@ object CodecSelector {
     /**
      * Returns true if the codec preference string represents an H.264/H.265 NAL-based codec.
      */
-    fun isNalCodec(codec: String): Boolean = when (codec.lowercase()) {
-        "h264", "avc", "h265", "hevc" -> true
+    fun isNalCodec(codec: String): Boolean = when (with(AaVideoCodec) { codec.normalizedPreference() }) {
+        "h264", "h265" -> true
         else -> false
     }
 

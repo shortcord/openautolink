@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.openautolink.app.video.AaVideoCodec.normalizedPreference
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -59,6 +60,8 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val GPS_FORWARDING = booleanPreferencesKey("gps_forwarding")
         val CLUSTER_NAVIGATION = booleanPreferencesKey("cluster_navigation")
         val OVERLAY_SETTINGS_BUTTON = booleanPreferencesKey("overlay_settings_button")
+        val OVERLAY_RESTART_VIDEO_BUTTON = booleanPreferencesKey("overlay_restart_video_button")
+        val OVERLAY_SWITCH_PHONE_BUTTON = booleanPreferencesKey("overlay_switch_phone_button")
         val OVERLAY_STATS_BUTTON = booleanPreferencesKey("overlay_stats_button")
         val FILE_LOGGING_ENABLED = booleanPreferencesKey("file_logging_enabled")
         val LOGCAT_CAPTURE_ENABLED = booleanPreferencesKey("logcat_capture_enabled")
@@ -168,6 +171,8 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_GPS_FORWARDING = true
         const val DEFAULT_CLUSTER_NAVIGATION = true
         const val DEFAULT_OVERLAY_SETTINGS_BUTTON = true
+        const val DEFAULT_OVERLAY_RESTART_VIDEO_BUTTON = true
+        const val DEFAULT_OVERLAY_SWITCH_PHONE_BUTTON = true
         const val DEFAULT_OVERLAY_STATS_BUTTON = true
         const val DEFAULT_FILE_LOGGING_ENABLED = false
         const val DEFAULT_LOGCAT_CAPTURE_ENABLED = false
@@ -216,7 +221,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_EV_USE_EPA_BASELINE = false
         const val DEFAULT_EV_PROFILES_LAST_UPDATE_MS = 0L
         const val DEFAULT_EV_PROFILES_UPDATE_URL =
-            "https://raw.githubusercontent.com/mossyhub/openautolink/main/app/src/main/assets/ev_profiles.json"
+            "https://raw.githubusercontent.com/shortcord/openautolink/main/app/src/main/assets/ev_profiles.json"
 
         const val DEFAULT_EV_LEARNED_RATES_JSON = "{}"
     }
@@ -226,7 +231,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
     }
 
     val videoCodec: Flow<String> = dataStore.data.map { prefs ->
-        prefs[VIDEO_CODEC] ?: DEFAULT_VIDEO_CODEC
+        (prefs[VIDEO_CODEC] ?: DEFAULT_VIDEO_CODEC).normalizedPreference()
     }
 
     val videoFps: Flow<Int> = dataStore.data.map { prefs ->
@@ -334,6 +339,14 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[OVERLAY_SETTINGS_BUTTON] ?: DEFAULT_OVERLAY_SETTINGS_BUTTON
     }
 
+    val overlayRestartVideoButton: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[OVERLAY_RESTART_VIDEO_BUTTON] ?: DEFAULT_OVERLAY_RESTART_VIDEO_BUTTON
+    }
+
+    val overlaySwitchPhoneButton: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[OVERLAY_SWITCH_PHONE_BUTTON] ?: DEFAULT_OVERLAY_SWITCH_PHONE_BUTTON
+    }
+
     val overlayStatsButton: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[OVERLAY_STATS_BUTTON] ?: DEFAULT_OVERLAY_STATS_BUTTON
     }
@@ -423,7 +436,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
     }
 
     suspend fun setVideoCodec(codec: String) {
-        dataStore.edit { it[VIDEO_CODEC] = codec }
+        dataStore.edit { it[VIDEO_CODEC] = codec.normalizedPreference() }
     }
 
     suspend fun setVideoFps(fps: Int) {
@@ -480,6 +493,14 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setOverlaySettingsButton(visible: Boolean) {
         dataStore.edit { it[OVERLAY_SETTINGS_BUTTON] = visible }
+    }
+
+    suspend fun setOverlayRestartVideoButton(visible: Boolean) {
+        dataStore.edit { it[OVERLAY_RESTART_VIDEO_BUTTON] = visible }
+    }
+
+    suspend fun setOverlaySwitchPhoneButton(visible: Boolean) {
+        dataStore.edit { it[OVERLAY_SWITCH_PHONE_BUTTON] = visible }
     }
 
     suspend fun setOverlayStatsButton(visible: Boolean) {

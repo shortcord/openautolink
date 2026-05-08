@@ -12,6 +12,9 @@
 #include "jni_channel_handlers.h"
 
 #include <android/log.h>
+#include <chrono>
+#include <cstring>
+#include <sstream>
 #include <vector>
 
 // Protobuf messages for SDR building
@@ -57,6 +60,18 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+namespace {
+constexpr int kNativeEventSessionStarted = 1;
+constexpr int kNativeEventSessionStopped = 2;
+constexpr int kNativeEventError = 3;
+constexpr int kNativeEventVideoCodecConfigured = 4;
+
+int64_t nowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
 
 // Hex-dump helper for raw protobuf bytes
 static std::string hexDump(const uint8_t* data, size_t len, size_t maxBytes = 512) {
@@ -166,11 +181,54 @@ void JniSession::releaseEnv(bool attached)
 
 void JniSession::callVoidCallback(jmethodID method)
 {
-    if (!callbackRef_ || !method) return;
+    if (!method) return;
     bool attached;
     JNIEnv* env = getEnv(attached);
-    if (env) env->CallVoidMethod(callbackRef_, method);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (!callbacksClosed_ && callbackRef_) {
+            env->CallVoidMethod(callbackRef_, method);
+            clearCallbackException(env, "voidCallback");
+        }
+    }
     releaseEnv(attached);
+}
+
+void JniSession::emitNativeEvent(int type, const uint8_t* payload, size_t length, int64_t timestampNs)
+{
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (!callbacksClosed_ && callbackRef_ && cbMethods_.onNativeEvent) {
+            jbyteArray data = env->NewByteArray(static_cast<jsize>(length));
+            if (data) {
+                if (payload && length > 0) {
+                    env->SetByteArrayRegion(data, 0, static_cast<jsize>(length),
+                                            reinterpret_cast<const jbyte*>(payload));
+                }
+                env->CallVoidMethod(callbackRef_, cbMethods_.onNativeEvent,
+                                    static_cast<jint>(type), data,
+                                    static_cast<jlong>(timestampNs));
+                env->DeleteLocalRef(data);
+            }
+            clearCallbackException(env, "onNativeEvent");
+        }
+    }
+    releaseEnv(attached);
+}
+
+void JniSession::emitNativeEvent(int type, const std::string& payload)
+{
+    emitNativeEvent(type, reinterpret_cast<const uint8_t*>(payload.data()), payload.size(), nowNs());
+}
+
+void JniSession::clearCallbackException(JNIEnv* env, const char* callbackName)
+{
+    if (!env || !env->ExceptionCheck()) return;
+    LOGE("Kotlin callback threw from %s; clearing JNI exception", callbackName);
+    env->ExceptionDescribe();
+    env->ExceptionClear();
 }
 
 // ============================================================================
@@ -185,7 +243,11 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     }
 
     // Create global refs
-    callbackRef_ = env->NewGlobalRef(callback);
+    {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        callbacksClosed_ = false;
+        callbackRef_ = env->NewGlobalRef(callback);
+    }
     jobject transportRef = env->NewGlobalRef(transportPipe);
 
     // Cache callback method IDs
@@ -213,6 +275,7 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     cbMethods_.onVoiceSession = env->GetMethodID(cbClass, "onVoiceSession", "(Z)V");
     cbMethods_.onAudioFocusRequest = env->GetMethodID(cbClass, "onAudioFocusRequest", "(I)V");
     cbMethods_.onError = env->GetMethodID(cbClass, "onError", "(Ljava/lang/String;)V");
+    cbMethods_.onNativeEvent = env->GetMethodID(cbClass, "onNativeEvent", "(I[BJ)V");
     env->DeleteLocalRef(cbClass);
 
     // Read SDR config from Kotlin
@@ -416,20 +479,25 @@ void JniSession::stop()
     if (ioThread_.joinable()) ioThread_.join();
 
     // Notify Kotlin (only if onSessionStopped hasn't already been fired by triggerAbort)
-    if (callbackRef_) {
-        bool attached;
-        JNIEnv* env = getEnv(attached);
-        if (env) {
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (callbackRef_) {
             if (!sessionStoppedFired_.exchange(true) && cbMethods_.onSessionStopped) {
                 jstring reason = env->NewStringUTF("stopped");
-                env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
-                env->DeleteLocalRef(reason);
+                if (reason) {
+                    env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
+                    env->DeleteLocalRef(reason);
+                    clearCallbackException(env, "onSessionStopped");
+                }
             }
+            callbacksClosed_ = true;
             env->DeleteGlobalRef(callbackRef_);
             callbackRef_ = nullptr;
         }
-        releaseEnv(attached);
     }
+    releaseEnv(attached);
     transport_.reset();
 }
 
@@ -512,6 +580,7 @@ void JniSession::onServiceDiscoveryRequest(
             LOGI("SDR sent Ã¢â‚¬â€ starting all service handlers");
             startAllHandlers();
             streaming_ = true;
+            emitNativeEvent(kNativeEventSessionStarted, "session_active");
             callVoidCallback(cbMethods_.onSessionStarted);
         },
         [this](const auto& e) { this->onChannelError(e); });
@@ -698,16 +767,21 @@ void JniSession::triggerAbort(const std::string& reason)
     if (transport_) transport_->stop();
 
     if (sessionStoppedFired_.exchange(true)) return;
-    if (callbackRef_ && cbMethods_.onSessionStopped) {
-        bool attached;
-        JNIEnv* env = getEnv(attached);
-        if (env) {
+    emitNativeEvent(kNativeEventSessionStopped, reason);
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (!callbacksClosed_ && callbackRef_ && cbMethods_.onSessionStopped) {
             jstring r = env->NewStringUTF(reason.c_str());
-            env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, r);
-            env->DeleteLocalRef(r);
+            if (r) {
+                env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, r);
+                env->DeleteLocalRef(r);
+                clearCallbackException(env, "onSessionStopped");
+            }
         }
-        releaseEnv(attached);
     }
+    releaseEnv(attached);
 }
 
 void JniSession::onChannelError(const aasdk::error::Error& e)
@@ -748,13 +822,20 @@ void JniSession::reportChannelError(const char* channelName, const aasdk::error:
              channelName, e.what(), totalInWindow);
     }
 
-    if (cbMethods_.onError && callbackRef_ && shouldLog) {
+    if (shouldLog) {
+        emitNativeEvent(kNativeEventError, e.what());
         bool attached;
         JNIEnv* env = getEnv(attached);
         if (env) {
-            jstring msg = env->NewStringUTF(e.what());
-            env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
-            env->DeleteLocalRef(msg);
+            std::lock_guard<std::mutex> lock(callbackMutex_);
+            if (!callbacksClosed_ && callbackRef_ && cbMethods_.onError) {
+                jstring msg = env->NewStringUTF(e.what());
+                if (msg) {
+                    env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
+                    env->DeleteLocalRef(msg);
+                    clearCallbackException(env, "onError");
+                }
+            }
         }
         releaseEnv(attached);
     }
@@ -785,28 +866,31 @@ void JniSession::onChannelOpenRequest(
 void JniSession::onMediaChannelSetupRequest(
     const aap_protobuf::service::media::shared::message::Setup& request)
 {
-    LOGI("Video setup from phone: type=%d (0=H264 1=H265 2=VP9)", request.type());
+    LOGI("Video setup from phone: type=%d (3=H264 5=VP9 6=AV1 7=H265)", request.type());
     logProtoRaw("VideoSetup", request);
     negotiatedCodecType_ = request.type();
 
     // Notify Kotlin of the negotiated codec type so the decoder configures correctly
-    if (cbMethods_.onVideoCodecConfigured && callbackRef_) {
-        bool attached;
-        JNIEnv* env = getEnv(attached);
-        if (env) {
+    emitNativeEvent(kNativeEventVideoCodecConfigured, std::to_string(request.type()));
+    bool attached;
+    JNIEnv* env = getEnv(attached);
+    if (env) {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        if (!callbacksClosed_ && callbackRef_ && cbMethods_.onVideoCodecConfigured) {
             env->CallVoidMethod(callbackRef_, cbMethods_.onVideoCodecConfigured,
                                 static_cast<jint>(request.type()));
+            clearCallbackException(env, "onVideoCodecConfigured");
         }
-        releaseEnv(attached);
     }
+    releaseEnv(attached);
 
     aap_protobuf::service::media::shared::message::Config config;
     config.set_status(aap_protobuf::service::media::shared::message::Config::STATUS_READY);
     config.set_max_unacked(30);
     if (sdrConfig_.autoNegotiate) {
         // Auto mode: accept all configurations
-        // SDR has 5 H.265 + 3 H.264 = 8 total
-        for (int i = 0; i < 8; i++) {
+        // SDR has 5 H.265 + 3 VP9 + 3 H.264 = 11 total
+        for (int i = 0; i < 11; i++) {
             config.add_configuration_indices(i);
         }
     } else {
@@ -836,6 +920,7 @@ void JniSession::onMediaChannelStartIndication(
     LOGI("Video stream starting: session=%d config_idx=%d",
          indication.session_id(), indication.configuration_index());
     logProtoRaw("VideoStart", indication);
+    videoSessionId_.store(indication.session_id());
 
     aap_protobuf::service::media::video::message::VideoFocusNotification focus;
     focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
@@ -851,6 +936,7 @@ void JniSession::onMediaChannelStopIndication(
     const aap_protobuf::service::media::shared::message::Stop& /*indication*/)
 {
     LOGI("Video stream stopping");
+    videoSessionId_.store(0);
     videoChannel_->receive(shared_from_this());
 }
 
@@ -860,7 +946,7 @@ void JniSession::onMediaWithTimestampIndication(
 {
     // Hot path Ã¢â‚¬â€ video frame. Send ACK immediately (flow control).
     aap_protobuf::service::media::source::message::Ack ack;
-    ack.set_session_id(0);
+    ack.set_session_id(videoSessionId_.load());
     ack.set_ack(1);
     auto promise = aasdk::channel::SendPromise::defer(*strand_);
     promise->then([]() {}, [](const auto&) {});
@@ -900,7 +986,7 @@ void JniSession::onMediaWithTimestampIndication(
                 uint8_t hevcNalType = (d[nalStart] >> 1) & 0x3F;
                 if (hevcNalType >= 16 && hevcNalType <= 21) isKeyFrame = true;
                 if (hevcNalType == 32 || hevcNalType == 33 || hevcNalType == 34) isCodecConfig = true;
-            } else {
+            } else if (codec == 3) {
                 uint8_t nalType = d[nalStart] & 0x1F;
                 if (nalType == 5) isKeyFrame = true;
                 if (nalType == 7 || nalType == 8) isCodecConfig = true;
@@ -909,6 +995,16 @@ void JniSession::onMediaWithTimestampIndication(
             if (isKeyFrame && isCodecConfig) break;
             pos = nalStart + 1;
         }
+    }
+    if (codec == 5 && buffer.size >= 1) {
+        // VP9 raw frame header: frame marker must be 2, show_existing_frame=0,
+        // and frame_type=0 for keyframes. This covers the common AA profile 0
+        // stream and avoids relying on H.264/H.265 NAL parsing for VP9.
+        const uint8_t first = buffer.cdata[0];
+        const bool frameMarkerOk = (first & 0xC0) == 0x80;
+        const bool showExistingFrame = (first & 0x08) != 0;
+        const bool interFrame = (first & 0x04) != 0;
+        isKeyFrame = frameMarkerOk && !showExistingFrame && !interFrame;
     }
 
     // Build flags matching VideoFrame.FLAG_* constants
@@ -920,6 +1016,15 @@ void JniSession::onMediaWithTimestampIndication(
     if (isKeyFrame && isCodecConfig) {
         LOGI("Video frame: combined config+keyframe detected (%zu bytes, codec=%d)",
              buffer.size, codec);
+    }
+    if (isKeyFrame) {
+        const int64_t requestedAt = keyframeRequestedAtMs_.exchange(0);
+        if (requestedAt > 0) {
+            const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            LOGI("Video keyframe received %lld ms after request (%zu bytes, codec=%d)",
+                 static_cast<long long>(nowMs - requestedAt), buffer.size, codec);
+        }
     }
 
     // Dispatch to Kotlin
@@ -1089,7 +1194,15 @@ void JniSession::buildServiceDiscoveryResponse(
     { auto* svc = response.add_channels();
       svc->set_id(2); // VIDEO — Java uses 2 (MEDIA_SINK), works with localhost proxy
       auto* ms = svc->mutable_media_sink_service();
-      ms->set_available_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
+      auto primaryVideoCodec = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265;
+      if (!sdrConfig_.autoNegotiate) {
+          if (sdrConfig_.videoCodec == "h264") {
+              primaryVideoCodec = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP;
+          } else if (sdrConfig_.videoCodec == "vp9") {
+              primaryVideoCodec = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_VP9;
+          }
+      }
+      ms->set_available_type(primaryVideoCodec);
       ms->set_available_while_in_call(true);
 
       using VRes = aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
@@ -1123,7 +1236,7 @@ void JniSession::buildServiceDiscoveryResponse(
       };
 
       if (sdrConfig_.autoNegotiate) {
-          // Auto mode: H.265 at all tiers, then H.264 fallback
+          // Auto mode: H.265 at all tiers, VP9 at high tiers, then H.264 fallback
           // Landscape tier pixel widths indexed by VRes enum (1-5)
           static constexpr int tierWidths[] = {0, 800, 1280, 1920, 2560, 3840};
           int tiers[] = {5, 4, 3, 2, 1};
@@ -1141,6 +1254,19 @@ void JniSession::buildServiceDiscoveryResponse(
               vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265);
               applyCommonVideoFields(vc);
           }
+          for (int t : {5, 4, 3}) {
+              auto* vc = ms->add_video_configs();
+              vc->set_codec_resolution(static_cast<VRes>(t));
+              vc->set_frame_rate(fps);
+              if (sdrConfig_.targetLayoutWidthDp > 0) {
+                  int dpi = (tierWidths[t] * 160) / sdrConfig_.targetLayoutWidthDp;
+                  vc->set_density(std::max(dpi, 80));
+              } else {
+                  vc->set_density(sdrConfig_.videoDpi);
+              }
+              vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_VP9);
+              applyCommonVideoFields(vc);
+          }
           for (int t : {3, 2, 1}) {
               auto* vc = ms->add_video_configs();
               vc->set_codec_resolution(static_cast<VRes>(t));
@@ -1156,9 +1282,12 @@ void JniSession::buildServiceDiscoveryResponse(
           }
       } else {
           // Manual mode: single config at the selected resolution and codec
-          auto codecType = (sdrConfig_.videoCodec == "h264")
-              ? aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP
-              : aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265;
+          auto codecType = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265;
+          if (sdrConfig_.videoCodec == "h264") {
+              codecType = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP;
+          } else if (sdrConfig_.videoCodec == "vp9") {
+              codecType = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_VP9;
+          }
           auto* vc = ms->add_video_configs();
           vc->set_codec_resolution(res);
           vc->set_frame_rate(fps);
@@ -1497,14 +1626,69 @@ void JniSession::sendMicAudio(const uint8_t* data, size_t length)
 void JniSession::requestKeyframe()
 {
     if (!streaming_ || !videoChannel_) return;
+    const auto requestedAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    keyframeRequestedAtMs_.store(requestedAtMs);
     ioService_->post([this]() {
         LOGI("Requesting keyframe (VideoFocusIndication)");
         aap_protobuf::service::media::video::message::VideoFocusNotification focus;
         focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
-        focus.set_unsolicited(false);
+        focus.set_unsolicited(true);
         auto promise = aasdk::channel::SendPromise::defer(*strand_);
         promise->then([]() {}, [](const auto&) {});
         videoChannel_->sendVideoFocusIndication(focus, std::move(promise));
+    });
+}
+
+void JniSession::closeVideoStream()
+{
+    if (!streaming_ || !videoChannel_ || !ioService_) return;
+    auto self = shared_from_this();
+    ioService_->post([self]() {
+        if (!self->streaming_ || !self->videoChannel_) return;
+        LOGI("Closing video stream only (VIDEO_FOCUS_NATIVE)");
+        aap_protobuf::service::media::video::message::VideoFocusNotification focus;
+        focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
+        focus.set_unsolicited(true);
+        auto promise = aasdk::channel::SendPromise::defer(*self->strand_);
+        promise->then([]() {}, [self](const auto& e) { self->onChannelError(e); });
+        self->videoChannel_->sendVideoFocusIndication(focus, std::move(promise));
+    });
+}
+
+void JniSession::restartVideoStream()
+{
+    if (!streaming_ || !videoChannel_ || !ioService_ || !strand_) return;
+    auto self = shared_from_this();
+    ioService_->post([self]() {
+        if (!self->streaming_ || !self->videoChannel_) return;
+
+        LOGI("Restarting video stream only (VIDEO_FOCUS_NATIVE -> PROJECTED)");
+        aap_protobuf::service::media::video::message::VideoFocusNotification stopFocus;
+        stopFocus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
+        stopFocus.set_unsolicited(true);
+        auto stopPromise = aasdk::channel::SendPromise::defer(*self->strand_);
+        stopPromise->then([]() {}, [self](const auto& e) { self->onChannelError(e); });
+        self->videoChannel_->sendVideoFocusIndication(stopFocus, std::move(stopPromise));
+
+        auto timer = std::make_shared<boost::asio::deadline_timer>(
+            *self->ioService_,
+            boost::posix_time::milliseconds(250));
+        timer->async_wait(self->strand_->wrap([self, timer](const boost::system::error_code& ec) {
+            if (ec || !self->streaming_ || !self->videoChannel_) return;
+            const auto requestedAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            self->keyframeRequestedAtMs_.store(requestedAtMs);
+
+            aap_protobuf::service::media::video::message::VideoFocusNotification startFocus;
+            startFocus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
+            // Treat as an unsolicited focus change; some phones appear to ignore
+            // solicited=false here, leaving video in a low-FPS/native-focus state.
+            startFocus.set_unsolicited(true);
+            auto startPromise = aasdk::channel::SendPromise::defer(*self->strand_);
+            startPromise->then([]() {}, [self](const auto& e) { self->onChannelError(e); });
+            self->videoChannel_->sendVideoFocusIndication(startFocus, std::move(startPromise));
+        }));
     });
 }
 

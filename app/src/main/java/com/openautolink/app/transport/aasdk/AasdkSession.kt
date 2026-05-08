@@ -28,12 +28,11 @@ import java.net.Socket
 /**
  * AA session backed by native aasdk via JNI.
  *
- * Replaces DirectAaSession — same Nearby transport, but the AA wire protocol
- * is handled by the proven aasdk C++ library instead of the Kotlin port.
+ * Replaces DirectAaSession. The AA wire protocol is handled by the proven
+ * aasdk C++ library instead of the old Kotlin port.
  *
  * Data flow:
- *   Phone ←→ Nearby (companion app) ←→ AaNearbyManager ←→ streams
- *     → AasdkTransportPipe → JNI → aasdk C++ → JNI callbacks
+ *   Phone transport (USB or WiFi) → AasdkTransportPipe → JNI → aasdk C++ → JNI callbacks
  *     → AasdkSession flows → SessionManager → VideoDecoder/AudioPlayer
  */
 class AasdkSession(
@@ -43,6 +42,10 @@ class AasdkSession(
 
     companion object {
         private const val TAG = "AasdkSession"
+        private const val NATIVE_EVENT_SESSION_STARTED = 1
+        private const val NATIVE_EVENT_SESSION_STOPPED = 2
+        private const val NATIVE_EVENT_ERROR = 3
+        private const val NATIVE_EVENT_VIDEO_CODEC_CONFIGURED = 4
     }
 
     // -- Output flows (same interface as DirectAaSession) --
@@ -53,7 +56,7 @@ class AasdkSession(
     private val _videoFrames = MutableSharedFlow<VideoFrame>(extraBufferCapacity = 30)
     val videoFrames: SharedFlow<VideoFrame> = _videoFrames.asSharedFlow()
 
-    /** Negotiated video codec type from phone. 3=H.264, 5=H.264_BP, 7=H.265 */
+    /** Negotiated video codec type from phone. 3=H.264, 5=VP9, 6=AV1, 7=H.265 */
     private val _negotiatedCodecType = MutableStateFlow(0)
     val negotiatedCodecType: StateFlow<Int> = _negotiatedCodecType.asStateFlow()
 
@@ -102,6 +105,8 @@ class AasdkSession(
     private var lastFailureWasProtocolError = false
 
     private var transportPipe: AasdkTransportPipe? = null
+    private val sessionStartLock = Any()
+    @Volatile private var sessionStartInFlight = false
 
     // -- Lifecycle --
 
@@ -149,49 +154,46 @@ class AasdkSession(
         OalLog.i(TAG, "Starting aasdk session (USB transport)")
         _usbConnectionManager?.stop()
         _usbConnectionManager = UsbConnectionManager(context, scope) { usbTransportPipe ->
-            scope.launch(Dispatchers.IO) {
-                OalLog.i(TAG, "USB transport ready — starting aasdk native session")
-                handleUsbConnection(usbTransportPipe)
-            }
+            OalLog.i(TAG, "USB transport ready — starting aasdk native session")
+            handleUsbConnection(usbTransportPipe)
         }
         _usbConnectionManager?.start()
     }
 
-    private fun handleUsbConnection(pipe: AasdkTransportPipe) {
+    private fun handleUsbConnection(pipe: AasdkTransportPipe): Boolean {
+        if (!beginSessionStart("USB", pipe)) return false
         _connectionState.value = ConnectionState.CONNECTING
 
         OalLog.i(TAG, "Starting native aasdk session (USB): ${sdrConfig.videoWidth}x${sdrConfig.videoHeight}")
 
-        transportPipe = pipe
-
         try {
             AasdkNative.nativeCreateSession()
             AasdkNative.nativeStartSession(pipe, this, sdrConfig)
+            return true
         } catch (e: Exception) {
             OalLog.e(TAG, "Native session start failed (USB): ${e.message}")
-            pipe.close()
-            transportPipe = null
+            finishSessionStartFailure(pipe)
             _connectionState.value = ConnectionState.DISCONNECTED
+            return false
         }
     }
 
     private fun handleConnection(socket: Socket) {
+        val candidatePipe = AasdkTransportPipe(socket.getInputStream(), socket.getOutputStream())
+        if (!beginSessionStart("transport", candidatePipe)) {
+            candidatePipe.close()
+            return
+        }
         _connectionState.value = ConnectionState.CONNECTING
-
-        val input = socket.getInputStream()
-        val output = socket.getOutputStream()
 
         OalLog.i(TAG, "Starting native aasdk session: ${sdrConfig.videoWidth}x${sdrConfig.videoHeight}")
 
-        transportPipe = AasdkTransportPipe(input, output)
-
         try {
             AasdkNative.nativeCreateSession()
-            AasdkNative.nativeStartSession(transportPipe!!, this, sdrConfig)
+            AasdkNative.nativeStartSession(candidatePipe, this, sdrConfig)
         } catch (e: Exception) {
             OalLog.e(TAG, "Native session start failed: ${e.message}")
-            transportPipe?.close()
-            transportPipe = null
+            finishSessionStartFailure(candidatePipe)
             _connectionState.value = ConnectionState.DISCONNECTED
         }
     }
@@ -208,6 +210,7 @@ class AasdkSession(
         AasdkNative.nativeStopSession()
         transportPipe?.close()
         transportPipe = null
+        sessionStartInFlight = false
         _connectionState.value = ConnectionState.DISCONNECTED
     }
 
@@ -233,6 +236,7 @@ class AasdkSession(
         AasdkNative.nativeStopSession()
         transportPipe?.close()
         transportPipe = null
+        sessionStartInFlight = false
         _connectionState.value = ConnectionState.DISCONNECTED
         // Now clear the explicitStop flag so the freshly-started session can
         // auto-reconnect normally if its connection later dies.
@@ -299,15 +303,29 @@ class AasdkSession(
         AasdkNative.nativeRequestKeyframe()
     }
 
+    fun closeVideoStream() {
+        AasdkNative.nativeCloseVideoStream()
+    }
+
+    fun restartVideoStream() {
+        AasdkNative.nativeRestartVideoStream()
+    }
+
     // -- AasdkSessionCallback (called from native thread → dispatch to flows) --
 
     override fun onSessionStarted() {
         OalLog.i(TAG, "AA session started (native)")
         consecutiveReconnectFailures = 0
         lastFailureWasProtocolError = false
+        sessionStartInFlight = false
         scope.launch {
             _connectionState.value = ConnectionState.CONNECTED
-            _controlMessages.emit(ControlMessage.PhoneConnected(phoneName = "", phoneType = "wireless"))
+            _controlMessages.emit(
+                ControlMessage.PhoneConnected(
+                    phoneName = "",
+                    phoneType = if (transportMode == "usb") "usb" else "wireless"
+                )
+            )
         }
     }
 
@@ -316,6 +334,7 @@ class AasdkSession(
         // Clean up dead transport
         transportPipe?.close()
         transportPipe = null
+        sessionStartInFlight = false
 
         scope.launch {
             _connectionState.value = ConnectionState.DISCONNECTED
@@ -571,5 +590,46 @@ class AasdkSession(
                 _controlMessages.emit(ControlMessage.Error(code = -1, message = message))
             }
         }
+    }
+
+    override fun onNativeEvent(type: Int, payload: ByteArray, timestampNs: Long) {
+        val payloadText = payload.toString(Charsets.UTF_8)
+        val label = when (type) {
+            NATIVE_EVENT_SESSION_STARTED -> "session_started"
+            NATIVE_EVENT_SESSION_STOPPED -> "session_stopped"
+            NATIVE_EVENT_ERROR -> "error"
+            NATIVE_EVENT_VIDEO_CODEC_CONFIGURED -> "video_codec_configured"
+            else -> "type_$type"
+        }
+        com.openautolink.app.diagnostics.DiagnosticLog.d(
+            "native",
+            "event=$label ts=$timestampNs payload=$payloadText"
+        )
+    }
+
+    private fun beginSessionStart(label: String, pipe: AasdkTransportPipe): Boolean {
+        synchronized(sessionStartLock) {
+            if (explicitStop) {
+                OalLog.i(TAG, "Ignoring $label transport because session is stopping")
+                pipe.close()
+                return false
+            }
+            if (sessionStartInFlight || transportPipe != null || _connectionState.value != ConnectionState.DISCONNECTED) {
+                OalLog.w(TAG, "Ignoring duplicate $label transport while session startup is already in progress")
+                pipe.close()
+                return false
+            }
+            sessionStartInFlight = true
+            transportPipe = pipe
+            return true
+        }
+    }
+
+    private fun finishSessionStartFailure(pipe: AasdkTransportPipe) {
+        pipe.close()
+        if (transportPipe === pipe) {
+            transportPipe = null
+        }
+        sessionStartInFlight = false
     }
 }

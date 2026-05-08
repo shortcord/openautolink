@@ -49,6 +49,10 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                             settingsViewModel.saveAndReconnect()
                             onBack()
                         },
+                        onSaveAndRestartVideo = {
+                            settingsViewModel.saveAndRestartVideoStream()
+                            onBack()
+                        },
                         onBack = onBack,
                         onNavigateToDiagnostics = onShowDiagnostics,
                         onNavigateToSafeAreaEditor = {

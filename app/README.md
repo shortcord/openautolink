@@ -17,7 +17,7 @@ See [docs/architecture.md](../docs/architecture.md) for the component island pla
 
 | Island | Package | Purpose |
 |--------|---------|---------|
-| Transport | `transport/` | aasdk JNI session + Nearby Connections |
+| Transport | `transport/` | aasdk JNI session + TCP companion discovery/transport |
 | Video | `video/` | MediaCodec lifecycle, Surface rendering |
 | Audio | `audio/` | Multi-purpose AudioTrack (5 slots), mic capture |
 | Input | `input/` | Touch, GNSS, VHAL vehicle data, IMU sensors |

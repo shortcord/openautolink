@@ -1,6 +1,6 @@
 # Direct Mode — Bridgeless Android Auto for AAOS
 
-> **SUPERSEDED**: This document describes the **pure-Kotlin AA protocol** approach (ported from HeadUnit Revived). That approach has been replaced by **aasdk C++ via JNI** on the `feature/aasdk-jni` branch — the same proven aasdk library from the bridge, now running inside the Android app. The Nearby Connections transport described here is still used.
+> **SUPERSEDED**: This document describes the historical **pure-Kotlin AA protocol** approach (ported from HeadUnit Revived). The active architecture is documented in [architecture.md](architecture.md): the AAOS app runs aasdk C++ via JNI and normally connects to the phone companion over TCP port `5277`. Nearby transport code remains in the tree but is not the current companion workflow.
 
 ## Overview (Historical — Kotlin AA protocol)
 

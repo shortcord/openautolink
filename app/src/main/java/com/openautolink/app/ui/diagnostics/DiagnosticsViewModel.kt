@@ -13,6 +13,7 @@ import com.openautolink.app.data.AppPreferences
 import com.openautolink.app.session.SessionManager
 import com.openautolink.app.session.SessionState
 import com.openautolink.app.transport.ControlMessage
+import com.openautolink.app.transport.usb.UsbConnectionManager
 import com.openautolink.app.video.CodecSelector
 import com.openautolink.app.video.VideoStats
 import com.openautolink.app.audio.AudioStats
@@ -58,6 +59,9 @@ data class SystemInfo(
 
 data class NetworkInfo(
     val sessionState: SessionState,
+    val transport: String = AppPreferences.DEFAULT_DIRECT_TRANSPORT,
+    val usbStatus: String = "",
+    val usbDeviceDescription: String? = null,
 )
 
 data class StreamingStats(
@@ -140,6 +144,8 @@ data class DiagnosticsUiState(
     val car: CarInfo = CarInfo(),
     val logs: List<LogEntry> = emptyList(),
     val logFilter: LogSeverity = LogSeverity.DEBUG,
+    val fileLoggingEnabled: Boolean = AppPreferences.DEFAULT_FILE_LOGGING_ENABLED,
+    val logcatCaptureEnabled: Boolean = AppPreferences.DEFAULT_LOGCAT_CAPTURE_ENABLED,
     val networkProbe: NetworkProbeState = NetworkProbeState(),
     val debugProbe: DebugProbeState = DebugProbeState(),
 )
@@ -192,6 +198,8 @@ private data class CombinedInner(
     val filter: LogSeverity,
     val probe: NetworkProbeState,
     val debug: DebugProbeState,
+    val fileLoggingEnabled: Boolean = AppPreferences.DEFAULT_FILE_LOGGING_ENABLED,
+    val logcatCaptureEnabled: Boolean = AppPreferences.DEFAULT_LOGCAT_CAPTURE_ENABLED,
 )
 
 class DiagnosticsViewModel(application: Application) : AndroidViewModel(application) {
@@ -221,12 +229,21 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
         _streaming,
         _car,
         combine(
-            com.openautolink.app.diagnostics.DiagnosticLog.localLogs,
-            _logFilter,
-            _networkProbe,
-            _debugProbe,
-        ) { logs, filter, probe, debug ->
-            CombinedInner(logs, filter, probe, debug)
+            combine(
+                com.openautolink.app.diagnostics.DiagnosticLog.localLogs,
+                _logFilter,
+                _networkProbe,
+                _debugProbe,
+            ) { logs, filter, probe, debug ->
+                CombinedInner(logs, filter, probe, debug)
+            },
+            preferences.fileLoggingEnabled,
+            preferences.logcatCaptureEnabled,
+        ) { inner, fileLoggingEnabled, logcatCaptureEnabled ->
+            inner.copy(
+                fileLoggingEnabled = fileLoggingEnabled,
+                logcatCaptureEnabled = logcatCaptureEnabled,
+            )
         },
     ) { system, network, streaming, car, inner ->
         // Map LocalLogEntry → LogEntry for UI
@@ -252,6 +269,8 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             car = car,
             logs = filtered,
             logFilter = inner.filter,
+            fileLoggingEnabled = inner.fileLoggingEnabled,
+            logcatCaptureEnabled = inner.logcatCaptureEnabled,
             networkProbe = inner.probe,
             debugProbe = inner.debug,
         )
@@ -267,8 +286,20 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
 
         // Observe session state for network tab
         viewModelScope.launch {
-            sessionManager.sessionState.collect { state ->
-                _network.value = NetworkInfo(sessionState = state)
+            combine(
+                sessionManager.sessionState,
+                preferences.directTransport,
+                UsbConnectionManager.status,
+                UsbConnectionManager.deviceDescription,
+            ) { state, transport, usbStatus, usbDeviceDescription ->
+                NetworkInfo(
+                    sessionState = state,
+                    transport = transport,
+                    usbStatus = usbStatus,
+                    usbDeviceDescription = usbDeviceDescription,
+                )
+            }.collect { info ->
+                _network.value = info
             }
         }
 
@@ -346,6 +377,14 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             adbWifiStatus = com.openautolink.app.diagnostics.DeviceDebugProbe.getAdbWifiStatus(application),
             deviceInfo = com.openautolink.app.diagnostics.DeviceDebugProbe.getDeviceInfo(),
         )
+    }
+
+    fun updateFileLoggingEnabled(enabled: Boolean) {
+        viewModelScope.launch { preferences.setFileLoggingEnabled(enabled) }
+    }
+
+    fun updateLogcatCaptureEnabled(enabled: Boolean) {
+        viewModelScope.launch { preferences.setLogcatCaptureEnabled(enabled) }
     }
 
     // ── Network Probe ─────────────────────────────────────────────────

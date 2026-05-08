@@ -1,6 +1,7 @@
 package com.openautolink.app.ui.projection
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -11,6 +12,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,18 +22,23 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,13 +53,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -60,11 +73,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.openautolink.app.BuildConfig
 import com.openautolink.app.R
 import com.openautolink.app.audio.AudioStats
 import com.openautolink.app.session.SessionState
-import com.openautolink.app.ui.components.DraggableOverlayButton
 import com.openautolink.app.video.VideoStats
+import kotlin.math.roundToInt
 
 @Composable
 fun ProjectionScreen(
@@ -74,14 +88,19 @@ fun ProjectionScreen(
     diagnosticsOverlay: @Composable (onBack: () -> Unit) -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val directTransport by viewModel.directTransport.collectAsStateWithLifecycle()
     val connectionMode by viewModel.connectionMode.collectAsStateWithLifecycle()
-    val isCarHotspotMode = connectionMode == com.openautolink.app.data.AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
+    val isCarHotspotMode = directTransport == "hotspot" &&
+        connectionMode == com.openautolink.app.data.AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
     val carHotspotPhones by viewModel.carHotspotPhones.collectAsStateWithLifecycle()
     val carHotspotSweeping by viewModel.carHotspotSweepActive.collectAsStateWithLifecycle()
     val carHotspotSweepProgress by viewModel.carHotspotSweepProgress.collectAsStateWithLifecycle()
     val knownPhones by viewModel.knownPhones.collectAsStateWithLifecycle()
     val defaultPhoneId by viewModel.defaultPhoneId.collectAsStateWithLifecycle()
     val carHotspotSwitching by viewModel.carHotspotSwitching.collectAsStateWithLifecycle()
+    val carHotspotStatus by viewModel.carHotspotStatus.collectAsStateWithLifecycle()
+    val carHotspotStatusDetail by viewModel.carHotspotStatusDetail.collectAsStateWithLifecycle()
+    val chooserMessage by viewModel.carHotspotChooserMessage.collectAsStateWithLifecycle()
     val activePhoneId by viewModel.activePhoneId.collectAsStateWithLifecycle()
 
     // Settings overlay state
@@ -90,6 +109,7 @@ fun ProjectionScreen(
     // projection Surface stays alive underneath. Returning to projection avoids
     // a codec/Surface re-init and the black frames that come with it.
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+    var showOverlayActions by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(showSettings) {
         viewModel.setSettingsOpen(showSettings)
@@ -161,7 +181,7 @@ fun ProjectionScreen(
                 .testTag("projectionSurface")
         }
 
-        // SurfaceView for video rendering — intercepts touch for forwarding to bridge
+        // SurfaceView for video rendering — intercepts touch for forwarding to Android Auto
         // Key on videoScalingMode so Compose recreates the SurfaceView when mode changes.
         // Without this, the old SurfaceView keeps its dimensions after switching modes.
         @SuppressLint("ClickableViewAccessibility")
@@ -213,10 +233,44 @@ fun ProjectionScreen(
             )
         }
 
+        // Car Hotspot status banner — visible whenever we're in Car Hotspot
+        // mode and not actively streaming. Tells the user what the app is
+        // doing (searching, switching, awaiting their pick, etc.) so a
+        // black screen never feels like the app is frozen.
+        if (isCarHotspotMode && carHotspotStatus != ProjectionViewModel.CarHotspotStatus.STREAMING &&
+            carHotspotStatus != ProjectionViewModel.CarHotspotStatus.INACTIVE
+        ) {
+            CarHotspotStatusBanner(
+                status = carHotspotStatus,
+                detail = carHotspotStatusDetail,
+                onTapPicker = { viewModel.showCarHotspotChooser() },
+                onTapScan = { viewModel.rescanCarHotspotPhones() },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 24.dp),
+            )
+        }
+
         // Waiting-for-keyframe indicator — subtle spinner during STREAMING when
         // the decoder has no IDR yet (black video). Disappears as soon as first
         // frame is decoded. Placed bottom-center to avoid blocking the projection.
         if (uiState.sessionState == SessionState.STREAMING && uiState.videoStats.waitingForKeyframe) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xAA000000))
+                    .padding(24.dp)
+                    .testTag("videoLoadingPlaceholder"),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(36.dp),
+                    color = Color.White,
+                    strokeWidth = 3.dp
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -245,91 +299,26 @@ fun ProjectionScreen(
             }
         }
 
-        // Floating overlay buttons — bottom-right, above nav bar. Draggable.
-        Column(
+        FloatingOverlayMenu(
+            expanded = showOverlayActions,
+            onExpandedChange = { showOverlayActions = it },
+            showSettingsButton = uiState.overlaySettingsButton,
+            showRestartVideoButton = uiState.overlayRestartVideoButton,
+            showSwitchPhoneButton = isCarHotspotMode && uiState.overlaySwitchPhoneButton,
+            showStatsButton = uiState.overlayStatsButton,
+            showFileLogButton = uiState.fileLoggingEnabled,
+            statsActive = uiState.showStats,
+            carHotspotSwitching = carHotspotSwitching,
+            fileLoggingActive = uiState.fileLoggingActive,
+            onSettings = { showSettings = true },
+            onRestartVideo = { viewModel.restartVideoStream() },
+            onSwitchPhone = { viewModel.showCarHotspotChooser() },
+            onStats = { viewModel.toggleStats() },
+            onFileLog = { viewModel.toggleFileLogging() },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = 16.dp),
-        ) {
-            // Settings button — draggable
-            DraggableOverlayButton(
-                icon = Icons.Default.Settings,
-                contentDescription = "Settings",
-                onClick = { showSettings = true },
-                positionKey = "overlay_settings",
-                modifier = Modifier.testTag("settingsButton"),
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Switch Phone button — Car Hotspot mode only. Tapping opens a
-            // centered chooser overlay; the underlying AA session keeps
-            // streaming until the user explicitly picks a different phone.
-            if (isCarHotspotMode) {
-                DraggableOverlayButton(
-                    icon = Icons.Default.PhoneAndroid,
-                    contentDescription = "Switch Phone",
-                    onClick = { viewModel.showCarHotspotChooser() },
-                    positionKey = "overlay_switch_phone",
-                    containerColor = if (carHotspotSwitching) {
-                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
-                    } else {
-                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                    },
-                    tint = if (carHotspotSwitching) {
-                        MaterialTheme.colorScheme.onTertiary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    modifier = Modifier.testTag("switchPhoneButton"),
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            // Stats button — draggable
-            DraggableOverlayButton(
-                icon = Icons.Default.Info,
-                contentDescription = "Stats for nerds",
-                onClick = { viewModel.toggleStats() },
-                positionKey = "overlay_stats",
-                containerColor = if (uiState.showStats) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                },
-                tint = if (uiState.showStats) {
-                    MaterialTheme.colorScheme.onPrimary
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                modifier = Modifier.testTag("statsButton"),
-            )
-
-            // File logging button — only shown when enabled in Settings → Diagnostics
-            if (uiState.fileLoggingEnabled) {
-            Spacer(modifier = Modifier.height(8.dp))
-
-            DraggableOverlayButton(
-                icon = Icons.Default.FiberManualRecord,
-                contentDescription = "File Logging",
-                onClick = { viewModel.toggleFileLogging() },
-                positionKey = "overlay_file_log",
-                containerColor = if (uiState.fileLoggingActive) {
-                    Color.Red.copy(alpha = 0.7f)
-                } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                },
-                tint = if (uiState.fileLoggingActive) {
-                    Color.White
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                modifier = Modifier.testTag("fileLogButton"),
-            )
-            } // end fileLoggingEnabled
-
-        }
+        )
 
         // Stats overlay panel — bottom-left
         if (uiState.showStats) {
@@ -409,6 +398,7 @@ fun ProjectionScreen(
                     sweeping = carHotspotSweeping,
                     sweepProgress = carHotspotSweepProgress,
                     switching = carHotspotSwitching,
+                    chooserMessage = chooserMessage,
                     onSelect = { viewModel.selectCarHotspotPhone(it) },
                     onSelectKnown = { kp ->
                         // Selecting a known-but-not-currently-discovered phone:
@@ -443,6 +433,309 @@ fun ProjectionScreen(
 
     }
 }
+
+/**
+ * Top-of-screen status banner for the Car Hotspot connect lifecycle. Renders
+ * over the projection surface so the user always knows what's happening
+ * when streaming hasn't yet started (or has dropped).
+ *
+ * Different statuses get different colors + actions:
+ *   - SEARCHING / SWITCHING / CONNECTING: blue/grey, spinner, no actions.
+ *   - AWAITING_USER_PICK: amber, "Pick a phone" button → opens chooser.
+ *   - PHONE_NOT_FOUND: red, "Try again" button → kicks sweep.
+ */
+@Composable
+private fun CarHotspotStatusBanner(
+    status: ProjectionViewModel.CarHotspotStatus,
+    detail: String?,
+    onTapPicker: () -> Unit,
+    onTapScan: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val (headline, accent, isError, isAwaitingPick) = when (status) {
+        ProjectionViewModel.CarHotspotStatus.SEARCHING ->
+            Quad("Looking for your phone…", Color(0xFF64B5F6), false, false)
+        ProjectionViewModel.CarHotspotStatus.SWITCHING ->
+            Quad("Switching phones…", Color(0xFFFFB74D), false, false)
+        ProjectionViewModel.CarHotspotStatus.CONNECTING ->
+            Quad("Connecting…", Color(0xFF64B5F6), false, false)
+        ProjectionViewModel.CarHotspotStatus.AWAITING_USER_PICK ->
+            Quad("Choose a phone to start", Color(0xFFFFB74D), false, true)
+        ProjectionViewModel.CarHotspotStatus.PHONE_NOT_FOUND ->
+            Quad("Couldn't find your phone", Color(0xFFEF5350), true, false)
+        else -> Quad("", Color.White, false, false)
+    }
+    if (headline.isEmpty()) return
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xCC1B1B1F))
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (!isError && !isAwaitingPick) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = accent,
+                strokeWidth = 2.dp,
+            )
+        }
+        Column {
+            Text(
+                text = headline,
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (!detail.isNullOrBlank()) {
+                Text(
+                    text = detail,
+                    color = Color.White.copy(alpha = 0.75f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        when {
+            isAwaitingPick -> {
+                Spacer(modifier = Modifier.width(4.dp))
+                androidx.compose.material3.FilledTonalButton(
+                    onClick = onTapPicker,
+                    modifier = Modifier.height(36.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 14.dp, vertical = 0.dp,
+                    ),
+                ) { Text("Pick phone", fontSize = 13.sp) }
+            }
+            isError -> {
+                Spacer(modifier = Modifier.width(4.dp))
+                androidx.compose.material3.FilledTonalButton(
+                    onClick = onTapScan,
+                    modifier = Modifier.height(36.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 14.dp, vertical = 0.dp,
+                    ),
+                ) { Text("Try again", fontSize = 13.sp) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FloatingOverlayMenu(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    showSettingsButton: Boolean,
+    showRestartVideoButton: Boolean,
+    showSwitchPhoneButton: Boolean,
+    showStatsButton: Boolean,
+    showFileLogButton: Boolean,
+    statsActive: Boolean,
+    carHotspotSwitching: Boolean,
+    fileLoggingActive: Boolean,
+    onSettings: () -> Unit,
+    onRestartVideo: () -> Unit,
+    onSwitchPhone: () -> Unit,
+    onStats: () -> Unit,
+    onFileLog: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val prefs = remember {
+        context.getSharedPreferences("overlay_positions", Context.MODE_PRIVATE)
+    }
+    var offset by remember {
+        mutableStateOf(
+            Offset(
+                prefs.getFloat("overlay_actions_x", 0f),
+                prefs.getFloat("overlay_actions_y", 0f),
+            )
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragEnd = {
+                        prefs.edit()
+                            .putFloat("overlay_actions_x", offset.x)
+                            .putFloat("overlay_actions_y", offset.y)
+                            .apply()
+                    },
+                ) { change, dragAmount ->
+                    change.consume()
+                    offset = Offset(
+                        x = offset.x + dragAmount.x,
+                        y = offset.y + dragAmount.y,
+                    )
+                }
+            },
+        horizontalAlignment = Alignment.End,
+    ) {
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .background(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+                        shape = RoundedCornerShape(18.dp),
+                    )
+                    .padding(8.dp),
+            ) {
+                if (showSettingsButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        onClick = {
+                            onExpandedChange(false)
+                            onSettings()
+                        },
+                        modifier = Modifier.testTag("settingsButton"),
+                    )
+                }
+
+                if (showSwitchPhoneButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.PhoneAndroid,
+                        contentDescription = "Switch Phone",
+                        onClick = {
+                            onExpandedChange(false)
+                            onSwitchPhone()
+                        },
+                        containerColor = if (carHotspotSwitching) {
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.88f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
+                        },
+                        tint = if (carHotspotSwitching) {
+                            MaterialTheme.colorScheme.onTertiary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.testTag("switchPhoneButton"),
+                    )
+                }
+
+                if (showRestartVideoButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.Refresh,
+                        contentDescription = "Restart video stream",
+                        onClick = {
+                            onExpandedChange(false)
+                            onRestartVideo()
+                        },
+                        modifier = Modifier.testTag("restartVideoButton"),
+                    )
+                }
+
+                if (showStatsButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.Info,
+                        contentDescription = "Stats for nerds",
+                        onClick = {
+                            onExpandedChange(false)
+                            onStats()
+                        },
+                        containerColor = if (statsActive) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
+                        },
+                        tint = if (statsActive) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.testTag("statsButton"),
+                    )
+                }
+
+                if (showFileLogButton) {
+                    OverlayActionButton(
+                        icon = Icons.Default.FiberManualRecord,
+                        contentDescription = "File Logging",
+                        onClick = {
+                            onExpandedChange(false)
+                            onFileLog()
+                        },
+                        containerColor = if (fileLoggingActive) {
+                            Color.Red.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
+                        },
+                        tint = if (fileLoggingActive) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("fileLogButton"),
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(1.dp))
+            }
+        }
+
+        if (expanded) {
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        Box(modifier = Modifier.padding(horizontal = 8.dp)) {
+            OverlayActionButton(
+                icon = Icons.Default.BugReport,
+                contentDescription = "Projection controls",
+                onClick = { onExpandedChange(!expanded) },
+                containerColor = if (expanded) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                } else {
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                },
+                tint = if (expanded) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                modifier = Modifier.testTag("overlayMenuButton"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun OverlayActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+) {
+    FilledTonalIconButton(
+        onClick = onClick,
+        modifier = modifier.size(56.dp),
+        colors = IconButtonDefaults.filledTonalIconButtonColors(
+            containerColor = containerColor,
+            contentColor = tint,
+        ),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(24.dp),
+        )
+    }
+}
+
+/**
+ * Tiny 4-tuple helper used by [CarHotspotStatusBanner] to pack its derived
+ * display state. Kotlin's stdlib only goes to Triple.
+ */
+private data class Quad(
+    val headline: String,
+    val accent: Color,
+    val isError: Boolean,
+    val isAwaitingPick: Boolean,
+)
 
 @Composable
 private fun PhoneChooserOverlay(
@@ -554,6 +847,7 @@ private fun CarHotspotPhoneChooserOverlay(
     sweeping: Boolean,
     sweepProgress: String,
     switching: Boolean,
+    chooserMessage: String?,
     onSelect: (com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone) -> Unit,
     onSelectKnown: (com.openautolink.app.data.KnownPhone) -> Unit,
     onSetDefault: (String) -> Unit,
@@ -643,15 +937,22 @@ private fun CarHotspotPhoneChooserOverlay(
                     color = darkScheme.onSurfaceVariant,
                 )
 
-                // Static-IP tip — avoids slow reconnects when the car AP
-                // hands the phone a different DHCP lease each drive.
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "Tip: for fastest reconnects, set a static IP on your phone for this car's WiFi. " +
-                        "Use an address inside the AP's DHCP range (check the IP your phone got the first time).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = darkScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                )
+                if (!chooserMessage.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(darkScheme.error.copy(alpha = 0.18f))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Text(
+                            chooserMessage!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = darkScheme.error,
+                        )
+                    }
+                }
 
                 // ── Known phones ─────────────────────────────────────
                 if (knownPhones.isNotEmpty()) {
@@ -900,6 +1201,7 @@ private fun VideoStatsOverlay(
 ) {
     Box(
         modifier = modifier
+            .widthIn(min = 360.dp, max = 520.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(Color.Black.copy(alpha = 0.72f))
             .padding(14.dp)
@@ -953,6 +1255,9 @@ private fun VideoStatsOverlay(
                         else -> Color.Red
                     })
                 StatLine("Frames", "Rx:${stats.framesReceived}  Dec:${stats.framesDecoded}")
+                if (stats.timeSinceLastKeyframeMs >= 0) {
+                    StatLine("Last Keyframe", formatDurationMs(stats.timeSinceLastKeyframeMs))
+                }
                 if (stats.bitrateKbps > 0) {
                     val bitrateStr = if (stats.bitrateKbps >= 1000) {
                         "${"%.1f".format(stats.bitrateKbps / 1000)} Mbps"
@@ -998,6 +1303,9 @@ private fun VideoStatsOverlay(
             } else {
                 StatLine("Audio", "not active")
             }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            StatLine("Version", BuildConfig.VERSION_NAME)
         }
     }
 }
@@ -1018,6 +1326,8 @@ private fun StatLine(
             fontFamily = FontFamily.Monospace,
             lineHeight = if (header) 20.sp else 16.sp,
             modifier = Modifier.width(if (header) 200.dp else 100.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
         )
         if (value.isNotEmpty()) {
             Spacer(modifier = Modifier.width(6.dp))
@@ -1027,8 +1337,39 @@ private fun StatLine(
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
                 lineHeight = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
             )
         }
+    }
+}
+
+@Composable
+private fun StatActionLine(
+    label: String,
+    value: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .widthIn(min = 240.dp)
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            color = Color.Gray,
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 16.sp,
+        )
+        Text(
+            text = value,
+            color = Color.Cyan,
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 16.sp,
+        )
     }
 }
 
@@ -1037,6 +1378,14 @@ private fun formatUptime(seconds: Long): String {
     val m = (seconds % 3600) / 60
     val s = seconds % 60
     return if (h > 0) "${h}h ${m}m ${s}s" else if (m > 0) "${m}m ${s}s" else "${s}s"
+}
+
+private fun formatDurationMs(milliseconds: Long): String {
+    return if (milliseconds < 1000) {
+        "${milliseconds}ms"
+    } else {
+        formatUptime(milliseconds / 1000)
+    }
 }
 
 @Composable
@@ -1067,6 +1416,19 @@ private fun ConnectionHud(
                 color = Color.White
             )
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = when (uiState.directTransport) {
+                    "usb" -> "USB"
+                    "hotspot" -> "WiFi Hotspot"
+                    "nearby" -> "Nearby"
+                    else -> uiState.directTransport
+                },
+                style = MaterialTheme.typography.labelLarge,
+                color = Color(0xFFB0B0B0)
+            )
+
             Spacer(modifier = Modifier.height(16.dp))
 
             when (uiState.sessionState) {
@@ -1076,6 +1438,15 @@ private fun ConnectionHud(
                         style = MaterialTheme.typography.bodyLarge,
                         color = Color(0xFFB0B0B0)
                     )
+                    if (uiState.directTransport == "usb" && uiState.usbDeviceDescription != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = uiState.usbDeviceDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF808080),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
                 SessionState.CONNECTING -> {
                     CircularProgressIndicator(
@@ -1089,6 +1460,15 @@ private fun ConnectionHud(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.primary
                     )
+                    if (uiState.directTransport == "usb" && uiState.usbDeviceDescription != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = uiState.usbDeviceDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFB0B0B0),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
                 SessionState.CONNECTED -> {
                     Text(
@@ -1106,6 +1486,15 @@ private fun ConnectionHud(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.error
                     )
+                    if (uiState.directTransport == "usb" && uiState.usbDeviceDescription != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = uiState.usbDeviceDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFB0B0B0),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             }
         }

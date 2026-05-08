@@ -54,7 +54,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Session orchestrator -- connects component islands, manages lifecycle.
- * aasdk JNI mode -- native aasdk C++ handles AA protocol via Nearby transport.
+ * aasdk JNI mode -- native aasdk C++ handles AA protocol over the selected
+ * USB or WiFi transport.
  */
 class SessionManager(
     externalScope: CoroutineScope,
@@ -64,6 +65,9 @@ class SessionManager(
 
     companion object {
         private const val TAG = "SessionManager"
+        private const val KEYFRAME_FAST_RETRY_MS = 250L
+        private const val KEYFRAME_FAST_RETRY_ATTEMPTS = 12
+        private const val KEYFRAME_SLOW_RETRY_MS = 1000L
 
         @Volatile
         private var instance: SessionManager? = null
@@ -106,6 +110,8 @@ class SessionManager(
     val videoDecoder: VideoDecoder? get() = _videoDecoder
     val videoStats: StateFlow<VideoStats>? get() = _videoDecoder?.stats
     val decoderState: StateFlow<DecoderState>? get() = _videoDecoder?.decoderState
+    private val _videoDecoderRevision = MutableStateFlow(0)
+    val videoDecoderRevision: StateFlow<Int> = _videoDecoderRevision.asStateFlow()
 
     // Touch coordinate space — matches the SDR input channel touchscreen dimensions.
     // NOT the video codec output dimensions (which may differ due to phone auto-negotiation).
@@ -269,10 +275,83 @@ class SessionManager(
     /** Reentrancy guard for reconnect() so rapid Save&Reconnect taps coalesce. */
     @Volatile private var reconnectInProgress = false
 
+    /**
+     * Snapshot of settings that affect the AA Service Discovery Response (SDR) / video
+     * negotiation. These cannot be applied with a video-only restart; they require a
+     * session reconnect so the phone re-requests SDR and re-selects a video config.
+     */
+    data class VideoNegotiationKey(
+        val codecPreference: String,
+        val videoAutoNegotiate: Boolean,
+        val aaResolution: String,
+        val aaDpi: Int,
+        val aaWidthMargin: Int,
+        val aaHeightMargin: Int,
+        val aaPixelAspect: Int,
+        val aaTargetLayoutWidthDp: Int,
+        val videoFps: Int,
+        val driveSide: String,
+        val hideClock: Boolean,
+        val hideSignal: Boolean,
+        val hideBattery: Boolean,
+        val safeAreaTop: Int,
+        val safeAreaBottom: Int,
+        val safeAreaLeft: Int,
+        val safeAreaRight: Int,
+    )
+
+    @Volatile private var lastNegotiationKey: VideoNegotiationKey? = null
+
+    fun requiresReconnectForVideoSettings(desired: VideoNegotiationKey): Boolean {
+        if (_audioPlayer == null || aasdkSession == null) return true
+        val current = lastNegotiationKey ?: return true
+        return current != desired
+    }
+
+    private fun buildVideoNegotiationKey(
+        codecPreference: String,
+        videoAutoNegotiate: Boolean,
+        aaResolution: String,
+        aaDpi: Int,
+        aaWidthMargin: Int,
+        aaHeightMargin: Int,
+        aaPixelAspect: Int,
+        aaTargetLayoutWidthDp: Int,
+        videoFps: Int,
+        driveSide: String,
+        hideClock: Boolean,
+        hideSignal: Boolean,
+        hideBattery: Boolean,
+        safeAreaTop: Int,
+        safeAreaBottom: Int,
+        safeAreaLeft: Int,
+        safeAreaRight: Int,
+    ) = VideoNegotiationKey(
+        codecPreference = codecPreference,
+        videoAutoNegotiate = videoAutoNegotiate,
+        aaResolution = aaResolution,
+        aaDpi = aaDpi,
+        aaWidthMargin = aaWidthMargin,
+        aaHeightMargin = aaHeightMargin,
+        aaPixelAspect = aaPixelAspect,
+        aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
+        videoFps = videoFps,
+        driveSide = driveSide,
+        hideClock = hideClock,
+        hideSignal = hideSignal,
+        hideBattery = hideBattery,
+        safeAreaTop = safeAreaTop,
+        safeAreaBottom = safeAreaBottom,
+        safeAreaLeft = safeAreaLeft,
+        safeAreaRight = safeAreaRight,
+    )
+
     /** Screen-off receiver registration tracker. */
     private var screenReceiver: android.content.BroadcastReceiver? = null
     /** True when we proactively stopped the session for sleep; restart on wake. */
     @Volatile private var pausedForSleep = false
+    @Volatile private var pausedForSleepStopJob: Job? = null
+    @Volatile private var videoClosedForAppFocusLoss = false
     /** Timestamp of the most recent SCREEN_ON / USER_PRESENT — used to suppress
      *  SCREEN_OFF that AAOS sometimes delivers seconds AFTER wake (queued during
      *  input dispatch). Without this, a queued SCREEN_OFF tears down a freshly
@@ -283,7 +362,7 @@ class SessionManager(
         codecPreference: String = "h264",
         micSourcePreference: String = "car",
         scalingMode: String = "letterbox",
-        directTransport: String = "nearby",
+        directTransport: String = "hotspot",
         hotspotSsid: String = "",
         hotspotPassword: String = "",
         videoAutoNegotiate: Boolean = true,
@@ -307,12 +386,32 @@ class SessionManager(
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
     ) {
+        lastNegotiationKey = buildVideoNegotiationKey(
+            codecPreference = codecPreference,
+            videoAutoNegotiate = videoAutoNegotiate,
+            aaResolution = aaResolution,
+            aaDpi = aaDpi,
+            aaWidthMargin = aaWidthMargin,
+            aaHeightMargin = aaHeightMargin,
+            aaPixelAspect = aaPixelAspect,
+            aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
+            videoFps = videoFps,
+            driveSide = driveSide,
+            hideClock = hideClock,
+            hideSignal = hideSignal,
+            hideBattery = hideBattery,
+            safeAreaTop = safeAreaTop,
+            safeAreaBottom = safeAreaBottom,
+            safeAreaLeft = safeAreaLeft,
+            safeAreaRight = safeAreaRight,
+        )
         micSource = micSourcePreference
         observeJob?.cancel()
 
         // Create video decoder
         _videoDecoder?.release()
         _videoDecoder = MediaCodecDecoder(codecPreference, scalingMode)
+        _videoDecoderRevision.value++
 
         // Create audio player
         _audioPlayer?.release()
@@ -787,6 +886,7 @@ class SessionManager(
         stopDirectLocationForwarding()
         _videoDecoder?.release()
         _videoDecoder = null
+        _videoDecoderRevision.value++
         _audioPlayer?.release()
         _audioPlayer = null
         _micCaptureManager?.release()
@@ -809,6 +909,7 @@ class SessionManager(
         _remoteDiagnostics = null
         _sessionState.value = SessionState.IDLE
         _statusMessage.value = "Disconnected"
+        lastNegotiationKey = null
         _phoneBatteryLevel.value = null
         _phoneBatteryCritical.value = false
         _voiceSessionActive.value = false
@@ -829,7 +930,7 @@ class SessionManager(
         codecPreference: String = "h264",
         micSourcePreference: String = "car",
         scalingMode: String = "letterbox",
-        directTransport: String = "nearby",
+        directTransport: String = "hotspot",
         hotspotSsid: String = "",
         hotspotPassword: String = "",
         videoAutoNegotiate: Boolean = true,
@@ -930,6 +1031,7 @@ class SessionManager(
         // 3. Flush video decoder (codec/scaling may have changed)
         _videoDecoder?.release()
         _videoDecoder = MediaCodecDecoder(codecPreference, scalingMode)
+        _videoDecoderRevision.value++
         _telemetryCollector?.videoDecoder = _videoDecoder
 
         // 4. Update audio volume offsets in-place (no release/recreate)
@@ -955,6 +1057,25 @@ class SessionManager(
         _phoneSignalStrength.value = null
 
         // 8. Start new AA session with new SDR config
+        lastNegotiationKey = buildVideoNegotiationKey(
+            codecPreference = codecPreference,
+            videoAutoNegotiate = videoAutoNegotiate,
+            aaResolution = aaResolution,
+            aaDpi = aaDpi,
+            aaWidthMargin = aaWidthMargin,
+            aaHeightMargin = aaHeightMargin,
+            aaPixelAspect = aaPixelAspect,
+            aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
+            videoFps = videoFps,
+            driveSide = driveSide,
+            hideClock = hideClock,
+            hideSignal = hideSignal,
+            hideBattery = hideBattery,
+            safeAreaTop = safeAreaTop,
+            safeAreaBottom = safeAreaBottom,
+            safeAreaLeft = safeAreaLeft,
+            safeAreaRight = safeAreaRight,
+        )
         observeJob = scope.launch {
             decoderWatchJob = launch { watchDecoderState() }
             keyframeWatchJob = launch { watchKeyframeNeeds() }
@@ -997,6 +1118,8 @@ class SessionManager(
             DiagnosticLog.i("transport", "Wake: restart paused session (${elapsed / 1000}s)")
             // Run on IO — start() reaches into JNI/SSL init.
             scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                pausedForSleepStopJob?.join()
+                pausedForSleepStopJob = null
                 aasdkSession?.start()
             }
             _clusterManager?.ensureAlive()
@@ -1064,7 +1187,7 @@ class SessionManager(
                             // Run aasdkSession.stop() off Main — it joins the C++
                             // io_thread via JNI and can take 100s of ms. Doing this
                             // on Main causes ANRs which are reported as crashes.
-                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            pausedForSleepStopJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                 aasdkSession?.stop()
                             }
                         }
@@ -1113,6 +1236,36 @@ class SessionManager(
 
     suspend fun requestKeyframe() {
         aasdkSession?.requestKeyframe()
+    }
+
+    suspend fun closeVideoStreamForAppFocusLoss() {
+        if (videoClosedForAppFocusLoss) return
+        val session = aasdkSession ?: return
+        if (_sessionState.value == SessionState.IDLE) return
+        videoClosedForAppFocusLoss = true
+        OalLog.i(TAG, "App focus lost — closing video stream only")
+        _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "App focus lost: close video stream")
+        _videoDecoder?.suspendStream()
+        session.closeVideoStream()
+    }
+
+    suspend fun restartVideoStreamAfterAppFocusGain() {
+        if (!videoClosedForAppFocusLoss) return
+        if (_sessionState.value != SessionState.CONNECTED && _sessionState.value != SessionState.STREAMING) {
+            OalLog.i(TAG, "App focus gained — deferring video restart until session reconnects")
+            return
+        }
+        videoClosedForAppFocusLoss = false
+        OalLog.i(TAG, "App focus gained — restarting video stream")
+        _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "App focus gained: restart video stream")
+        restartVideoStream()
+    }
+
+    suspend fun restartVideoStream() {
+        OalLog.i(TAG, "Restarting video stream without reconnecting audio")
+        _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "Video-only stream restart requested")
+        _videoDecoder?.restartStream()
+        aasdkSession?.restartVideoStream()
     }
 
     private suspend fun syncLocalPreferences() {
@@ -1211,7 +1364,13 @@ class SessionManager(
                         _remoteDiagnostics?.log(DiagnosticLevel.WARN, "video",
                             "Keyframe re-request #$attempt")
                     }
-                    delay(2000)
+                    delay(
+                        if (attempt < KEYFRAME_FAST_RETRY_ATTEMPTS) {
+                            KEYFRAME_FAST_RETRY_MS
+                        } else {
+                            KEYFRAME_SLOW_RETRY_MS
+                        }
+                    )
                 }
             }
         }
@@ -1238,6 +1397,11 @@ class SessionManager(
                 aasdkSession?.let { startLocationForwarding(it) }
                 _vehicleDataForwarder?.start()
                 _imuForwarder?.start()
+                if (videoClosedForAppFocusLoss) {
+                    scope.launch {
+                        restartVideoStreamAfterAppFocusGain()
+                    }
+                }
             }
             is ControlMessage.PhoneDisconnected -> {
                 _remoteDiagnostics?.log(DiagnosticLevel.INFO, "session", "Phone disconnected: ${message.reason}")

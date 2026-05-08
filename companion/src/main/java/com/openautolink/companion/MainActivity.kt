@@ -117,7 +117,9 @@ class MainActivity : ComponentActivity() {
 /** SharedPreferences keys for the companion app. */
 object CompanionPrefs {
     const val NAME = "OalCompanionPrefs"
+    const val SECRETS_NAME = "OalCompanionSecrets"
 
+    const val SERVICE_DESIRED_RUNNING = "service_desired_running"
     const val AUTO_START_MODE = "auto_start_mode"
     const val AUTO_START_BT_MACS = "auto_start_bt_macs"
     const val BT_DISCONNECT_STOP = "bt_disconnect_stop"
@@ -128,6 +130,11 @@ object CompanionPrefs {
     const val AUTO_START_BT = 1
     const val AUTO_START_WIFI = 2
     const val AUTO_START_APP_OPEN = 3
+    const val AUTO_START_BT_AND_WIFI = 4
+
+    // Legacy key for car WiFi credentials. Current storage is in
+    // OalCompanionSecrets so credentials are not included in cloud backup.
+    const val CAR_WIFI_ENTRIES = "car_wifi_entries"
 
     const val TRANSPORT_MODE = "transport_mode"
     const val TRANSPORT_NEARBY = "nearby"

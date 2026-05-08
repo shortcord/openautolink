@@ -12,6 +12,7 @@ class CodecSelectorTest {
         assertEquals(CodecSelector.MIME_H264, CodecSelector.codecToMime("h264"))
         assertEquals(CodecSelector.MIME_H264, CodecSelector.codecToMime("H264"))
         assertEquals(CodecSelector.MIME_H264, CodecSelector.codecToMime("avc"))
+        assertEquals(CodecSelector.MIME_H264, CodecSelector.codecToMime("H.264"))
     }
 
     @Test
@@ -19,6 +20,7 @@ class CodecSelectorTest {
         assertEquals(CodecSelector.MIME_H265, CodecSelector.codecToMime("h265"))
         assertEquals(CodecSelector.MIME_H265, CodecSelector.codecToMime("H265"))
         assertEquals(CodecSelector.MIME_H265, CodecSelector.codecToMime("hevc"))
+        assertEquals(CodecSelector.MIME_H265, CodecSelector.codecToMime("H.265"))
     }
 
     @Test
@@ -42,8 +44,10 @@ class CodecSelectorTest {
     fun `isNalCodec returns true for h264 and h265`() {
         assertTrue(CodecSelector.isNalCodec("h264"))
         assertTrue(CodecSelector.isNalCodec("H264"))
+        assertTrue(CodecSelector.isNalCodec("H.264"))
         assertTrue(CodecSelector.isNalCodec("avc"))
         assertTrue(CodecSelector.isNalCodec("h265"))
+        assertTrue(CodecSelector.isNalCodec("H.265"))
         assertTrue(CodecSelector.isNalCodec("hevc"))
     }
 

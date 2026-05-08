@@ -18,6 +18,16 @@ object OalProtocol {
      */
     const val IDENTITY_PORT = 5278
 
+    /**
+     * UDP broadcast discovery port. The car sends a single
+     * [IDENTITY_PROBE_REQUEST] datagram to `255.255.255.255:UDP_DISCOVERY_PORT`,
+     * each running companion replies once with the same identity payload
+     * that the TCP probe returns. Sub-50ms when the AP allows broadcast,
+     * so this layer sits between mDNS (free, but flaky on AAOS 12/13) and
+     * the TCP /24 sweep (always works, ~400ms wall time).
+     */
+    const val UDP_DISCOVERY_PORT = 5279
+
     /** mDNS service type the companion publishes and the car discovers. */
     const val MDNS_SERVICE_TYPE = "_openautolink._tcp"
 

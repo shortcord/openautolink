@@ -14,12 +14,10 @@ import com.openautolink.app.diagnostics.OalLog
 import com.openautolink.app.transport.aasdk.AasdkTransportPipe
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -43,12 +41,13 @@ enum class UsbConnectionState {
  *   4. Opens bulk endpoints and creates AasdkTransportPipe
  *   5. Delivers the pipe to the session via [onTransportReady]
  *
- * Mirrors the lifecycle pattern of AaNearbyManager/TcpConnector.
+ * Note: [status], [connectionState], and [deviceDescription] live in the
+ * companion object so the UI can observe one global USB bring-up state.
  */
 class UsbConnectionManager(
     private val context: Context,
     private val scope: CoroutineScope,
-    private val onTransportReady: (AasdkTransportPipe) -> Unit,
+    private val onTransportReady: (AasdkTransportPipe) -> Boolean,
 ) {
     companion object {
         private const val TAG = "UsbConnectionManager"
@@ -62,6 +61,9 @@ class UsbConnectionManager(
 
         private val _connectionState = MutableStateFlow(UsbConnectionState.IDLE)
         val connectionState: StateFlow<UsbConnectionState> = _connectionState.asStateFlow()
+
+        private val _deviceDescription = MutableStateFlow<String?>(null)
+        val deviceDescription: StateFlow<String?> = _deviceDescription.asStateFlow()
     }
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -75,7 +77,17 @@ class UsbConnectionManager(
     @Volatile
     private var currentConnection: UsbDeviceConnection? = null
 
-    private var scanJob: Job? = null
+    @Volatile
+    private var aoaSwitchInFlight = false
+
+    @Volatile
+    private var connectInFlight = false
+
+    @Volatile
+    private var trackedDevice: TrackedUsbDevice? = null
+
+    @Volatile
+    private var switchingFromDevice: TrackedUsbDevice? = null
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -91,8 +103,10 @@ class UsbConnectionManager(
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    OalLog.i(TAG, "USB device detached")
-                    handleDeviceDetached()
+                    @Suppress("DEPRECATION")
+                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    OalLog.i(TAG, "USB device detached: ${device?.let { UsbDeviceClassifier.describeDevice(it) } ?: "unknown"}")
+                    handleDeviceDetached(device)
                 }
                 ACTION_USB_PERMISSION -> {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
@@ -116,6 +130,11 @@ class UsbConnectionManager(
         isRunning = true
         _connectionState.value = UsbConnectionState.IDLE
         _status.value = "Waiting for USB device..."
+        _deviceDescription.value = null
+        aoaSwitchInFlight = false
+        connectInFlight = false
+        trackedDevice = null
+        switchingFromDevice = null
 
         val filter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
@@ -131,14 +150,17 @@ class UsbConnectionManager(
     fun stop() {
         if (!isRunning) return
         isRunning = false
-        scanJob?.cancel()
-        scanJob = null
         try {
             context.unregisterReceiver(usbReceiver)
         } catch (_: IllegalArgumentException) { }
         closePipe()
         _connectionState.value = UsbConnectionState.IDLE
         _status.value = "Stopped"
+        _deviceDescription.value = null
+        aoaSwitchInFlight = false
+        connectInFlight = false
+        trackedDevice = null
+        switchingFromDevice = null
     }
 
     private fun scanExistingDevices() {
@@ -146,18 +168,21 @@ class UsbConnectionManager(
         OalLog.i(TAG, "Scanning ${devices.size} existing USB devices")
         for ((_, device) in devices) {
             if (UsbConstants.isAccessoryDevice(device.vendorId, device.productId)) {
-                OalLog.i(TAG, "Found device already in accessory mode: ${device.deviceName}")
+                val description = UsbDeviceClassifier.describeDevice(device)
+                OalLog.i(TAG, "Found device already in accessory mode: $description")
+                _deviceDescription.value = description
                 _connectionState.value = UsbConnectionState.ACCESSORY_DETECTED
+                trackedDevice = TrackedUsbDevice.from(device)
                 requestPermissionOrConnect(device)
                 return
             }
         }
         // No accessory device — check for any phone-like device
         for ((_, device) in devices) {
-            if (!isHubOrSystemDevice(device)) {
-                OalLog.i(TAG, "Found candidate USB device: ${device.deviceName} " +
-                        "VID=${String.format("%04X", device.vendorId)} " +
-                        "PID=${String.format("%04X", device.productId)}")
+            if (UsbDeviceClassifier.isLikelyPhoneCandidate(device)) {
+                val description = UsbDeviceClassifier.describeDevice(device)
+                OalLog.i(TAG, "Found candidate USB device: $description")
+                _deviceDescription.value = description
                 handleDeviceAttached(device)
                 return
             }
@@ -165,21 +190,49 @@ class UsbConnectionManager(
     }
 
     private fun handleDeviceAttached(device: UsbDevice) {
+        val description = UsbDeviceClassifier.describeDevice(device)
+        _deviceDescription.value = description
+        OalLog.i(TAG, "Evaluating USB device: $description")
         if (UsbConstants.isAccessoryDevice(device.vendorId, device.productId)) {
+            trackedDevice = TrackedUsbDevice.from(device)
             _connectionState.value = UsbConnectionState.ACCESSORY_DETECTED
             _status.value = "Accessory device detected"
             requestPermissionOrConnect(device)
+        } else if (!UsbDeviceClassifier.isLikelyPhoneCandidate(device)) {
+            OalLog.i(TAG, "Ignoring USB device that does not look like an Android phone: $description")
+            _status.value = "Waiting for Android phone..."
         } else {
+            trackedDevice = TrackedUsbDevice.from(device)
             _connectionState.value = UsbConnectionState.DEVICE_DETECTED
             _status.value = "Device detected — requesting permission..."
             requestPermissionOrConnect(device)
         }
     }
 
-    private fun handleDeviceDetached() {
+    private fun handleDeviceDetached(device: UsbDevice?) {
+        val detached = device?.let { TrackedUsbDevice.from(it) }
+        if (detached != null) {
+            if (aoaSwitchInFlight && switchingFromDevice == detached) {
+                OalLog.i(TAG, "Ignoring expected detach during AOA switch for ${detached.description}")
+                switchingFromDevice = null
+                return
+            }
+
+            val active = trackedDevice
+            if (active != null && active != detached) {
+                OalLog.i(TAG, "Ignoring unrelated USB detach for ${detached.description}; active device is ${active.description}")
+                return
+            }
+        }
+
         closePipe()
         _connectionState.value = UsbConnectionState.IDLE
         _status.value = "USB device disconnected"
+        _deviceDescription.value = null
+        aoaSwitchInFlight = false
+        connectInFlight = false
+        trackedDevice = null
+        switchingFromDevice = null
     }
 
     private fun requestPermissionOrConnect(device: UsbDevice) {
@@ -199,12 +252,25 @@ class UsbConnectionManager(
 
     private fun onPermissionGranted(device: UsbDevice) {
         if (UsbConstants.isAccessoryDevice(device.vendorId, device.productId)) {
+            if (connectInFlight || currentPipe != null) {
+                OalLog.i(TAG, "Ignoring duplicate accessory connect callback for ${UsbDeviceClassifier.describeDevice(device)}")
+                return
+            }
             // Already in accessory mode — open endpoints
+            trackedDevice = TrackedUsbDevice.from(device)
+            connectInFlight = true
             scope.launch(Dispatchers.IO) {
                 connectToAccessory(device)
             }
         } else {
+            if (aoaSwitchInFlight) {
+                OalLog.i(TAG, "Ignoring duplicate AOA switch request for ${UsbDeviceClassifier.describeDevice(device)}")
+                return
+            }
             // Need AOA switch first
+            trackedDevice = TrackedUsbDevice.from(device)
+            switchingFromDevice = TrackedUsbDevice.from(device)
+            aoaSwitchInFlight = true
             _connectionState.value = UsbConnectionState.SWITCHING_TO_ACCESSORY
             _status.value = "Switching to accessory mode..."
             scope.launch(Dispatchers.IO) {
@@ -219,6 +285,7 @@ class UsbConnectionManager(
             OalLog.e(TAG, "AOA switch failed")
             _status.value = "AOA switch failed"
             _connectionState.value = UsbConnectionState.IDLE
+            aoaSwitchInFlight = false
             return
         }
 
@@ -234,6 +301,9 @@ class UsbConnectionManager(
                 if (UsbConstants.isAccessoryDevice(d.vendorId, d.productId)) {
                     OalLog.i(TAG, "Accessory device found after AOA switch: ${d.deviceName}")
                     _connectionState.value = UsbConnectionState.ACCESSORY_DETECTED
+                    trackedDevice = TrackedUsbDevice.from(d)
+                    _deviceDescription.value = UsbDeviceClassifier.describeDevice(d)
+                    aoaSwitchInFlight = false
                     requestPermissionOrConnect(d)
                     return
                 }
@@ -244,6 +314,7 @@ class UsbConnectionManager(
         OalLog.e(TAG, "Accessory device not found after AOA switch ($attempts attempts)")
         _status.value = "Accessory not found after switch"
         _connectionState.value = UsbConnectionState.IDLE
+        aoaSwitchInFlight = false
     }
 
     private fun connectToAccessory(device: UsbDevice) {
@@ -252,19 +323,21 @@ class UsbConnectionManager(
 
         val connection = usbManager.openDevice(device)
         if (connection == null) {
-            OalLog.e(TAG, "Failed to open accessory device")
+            OalLog.e(TAG, "Failed to open accessory device: ${UsbDeviceClassifier.describeDevice(device)}")
             _status.value = "Failed to open device"
             _connectionState.value = UsbConnectionState.IDLE
+            connectInFlight = false
             return
         }
 
         // Find the bulk interface and endpoints
-        val (iface, epIn, epOut) = findBulkEndpoints(device)
+        val (iface, epIn, epOut, interfaceIndex) = findBulkEndpoints(device)
         if (iface == null || epIn == null || epOut == null) {
-            OalLog.e(TAG, "No bulk endpoints found on accessory device")
+            OalLog.e(TAG, "No bulk endpoints found on accessory device: ${UsbDeviceClassifier.describeDevice(device)}")
             connection.close()
             _status.value = "No bulk endpoints"
             _connectionState.value = UsbConnectionState.IDLE
+            connectInFlight = false
             return
         }
 
@@ -273,10 +346,15 @@ class UsbConnectionManager(
             connection.close()
             _status.value = "Failed to claim interface"
             _connectionState.value = UsbConnectionState.IDLE
+            connectInFlight = false
             return
         }
 
-        OalLog.i(TAG, "USB endpoints opened — IN: ${epIn.address} OUT: ${epOut.address} " +
+        if (!connection.setInterface(iface)) {
+            OalLog.w(TAG, "setInterface failed for interface #$interfaceIndex; continuing with claimed interface")
+        }
+
+        OalLog.i(TAG, "USB endpoints opened on interface #$interfaceIndex — IN: ${epIn.address} OUT: ${epOut.address} " +
                 "maxPacket: ${epIn.maxPacketSize}/${epOut.maxPacketSize}")
 
         currentConnection = connection
@@ -285,26 +363,43 @@ class UsbConnectionManager(
 
         val transportPipe = AasdkTransportPipe(pipe.toInputStream(), pipe.toOutputStream())
 
+        val started = try {
+            onTransportReady(transportPipe)
+        } catch (t: Throwable) {
+            OalLog.e(TAG, "USB transport handoff failed: ${t.message}")
+            false
+        }
+
+        if (!started) {
+            closePipe()
+            _status.value = "USB session start failed"
+            _connectionState.value = UsbConnectionState.IDLE
+            return
+        }
+
         _connectionState.value = UsbConnectionState.CONNECTED
         _status.value = "Connected via USB"
-
-        onTransportReady(transportPipe)
+        connectInFlight = false
     }
 
     private data class BulkEndpoints(
         val iface: UsbInterface?,
         val endpointIn: UsbEndpoint?,
         val endpointOut: UsbEndpoint?,
+        val interfaceIndex: Int,
     )
 
     private fun findBulkEndpoints(device: UsbDevice): BulkEndpoints {
+        val candidates = mutableListOf<BulkEndpoints>()
         for (i in 0 until device.interfaceCount) {
             val iface = device.getInterface(i)
             var epIn: UsbEndpoint? = null
             var epOut: UsbEndpoint? = null
+            var bulkCount = 0
             for (j in 0 until iface.endpointCount) {
                 val ep = iface.getEndpoint(j)
                 if (ep.type == android.hardware.usb.UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                    bulkCount++
                     if (ep.direction == android.hardware.usb.UsbConstants.USB_DIR_IN) {
                         epIn = ep
                     } else {
@@ -313,20 +408,121 @@ class UsbConnectionManager(
                 }
             }
             if (epIn != null && epOut != null) {
-                return BulkEndpoints(iface, epIn, epOut)
+                OalLog.i(
+                    TAG,
+                    "Bulk candidate interface #$i class=${iface.interfaceClass} bulkCount=$bulkCount " +
+                        "IN=${epIn.address}/${epIn.maxPacketSize} OUT=${epOut.address}/${epOut.maxPacketSize}"
+                )
+                candidates += BulkEndpoints(iface, epIn, epOut, i)
             }
         }
-        return BulkEndpoints(null, null, null)
+
+        if (candidates.isEmpty()) return BulkEndpoints(null, null, null, -1)
+
+        // AOA accessory+ADB devices (0x2D01) expose the accessory channel on interface 0.
+        if (device.productId == UsbConstants.ACC_ADB_PID) {
+            candidates.firstOrNull { it.interfaceIndex == 0 }?.let { return it }
+        }
+
+        // Prefer the simplest standard AOAP layout: first interface with one IN and one OUT bulk endpoint.
+        candidates.firstOrNull { it.interfaceIndex == 0 }?.let { return it }
+        return candidates.first()
     }
 
     private fun closePipe() {
         currentPipe?.close()
         currentPipe = null
         currentConnection = null
+        connectInFlight = false
+    }
+
+
+    private data class TrackedUsbDevice(
+        val deviceId: Int,
+        val vendorId: Int,
+        val productId: Int,
+        val deviceName: String,
+        val description: String,
+    ) {
+        companion object {
+            fun from(device: UsbDevice): TrackedUsbDevice = TrackedUsbDevice(
+                deviceId = device.deviceId,
+                vendorId = device.vendorId,
+                productId = device.productId,
+                deviceName = device.deviceName,
+                description = UsbDeviceClassifier.describeDevice(device),
+            )
+        }
+    }
+}
+
+internal object UsbDeviceClassifier {
+    fun isLikelyPhoneCandidate(device: UsbDevice): Boolean {
+        if (isHubOrSystemDevice(device)) return false
+        if (UsbConstants.isAccessoryDevice(device.vendorId, device.productId)) return true
+
+        val deviceClassLooksPhoneLike = when (device.deviceClass) {
+            0, // composite / per-interface classification
+            0xEF, // miscellaneous composite device
+            0xFF -> true // vendor specific
+            0x03, // HID
+            0x07, // printer
+            0x08, // mass storage
+            0x09, // hub
+            0x0B, // smart card
+            0x0D, // content security
+            0x0E, // video
+            0xE0 -> false // wireless controller
+            else -> false
+        }
+
+        return deviceClassLooksPhoneLike && hasPhoneLikeInterface(device)
+    }
+
+    fun describeDevice(device: UsbDevice): String {
+        val interfaces = buildString {
+            append("[")
+            for (i in 0 until device.interfaceCount) {
+                if (i > 0) append(", ")
+                val iface = device.getInterface(i)
+                append("#")
+                append(i)
+                append(":class=")
+                append(iface.interfaceClass)
+                append(" eps=")
+                append(iface.endpointCount)
+            }
+            append("]")
+        }
+        return buildString {
+            append(device.deviceName)
+            append(" VID=")
+            append(String.format("%04X", device.vendorId))
+            append(" PID=")
+            append(String.format("%04X", device.productId))
+            append(" class=")
+            append(device.deviceClass)
+            append(" interfaces=")
+            append(device.interfaceCount)
+            append(" ")
+            append(interfaces)
+        }
     }
 
     private fun isHubOrSystemDevice(device: UsbDevice): Boolean {
         // Skip USB hubs (class 9) and mass storage (class 8)
         return device.deviceClass == 9 || device.deviceClass == 8
+    }
+
+    private fun hasPhoneLikeInterface(device: UsbDevice): Boolean {
+        var sawVendorSpecific = false
+        var sawPortableDeviceClass = false
+        for (i in 0 until device.interfaceCount) {
+            when (device.getInterface(i).interfaceClass) {
+                0x06 -> sawPortableDeviceClass = true // still image / PTP-like
+                0xFF -> sawVendorSpecific = true // ADB/MTP composites commonly include this
+            }
+        }
+        return sawVendorSpecific || sawPortableDeviceClass
     }
 }

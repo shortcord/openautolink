@@ -34,6 +34,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private var nearbyAdvertiser: NearbyAdvertiser? = null
     private var tcpAdvertiser: TcpAdvertiser? = null
+    private var carWifiManager: com.openautolink.companion.wifi.CarWifiManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
     private var fileLogger: CompanionFileLogger? = null
@@ -64,6 +65,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         when (intent?.action) {
             ACTION_STOP -> {
                 CompanionLog.i(TAG, "Stop requested")
+                setDesiredRunning(false)
                 _isRunning.value = false
                 _isConnected.value = false
                 _statusText.value = "Stopped"
@@ -72,6 +74,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
 
             ACTION_START -> {
                 CompanionLog.i(TAG, "Start requested")
+                setDesiredRunning(true)
                 _isRunning.value = true
                 _isConnected.value = false
                 _statusText.value = "Advertising..."
@@ -83,13 +86,30 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
 
             else -> {
                 // System restart
-                if (_isRunning.value) {
+                if (isDesiredRunning()) {
                     CompanionLog.i(TAG, "Service restarted by system, resuming")
+                    _isRunning.value = true
+                    _isConnected.value = false
+                    _statusText.value = "Advertising..."
                     startNearby()
+                } else {
+                    CompanionLog.i(TAG, "Service restarted by system with no desired running state")
+                    stopSelf()
                 }
             }
         }
         return START_STICKY
+    }
+
+    private fun isDesiredRunning(): Boolean =
+        getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
+            .getBoolean(CompanionPrefs.SERVICE_DESIRED_RUNNING, false)
+
+    private fun setDesiredRunning(value: Boolean) {
+        getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(CompanionPrefs.SERVICE_DESIRED_RUNNING, value)
+            .apply()
     }
 
     private fun startNearby() {
@@ -110,6 +130,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
                 tcpAdvertiser = TcpAdvertiser(this, this)
                 tcpAdvertiser?.start()
                 updateNotification("TCP: waiting for car on port ${TcpAdvertiser.PORT}...")
+                startCarWifiIfConfigured()
             }
             else -> {
                 // Unreachable while Nearby is disabled; fall back to TCP for safety.
@@ -119,6 +140,32 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
                 updateNotification("TCP: waiting for car on port ${TcpAdvertiser.PORT}...")
             }
         }
+    }
+
+    /**
+     * Start [CarWifiManager] if car WiFi entries are configured.
+     * Runs in parallel with TcpAdvertiser — purely additive, ensures the
+     * phone joins the car's WiFi even when already connected to another network.
+     */
+    private fun startCarWifiIfConfigured() {
+        carWifiManager?.stop()
+        val entries = com.openautolink.companion.wifi.CarWifiEntry.loadAll(this)
+        if (entries.isEmpty()) {
+            CompanionLog.d(TAG, "No car WiFi entries configured, skipping CarWifiManager")
+            return
+        }
+        val mgr = com.openautolink.companion.wifi.CarWifiManager(this)
+        carWifiManager = mgr
+        mgr.start(entries)
+    }
+
+    /**
+     * Restart [CarWifiManager] with current prefs. Called when the user
+     * adds/changes car WiFi entries while the service is already running.
+     */
+    fun restartCarWifi() {
+        CompanionLog.i(TAG, "Restarting CarWifiManager (entries changed)")
+        startCarWifiIfConfigured()
     }
 
     // ── NearbyAdvertiser.StateListener ─────────────────────────────────
@@ -220,6 +267,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         _statusText.value = "Stopped"
         nearbyAdvertiser?.stop()
         tcpAdvertiser?.stop()
+        carWifiManager?.stop()
         stopFileLogging()
         releaseWakeLock()
         if (multicastLock?.isHeld == true) {
