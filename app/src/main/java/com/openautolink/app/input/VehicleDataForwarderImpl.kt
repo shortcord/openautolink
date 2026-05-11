@@ -95,6 +95,17 @@ class VehicleDataForwarderImpl(
     @Volatile
     private var previousIgnitionState: Int? = null
 
+    // Edge-log state for the small set of properties whose transitions matter
+    // for triaging connection / lifecycle / day-night issues. We always log
+    // the very first value we see for each (so a log capture mid-drive is
+    // still useful) and every subsequent transition. Speed gets its own
+    // boundary-crossing edge (0 ↔ moving) rather than per-tick noise.
+    @Volatile private var lastLoggedIgnition: Int? = null
+    @Volatile private var lastLoggedGear: Int? = null
+    @Volatile private var lastLoggedNightMode: Boolean? = null
+    @Volatile private var lastLoggedParkingBrake: Boolean? = null
+    @Volatile private var lastSpeedMoving: Boolean? = null
+
     // Static vehicle identity — read once from VHAL INFO_* properties
     private var carMake: String? = null
     private var carModel: String? = null
@@ -516,10 +527,70 @@ class VehicleDataForwarderImpl(
                 }
             }
 
+            // Edge-log a small set of life-cycle-relevant transitions at INFO
+            // so postmortem captures show when the car's state actually changed
+            // (vs the high-cadence DEBUG line above which is one-per-tick).
+            edgeLog(propertyId, value)
+
             currentValues[propertyId] = value
             throttledSend()
         } catch (e: Throwable) {
             Log.w(TAG, "handleChangeEvent: ${e.rootCause().message}")
+        }
+    }
+
+    /**
+     * Emit one-shot INFO log lines on transitions of the small set of VHAL
+     * properties that matter for triaging connection / lifecycle / day-night
+     * issues. Each value is logged once on first observation and again on
+     * each subsequent change. Speed gets a moving / stopped boundary edge
+     * rather than per-tick numbers.
+     */
+    private fun edgeLog(propertyId: Int, value: Any) {
+        when (propertyId) {
+            VEHICLE_PROPERTY_ID_FALLBACK["IGNITION_STATE"] -> {
+                val v = value as? Int ?: return
+                if (lastLoggedIgnition != v) {
+                    val name = when (v) {
+                        0 -> "UNDEFINED"; 1 -> "LOCK"; 2 -> "OFF"
+                        3 -> "ACC"; 4 -> "ON"; 5 -> "START"
+                        else -> "?"
+                    }
+                    DiagnosticLog.i("vhal", "IGNITION_STATE → $v ($name) [was ${lastLoggedIgnition ?: "?"}]")
+                    lastLoggedIgnition = v
+                }
+            }
+            VEHICLE_PROPERTY_ID_FALLBACK["GEAR_SELECTION"] -> {
+                val v = value as? Int ?: return
+                if (lastLoggedGear != v) {
+                    DiagnosticLog.i("vhal", "GEAR_SELECTION → ${gearToString(v)} ($v) [was ${lastLoggedGear ?: "?"}]")
+                    lastLoggedGear = v
+                }
+            }
+            VEHICLE_PROPERTY_ID_FALLBACK["NIGHT_MODE"] -> {
+                val v = value as? Boolean ?: return
+                if (lastLoggedNightMode != v) {
+                    DiagnosticLog.i("vhal", "NIGHT_MODE → $v [was ${lastLoggedNightMode ?: "?"}]")
+                    lastLoggedNightMode = v
+                }
+            }
+            VEHICLE_PROPERTY_ID_FALLBACK["PARKING_BRAKE_ON"] -> {
+                val v = value as? Boolean ?: return
+                if (lastLoggedParkingBrake != v) {
+                    DiagnosticLog.i("vhal", "PARKING_BRAKE_ON → $v [was ${lastLoggedParkingBrake ?: "?"}]")
+                    lastLoggedParkingBrake = v
+                }
+            }
+            VEHICLE_PROPERTY_ID_FALLBACK["PERF_VEHICLE_SPEED"] -> {
+                // Edge on the moving / stopped boundary only — full speed
+                // numbers are already in throttledSend at DEBUG.
+                val mps = value as? Float ?: return
+                val moving = mps > 0.5f
+                if (lastSpeedMoving != moving) {
+                    DiagnosticLog.i("vhal", "SPEED edge: ${if (moving) "started moving" else "stopped"} (${"%.1f".format(mps * 3.6f)} km/h)")
+                    lastSpeedMoving = moving
+                }
+            }
         }
     }
 
