@@ -311,6 +311,18 @@ class SessionManager(
     @Volatile private var lastMediaMetadata: ControlMessage.MediaMetadata? = null
     @Volatile private var lastMediaPlaybackState: ControlMessage.MediaPlaybackState? = null
 
+    // Edge-trigger memory for low-cadence VHAL booleans + gear. The VHAL
+    // forwarder sends a full bundle every ~100ms while connected, but the
+    // phone only cares when these actually transition. Spamming them every
+    // tick is wasted IPC at best, and at worst it might cause the phone to
+    // re-render UI (e.g. NIGHT_MODE → AA theme change) too frequently. We
+    // only forward to native when the value differs from the last sent.
+    // Reset to null on session start so the very first tick always fires.
+    @Volatile private var lastSentNightMode: Boolean? = null
+    @Volatile private var lastSentParkingBrake: Boolean? = null
+    @Volatile private var lastSentDriving: Boolean? = null
+    @Volatile private var lastSentGearRaw: Int? = null
+
     // Cluster manager
     private var _clusterManager: com.openautolink.app.cluster.ClusterManager? = null
 
@@ -416,16 +428,37 @@ class SessionManager(
 
         // Create vehicle data forwarder -- sends via AasdkSession
         _vehicleDataForwarder?.stop()
+        // Reset edge-trigger memory so the first tick of the new session
+        // unconditionally publishes nightMode / parking / driving / gear to
+        // the phone — the phone has no prior state from us.
+        lastSentNightMode = null
+        lastSentParkingBrake = null
+        lastSentDriving = null
+        lastSentGearRaw = null
         _vehicleDataForwarder = context?.let { ctx ->
             VehicleDataForwarderImpl(
                 ctx,
                 sendMessage = { vd ->
                     val session = aasdkSession ?: return@VehicleDataForwarderImpl
                     vd.speedKmh?.let { session.sendSpeed((it / 3.6f * 1000).toInt()) }
-                    vd.gearRaw?.let { session.sendGear(it) }
-                    vd.parkingBrake?.let { session.sendParkingBrake(it) }
-                    vd.nightMode?.let { session.sendNightMode(it) }
-                    vd.driving?.let { session.sendDrivingStatus(it) }
+                    // Edge-trigger the low-cadence properties so each
+                    // transition fires the phone exactly once. Spamming
+                    // nightMode 10×/s while it's steady-state may have
+                    // contributed to issue #6 (day/night theme transition →
+                    // black video). Same defense for the others — cheap and
+                    // strictly correct.
+                    vd.gearRaw?.let {
+                        if (lastSentGearRaw != it) { lastSentGearRaw = it; session.sendGear(it) }
+                    }
+                    vd.parkingBrake?.let {
+                        if (lastSentParkingBrake != it) { lastSentParkingBrake = it; session.sendParkingBrake(it) }
+                    }
+                    vd.nightMode?.let {
+                        if (lastSentNightMode != it) { lastSentNightMode = it; session.sendNightMode(it) }
+                    }
+                    vd.driving?.let {
+                        if (lastSentDriving != it) { lastSentDriving = it; session.sendDrivingStatus(it) }
+                    }
                     if (vd.fuelLevelPct != null || vd.rangeKm != null) {
                         session.sendFuel(
                             vd.fuelLevelPct ?: 0,
@@ -1333,10 +1366,22 @@ class SessionManager(
             is ControlMessage.KeyframeRequest -> session.requestKeyframe()
             is ControlMessage.VehicleData -> {
                 message.speedKmh?.let { session.sendSpeed((it / 3.6f * 1000).toInt()) }
-                message.gearRaw?.let { session.sendGear(it) }
-                message.parkingBrake?.let { session.sendParkingBrake(it) }
-                message.nightMode?.let { session.sendNightMode(it) }
-                message.driving?.let { session.sendDrivingStatus(it) }
+                // Same edge-trigger discipline as the inline sendMessage path
+                // in start() — see lastSent* fields. Necessary because both
+                // paths share these state vars; without it, manual injections
+                // would force a resend even when value unchanged.
+                message.gearRaw?.let {
+                    if (lastSentGearRaw != it) { lastSentGearRaw = it; session.sendGear(it) }
+                }
+                message.parkingBrake?.let {
+                    if (lastSentParkingBrake != it) { lastSentParkingBrake = it; session.sendParkingBrake(it) }
+                }
+                message.nightMode?.let {
+                    if (lastSentNightMode != it) { lastSentNightMode = it; session.sendNightMode(it) }
+                }
+                message.driving?.let {
+                    if (lastSentDriving != it) { lastSentDriving = it; session.sendDrivingStatus(it) }
+                }
             }
             is ControlMessage.Gnss -> {
                 // GPS forwarded via LocationListener, not control messages
