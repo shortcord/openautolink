@@ -53,6 +53,8 @@ class ClusterMainSession : Session() {
         )
 
         private const val ARRIVAL_TIMEOUT_MS = 10_000L
+        private const val RETRY_DELAY_MS = 2_000L
+        private const val MAX_RETRY_ATTEMPTS = 3
 
         @Volatile
         private var primarySession: ClusterMainSession? = null
@@ -64,6 +66,7 @@ class ClusterMainSession : Session() {
     private var isPrimary = false
     private var hasSeenActiveNav = false
     private var arrivalTimeoutJob: Job? = null
+    private var retryJob: Job? = null
     private var sessionRegistered = false
 
     override fun onCreateScreen(intent: Intent): Screen {
@@ -134,6 +137,9 @@ class ClusterMainSession : Session() {
                     Log.i(TAG, "Primary session destroyed")
                     DiagnosticLog.i("cluster", "ClusterMainSession destroyed")
                     arrivalTimeoutJob?.cancel()
+                    retryJob?.cancel()
+                    retryJob = null
+                    clearManeuverIconCache()
                     if (isNavigating) {
                         try {
                             navigationManager?.navigationEnded()
@@ -170,6 +176,10 @@ class ClusterMainSession : Session() {
     }
 
     private fun processStateUpdate(maneuver: ManeuverState?) {
+        processStateUpdate(maneuver, retryAttempt = 0)
+    }
+
+    private fun processStateUpdate(maneuver: ManeuverState?, retryAttempt: Int) {
         val navManager = navigationManager ?: return
 
         if (maneuver != null) {
@@ -182,6 +192,8 @@ class ClusterMainSession : Session() {
                     Log.i(TAG, "navigationStarted() (re-start)")
                 } catch (e: Exception) {
                     Log.e(TAG, "navigationStarted() failed: ${e.message}")
+                    DiagnosticLog.e("cluster", "navigationStarted() failed: ${e.message}")
+                    scheduleRetry(maneuver, retryAttempt)
                     return
                 }
             }
@@ -193,7 +205,12 @@ class ClusterMainSession : Session() {
             } catch (e: Exception) {
                 Log.e(TAG, "updateTrip() failed: ${e.message}")
                 DiagnosticLog.e("cluster", "updateTrip() failed: ${e.message}")
+                scheduleRetry(maneuver, retryAttempt)
+                return
             }
+
+            retryJob?.cancel()
+            retryJob = null
 
             // Arrival timeout for terminal maneuver types
             val maneuverName = maneuver.type.name.lowercase()
@@ -213,6 +230,8 @@ class ClusterMainSession : Session() {
                 arrivalTimeoutJob = null
             }
         } else if (isNavigating && hasSeenActiveNav) {
+            retryJob?.cancel()
+            retryJob = null
             arrivalTimeoutJob?.cancel()
             arrivalTimeoutJob = null
             Log.i(TAG, "navigationEnded() — nav cleared")
@@ -222,6 +241,23 @@ class ClusterMainSession : Session() {
                 Log.e(TAG, "navigationEnded() failed: ${e.message}")
             }
             isNavigating = false
+        } else {
+            retryJob?.cancel()
+            retryJob = null
+        }
+    }
+
+    private fun scheduleRetry(maneuver: ManeuverState, retryAttempt: Int) {
+        if (retryAttempt >= MAX_RETRY_ATTEMPTS) {
+            Log.w(TAG, "Cluster update retry limit reached")
+            return
+        }
+        retryJob?.cancel()
+        retryJob = scope?.launch {
+            delay(RETRY_DELAY_MS)
+            if (ClusterNavigationState.state.value == maneuver) {
+                processStateUpdate(maneuver, retryAttempt + 1)
+            }
         }
     }
 

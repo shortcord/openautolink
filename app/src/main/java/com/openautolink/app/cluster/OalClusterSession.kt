@@ -38,6 +38,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.ZonedDateTime
+import java.util.Collections
+import java.util.LinkedHashMap
 
 /**
  * Standard AAOS cluster session — renders NavigationTemplate directly via onGetTemplate().
@@ -53,6 +55,8 @@ class OalClusterSession : Session() {
 
     companion object {
         private const val TAG = "OalClusterSession"
+        private const val RETRY_DELAY_MS = 2_000L
+        private const val MAX_RETRY_ATTEMPTS = 3
     }
 
     private var screen: OalClusterScreen? = null
@@ -61,6 +65,7 @@ class OalClusterSession : Session() {
     private var isNavigating = false
     private var hasSeenActiveNav = false
     private var sessionRegistered = false
+    private var retryJob: Job? = null
 
     override fun onCreateScreen(intent: Intent): Screen {
         if (!sessionRegistered) {
@@ -106,6 +111,9 @@ class OalClusterSession : Session() {
                     sessionRegistered = false
                     Log.i(TAG, "Session destroyed; activeSessions=$activeSessions")
                 }
+                retryJob?.cancel()
+                retryJob = null
+                clearManeuverIconCache()
                 scope?.cancel()
                 scope = null
                 screen = null
@@ -128,6 +136,10 @@ class OalClusterSession : Session() {
     }
 
     private fun processStateUpdate(maneuver: ManeuverState?) {
+        processStateUpdate(maneuver, retryAttempt = 0)
+    }
+
+    private fun processStateUpdate(maneuver: ManeuverState?, retryAttempt: Int) {
         val navManager = navigationManager ?: return
 
         if (maneuver != null) {
@@ -139,8 +151,7 @@ class OalClusterSession : Session() {
                 } catch (e: Exception) {
                     Log.e(TAG, "navigationStarted() failed: ${e.message}. Retrying in 2s...")
                     com.openautolink.app.diagnostics.DiagnosticLog.e("cluster", "navigationStarted failed: ${e.message}")
-                    // Don't fail the update — let the widget show the stale state briefly
-                    // before the next update arrives.
+                    scheduleRetry(maneuver, retryAttempt)
                     return
                 }
             }
@@ -151,13 +162,16 @@ class OalClusterSession : Session() {
             } catch (e: Exception) {
                 Log.e(TAG, "updateTrip() failed: ${e.message}. Retrying in 2s...")
                 com.openautolink.app.diagnostics.DiagnosticLog.e("cluster", "updateTrip failed: ${e.message}")
-                // Don't fail the update — let the widget show the stale state briefly
-                // before the next update arrives.
+                scheduleRetry(maneuver, retryAttempt)
                 return
             }
 
+            retryJob?.cancel()
+            retryJob = null
             screen?.updateState(maneuver)
         } else if (isNavigating && hasSeenActiveNav) {
+            retryJob?.cancel()
+            retryJob = null
             try {
                 navManager.navigationEnded()
             } catch (e: Exception) {
@@ -169,6 +183,24 @@ class OalClusterSession : Session() {
             }
             isNavigating = false
             screen?.updateState(null)
+        } else {
+            retryJob?.cancel()
+            retryJob = null
+            screen?.updateState(null)
+        }
+    }
+
+    private fun scheduleRetry(maneuver: ManeuverState, retryAttempt: Int) {
+        if (retryAttempt >= MAX_RETRY_ATTEMPTS) {
+            Log.w(TAG, "Cluster update retry limit reached")
+            return
+        }
+        retryJob?.cancel()
+        retryJob = scope?.launch {
+            delay(RETRY_DELAY_MS)
+            if (ClusterNavigationState.state.value == maneuver) {
+                processStateUpdate(maneuver, retryAttempt + 1)
+            }
         }
     }
 
@@ -294,16 +326,38 @@ class OalClusterScreen(carContext: CarContext) : Screen(carContext) {
 
 // ── Shared helpers for cluster sessions ──
 
+private const val MANEUVER_ICON_CACHE_SIZE = 12
+
+private val maneuverIconCache: MutableMap<Int, CarIcon> =
+    Collections.synchronizedMap(
+        object : LinkedHashMap<Int, CarIcon>(MANEUVER_ICON_CACHE_SIZE, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, CarIcon>?): Boolean =
+                size > MANEUVER_ICON_CACHE_SIZE
+        }
+    )
+
+internal fun clearManeuverIconCache() {
+    maneuverIconCache.clear()
+}
+
 internal fun buildManeuver(maneuver: ManeuverState, carContext: CarContext): Maneuver {
     // Path 1: AA bitmap icon from bridge (pre-rendered by Google Maps)
     val imageBase64 = maneuver.navImageBase64
     if (imageBase64 != null) {
+        val cacheKey = imageBase64.hashCode()
+        maneuverIconCache.get(cacheKey)?.let { icon ->
+            return Maneuver.Builder(Maneuver.TYPE_UNKNOWN)
+                .setIcon(icon)
+                .build()
+        }
         try {
             val bytes = Base64.decode(imageBase64, Base64.DEFAULT)
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             if (bitmap != null) {
+                val icon = CarIcon.Builder(IconCompat.createWithBitmap(bitmap)).build()
+                maneuverIconCache.put(cacheKey, icon)
                 val builder = Maneuver.Builder(Maneuver.TYPE_UNKNOWN)
-                builder.setIcon(CarIcon.Builder(IconCompat.createWithBitmap(bitmap)).build())
+                builder.setIcon(icon)
                 return builder.build()
             }
         } catch (_: Exception) {}
@@ -411,8 +465,10 @@ internal fun toDistance(
         if (value != null) {
             val unit = when (displayUnit) {
                 "meters" -> androidx.car.app.model.Distance.UNIT_METERS
-                "kilometers", "kilometers_p1" -> androidx.car.app.model.Distance.UNIT_KILOMETERS
-                "miles", "miles_p1" -> androidx.car.app.model.Distance.UNIT_MILES
+                "kilometers" -> androidx.car.app.model.Distance.UNIT_KILOMETERS
+                "kilometers_p1" -> androidx.car.app.model.Distance.UNIT_KILOMETERS_P1
+                "miles" -> androidx.car.app.model.Distance.UNIT_MILES
+                "miles_p1" -> androidx.car.app.model.Distance.UNIT_MILES_P1
                 "feet" -> androidx.car.app.model.Distance.UNIT_FEET
                 "yards" -> androidx.car.app.model.Distance.UNIT_YARDS
                 else -> null

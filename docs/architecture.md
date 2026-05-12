@@ -1,6 +1,6 @@
 # OpenAutoLink Architecture
 
-Last reviewed against code: May 3, 2026.
+Last reviewed against code: May 12, 2026.
 
 OpenAutoLink is currently a bridgeless AAOS projection stack. The AAOS app runs the Android Auto head-unit protocol through aasdk C++ in-process via JNI. The phone companion app does not decode or interpret Android Auto; it starts a local Android Auto wireless session on the phone and relays that byte stream to the car app.
 
@@ -210,6 +210,50 @@ The current islands still follow the original independence rule: public flows an
 | Navigation | `com.openautolink.app.navigation` | Maneuver state, icon rendering, cluster integration. |
 | UI | `com.openautolink.app.ui` | Compose projection, settings, diagnostics, phone chooser. |
 | Diagnostics | `com.openautolink.app.diagnostics` | In-app logs, telemetry, remote log server for no-ADB head units. |
+
+## Cluster Navigation
+
+Cluster navigation is an app-side AAOS integration, not part of the phone TCP pipe. Android Auto navigation messages arrive through aasdk, `SessionManager` converts them into `ManeuverState`, and the cluster service consumes the shared `ClusterNavigationState`.
+
+The Settings → Features → Cluster Navigation toggle is authoritative:
+
+| Toggle state | Behavior |
+|--------------|----------|
+| Enabled | `SessionManager` enables `OalClusterService`, launches `CarAppActivity` to trigger Templates Host binding on GM, and publishes current maneuvers into `ClusterNavigationState`. |
+| Disabled | `ClusterManager` disables the service component, cancels pending binding/retry callbacks, clears cluster nav state, clears binding state, clears maneuver icon cache, and finishes the hidden `CarAppActivity` task if present. |
+
+```mermaid
+sequenceDiagram
+    participant AA as Android Auto NavState
+    participant SM as SessionManager
+    participant CM as ClusterManager
+    participant TH as Templates Host
+    participant CS as OalClusterService
+    participant GM as GM Cluster
+
+    SM->>CM: observe clusterNavigation=true
+    CM->>CM: enable service component
+    CM->>TH: launch CarAppActivity
+    TH->>CS: bind CarAppService
+    AA-->>SM: ControlMessage.NavState
+    SM->>SM: NavigationDisplay.onNavState
+    SM->>CS: ClusterNavigationState.update(maneuver)
+    CS->>TH: navigationStarted() / updateTrip()
+    TH->>GM: NavigationManager trip relay
+```
+
+There are two service session paths:
+
+| Path | Code | Purpose |
+|------|------|---------|
+| GM relay path | `ClusterMainSession` | Sends `NavigationManager.navigationStarted()` and `updateTrip()` immediately, because GM renders through its own OnStar turn-by-turn pipeline. |
+| Standard AAOS path | `OalClusterSession` | Provides a `NavigationTemplate`/`RoutingInfo` screen for hosts that render the cluster template directly. |
+
+Rebinding must preserve active route state. `ClusterManager.restartClusterBinding()` only tears down and relaunches the binding chain; it does not clear `ClusterNavigationState`. State is cleared only on phone disconnect, `NavStateClear`, session stop, or explicit feature disable.
+
+The exported `OalClusterService` uses `HostValidator.Builder(this).build()`. This keeps normal Templates Host/system binders working through `android.car.permission.TEMPLATE_RENDERER` and rejects unknown third-party binders instead of accepting every host.
+
+GM Templates Host also attempts to insert maneuver icons into `content://com.google.android.apps.automotive.templates.host.ClusterIconContentProvider`. Some GM builds include the class but do not register the provider, so OpenAutoLink registers `ClusterIconShimProvider` under that authority. The provider is intentionally exported because Templates Host runs in another package. It implements the expected `insert()`, `query()`, and `openFile()` cache flow and should be removed if a target image already declares that authority and install fails with an authority collision.
 
 ## External API Notes
 

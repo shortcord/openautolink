@@ -55,6 +55,16 @@ class ClusterManager(private val context: Context) {
      */
     fun setClusterEnabled(enabled: Boolean) {
         this.enabled = enabled
+        if (!enabled) {
+            handler.removeCallbacksAndMessages(null)
+            bindingAttemptGeneration += 1
+            healthRetryCount = 0
+            relaunching = false
+            ClusterNavigationState.clear()
+            ClusterBindingState.clear()
+            clearManeuverIconCache()
+            finishBindingTask()
+        }
         val newState = if (enabled) {
             PackageManager.COMPONENT_ENABLED_STATE_ENABLED
         } else {
@@ -237,7 +247,6 @@ class ClusterManager(private val context: Context) {
     fun restartClusterBinding() {
         Log.w(TAG, "Restarting cluster binding chain")
         DiagnosticLog.w("cluster", "Restarting cluster binding chain")
-        ClusterNavigationState.clear()
         bindingAttemptGeneration += 1
 
         // Find and finish the CarAppActivity task

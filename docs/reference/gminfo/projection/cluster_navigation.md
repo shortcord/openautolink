@@ -796,6 +796,66 @@ vehiclepanel HAL
 Instrument Cluster ECU
 ```
 
+### OpenAutoLink Implementation Notes
+
+OpenAutoLink uses the Car App Library path above, but the GM Templates Host binding has several practical requirements:
+
+| Requirement | OpenAutoLink behavior |
+|-------------|-----------------------|
+| Host discovery | `ClusterManager` enables `OalClusterService` and launches hidden `androidx.car.app.activity.CarAppActivity` because GM Templates Host does not reliably auto-discover the service from only the manifest intent filter. |
+| User control | The Settings → Features → Cluster Navigation toggle is the source of truth. Disabled means no `CarAppActivity` launch, disabled service component, cleared cluster state, and canceled binding callbacks. |
+| Host validation | `OalClusterService` uses `HostValidator.Builder(this).build()`. This accepts system/privileged Templates Host callers through `android.car.permission.TEMPLATE_RENDERER` and rejects unknown third-party binders. |
+| Rebinding | `restartClusterBinding()` preserves `ClusterNavigationState` so an active route is not blanked during GM session teardown/rebind. State is cleared only on projection disconnect, `nav_state_clear`, session stop, or explicit feature disable. |
+| Retry behavior | `ClusterMainSession` and `OalClusterSession` retry failed `navigationStarted()` / `updateTrip()` calls up to 3 times with a 2 second delay, using the last still-current `ManeuverState`. |
+| Icon decode cost | Base64 maneuver bitmap icons are cached in a small LRU-style in-memory cache and cleared with cluster/session lifecycle. Failed decodes fall back to bundled vector icons. |
+
+```mermaid
+flowchart TD
+    A[Cluster Navigation setting] -->|enabled| B[Enable OalClusterService component]
+    B --> C[Launch hidden CarAppActivity]
+    C --> D[Templates Host binds OalClusterService]
+    D --> E{SessionInfo display type}
+    E -->|main / GM| F[ClusterMainSession]
+    E -->|cluster display| G[OalClusterSession]
+    F --> H[NavigationManager.updateTrip]
+    G --> I[NavigationTemplate RoutingInfo]
+    H --> J[GM OnStarTurnByTurnManager]
+    J --> K[Instrument cluster]
+    A -->|disabled| L[Disable component + cancel callbacks + clear cluster state]
+```
+
+#### GM Icon Provider Shim
+
+GM Templates Host converts `CarIcon` maneuver images into content-provider backed URIs using:
+
+```
+content://com.google.android.apps.automotive.templates.host.ClusterIconContentProvider
+```
+
+On observed GM builds, the Templates Host contains the provider class but does not declare the provider authority in its manifest. The first failed insert causes the host to stop sending icons for the session. OpenAutoLink declares `ClusterIconShimProvider` with that exact authority and `android:exported="true"` so the cross-package host can call it.
+
+The shim implements the minimal observed contract:
+
+| Method | Behavior |
+|--------|----------|
+| `insert()` | Stores PNG bytes keyed by `iconId`, returns a `content://.../img/<cacheKey>` URI. |
+| `query()` | Returns `contentUri` and `aspectRatio` metadata for a requested `iconId`. |
+| `openFile()` | Serves cached PNG bytes through a pipe. |
+
+If APK install fails because the target system image already owns `com.google.android.apps.automotive.templates.host.ClusterIconContentProvider`, remove the shim provider declaration; that means the system Templates Host image fixed the orphaned-provider issue.
+
+#### Manual Validation
+
+Use remote diagnostics or logcat with `tag=cluster`:
+
+| Scenario | Expected result |
+|----------|-----------------|
+| Toggle off | `OalClusterService` component disabled, no `CarAppActivity` launch, no new cluster sessions, cluster state cleared. |
+| Toggle on | Service enabled, `CarAppActivity` launches, Templates Host binds, `ClusterBindingState.sessionAlive=true`. |
+| Active route rebind | Last maneuver remains in `ClusterNavigationState`; cluster should redraw after rebinding without waiting for a fresh phone nav event. |
+| Nav clear | `navigationEnded()` is called and cluster state clears. |
+| Icon flow | `ClusterIconShimProvider` logs `insert()`, `query()`, and `openFile()` when Templates Host requests maneuver icons. |
+
 ---
 
 ## Implications for Third-Party Development

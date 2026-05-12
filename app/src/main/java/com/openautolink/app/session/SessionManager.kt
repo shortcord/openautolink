@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
@@ -263,11 +264,13 @@ class SessionManager(
 
     // Cluster manager
     private var _clusterManager: com.openautolink.app.cluster.ClusterManager? = null
+    @Volatile private var clusterNavigationEnabled: Boolean = AppPreferences.DEFAULT_CLUSTER_NAVIGATION
 
     private var observeJob: Job? = null
     private var decoderWatchJob: Job? = null
     private var keyframeWatchJob: Job? = null
     private var callStateJob: Job? = null
+    private var clusterPreferenceJob: Job? = null
 
     // Track last known active time for sleep/wake detection
     private var lastActiveTimestamp = SystemClock.elapsedRealtime()
@@ -528,15 +531,11 @@ class SessionManager(
             OalMediaBrowserService.updateSessionToken(token)
         }
 
-        // Enable cluster service — always enable so Templates Host can discover it.
-        // On non-AAOS devices Templates Host won't exist so the service simply won't bind.
+        // Cluster service is controlled by the Cluster Navigation preference.
         _clusterManager?.release()
         _clusterManager = context?.let { com.openautolink.app.cluster.ClusterManager(it) }
-        _clusterManager?.setClusterEnabled(true)
-        // Proactively launch cluster binding — Templates Host on GM doesn't auto-discover
-        // the service via intent filter; it requires CarAppActivity to be launched first.
-        _clusterManager?.launchClusterBinding()
-        OalLog.i(TAG, "Cluster manager initialized and binding launched")
+        observeClusterNavigationPreference()
+        OalLog.i(TAG, "Cluster manager initialized")
 
         // Create diagnostics (local-only)
         _telemetryCollector?.stop()
@@ -901,6 +900,8 @@ class SessionManager(
         ClusterNavigationState.clear()
         _mediaSessionManager?.release()
         _mediaSessionManager = null
+        clusterPreferenceJob?.cancel()
+        clusterPreferenceJob = null
         _clusterManager?.release()
         _clusterManager = null
         _telemetryCollector?.stop()
@@ -1281,6 +1282,29 @@ class SessionManager(
         observeEvTuningPrefs()
     }
 
+    private fun observeClusterNavigationPreference() {
+        val ctx = context ?: return
+        val clusterManager = _clusterManager ?: return
+        clusterPreferenceJob?.cancel()
+        clusterPreferenceJob = scope.launch {
+            AppPreferences.getInstance(ctx).clusterNavigation.collectLatest { enabled ->
+                clusterNavigationEnabled = enabled
+                clusterManager.setClusterEnabled(enabled)
+                if (enabled) {
+                    // Templates Host on GM does not reliably auto-discover the
+                    // service; launching CarAppActivity starts the binding chain.
+                    clusterManager.launchClusterBinding()
+                    _navigationDisplay.currentManeuver.value?.let { maneuver ->
+                        ClusterNavigationState.update(maneuver)
+                    }
+                    OalLog.i(TAG, "Cluster navigation enabled and binding launched")
+                } else {
+                    OalLog.i(TAG, "Cluster navigation disabled")
+                }
+            }
+        }
+    }
+
     suspend fun sendControlMessage(message: ControlMessage) {
         val session = aasdkSession ?: return
         when (message) {
@@ -1414,8 +1438,10 @@ class SessionManager(
             }
             is ControlMessage.NavState -> {
                 _navigationDisplay.onNavState(message)
-                _navigationDisplay.currentManeuver.value?.let { maneuver ->
-                    ClusterNavigationState.update(maneuver)
+                if (clusterNavigationEnabled) {
+                    _navigationDisplay.currentManeuver.value?.let { maneuver ->
+                        ClusterNavigationState.update(maneuver)
+                    }
                 }
             }
             is ControlMessage.NavStateClear -> {

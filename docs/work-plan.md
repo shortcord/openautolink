@@ -35,8 +35,8 @@ These can only be validated on the real GM head unit. Remote diagnostics (M11) s
 | Unknown | Status |
 |---------|--------|
 | Does GM kill third-party cluster services? How long until kill? | **Unknown** — needs longer drive session |
-| Does `ClusterIconShimProvider` get queried by GM? | **Unknown** |
-| Is re-binding after kill effective? | **Unknown** |
+| Does `ClusterIconShimProvider` get queried by GM? | **Instrumented** — provider is manifest-registered; needs car validation of `insert()`/`query()`/`openFile()` calls |
+| Is re-binding after kill effective? | **IMPLEMENTED** — active route state is preserved across rebind; needs longer drive validation |
 
 ### Steering Wheel Controls
 | Unknown | Status |
@@ -289,7 +289,13 @@ See [docs/architecture.md](architecture.md) for full component island breakdown 
 - [x] `MediaBrowserService` + `MediaSession` for cluster media: album artwork, track info
 - [x] Bridge → app: `album_art_base64` field in `media_metadata` control message
 - [x] `ClusterIconShimProvider` for Templates Host icon caching (GM-specific workaround)
+- [x] Register `ClusterIconShimProvider` in the app manifest with the GM Templates Host authority (`com.google.android.apps.automotive.templates.host.ClusterIconContentProvider`)
 - [x] Handle GM restrictions: `ClusterManager` detects session death via `ClusterBindingState.sessionAlive`, re-launches `CarAppActivity` binding chain with backoff
+- [x] Cluster Navigation setting is authoritative: disabled stops scheduled binding, disables the service component, clears cluster state, and prevents `CarAppActivity` launches
+- [x] Host validation tightened: exported `OalClusterService` uses `HostValidator.Builder` instead of `ALLOW_ALL_HOSTS_VALIDATOR`
+- [x] Cluster rebind preserves active route state; `restartClusterBinding()` no longer clears `ClusterNavigationState`
+- [x] `navigationStarted()` / `updateTrip()` failures get bounded retry against the last still-current `ManeuverState`
+- [x] Base64 maneuver icon decode uses a small lifecycle-cleared cache with vector fallback
 - [x] Fallback rendering if cluster service is blocked: `launchClusterBinding()` catches and suppresses failures, cluster degrades silently while `MediaSession` continues
 - [x] `ClusterBindingState` tracking + auto-relaunch after teardown
 - [x] Bridge: aasdk `NavigationStatusService` configured with `InstrumentClusterType::IMAGE` + `image_options` (256×256, 32-bit)
@@ -384,8 +390,8 @@ These items can only be validated on the actual GM head unit. No emulator can an
 | Does GM kill third-party cluster services? | Deploy app, bind cluster, monitor lifetime | `tag=cluster`: bind time, alive duration, destroy event, reason if available | **Unknown** — needs longer drive session |
 | How long does it stay alive before kill? | Timestamp bind vs destroy, compute delta | `tag=cluster`: `ClusterMainSession created`, `destroyed after Nms` | **Unknown** — needs longer drive session |
 | Does GM's Templates Host work with our `NavigationTemplate`? | Send nav state, check cluster display | `tag=cluster`: `Trip.Builder` success/failure, any `RemoteException` | **CONFIRMED** — GM renders Trip data via OnStarTurnByTurnManager. Arrow + road name displayed correctly on instrument cluster |
-| `ClusterIconShimProvider` — does GM query it? | Deploy, log `ContentProvider.query()` calls | `tag=cluster`: query events with URI and caller package | **Unknown** |
-| Is re-binding after kill effective? | Track rebind count over a drive session | `tag=cluster`: `rebind attempt #N`, success/failure | **Unknown** |
+| `ClusterIconShimProvider` — does GM query it? | Deploy, log `ContentProvider.query()` calls | `tag=cluster`: `insert()`, `query()`, `openFile()` events with URI and caller package | **Instrumented** — provider is now manifest-registered; needs car validation |
+| Is re-binding after kill effective? | Track rebind count over a drive session | `tag=cluster`: `rebind attempt #N`, success/failure, preserved maneuver after rebind | **IMPLEMENTED** — state is preserved across rebind; needs longer drive validation |
 | Fallback if cluster is fully blocked | No cluster display — degrade gracefully, hide cluster settings | Log final determination so we can document for users | N/A — cluster works |
 | Nav cancel clears cluster | Cancel nav on phone, verify cluster clears | `tag=cluster`: `navigationEnded()` called | **FIXED** — was missing `nav_state_clear` message. Bridge now sends it on `status!=active` |
 

@@ -24,7 +24,13 @@ class OalClusterService : CarAppService() {
         private const val TAG = "OalClusterSvc"
     }
 
-    override fun createHostValidator(): HostValidator = HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
+    override fun createHostValidator(): HostValidator {
+        // Do not use ALLOW_ALL_HOSTS_VALIDATOR for the exported service. The
+        // platform Templates Host is accepted through android.car.permission
+        // .TEMPLATE_RENDERER, and local/emulator system bindings are accepted by
+        // HostValidator itself. Unknown third-party binders are rejected.
+        return HostValidator.Builder(this).build()
+    }
 
     @Suppress("DEPRECATION")
     override fun onCreateSession(): Session {
