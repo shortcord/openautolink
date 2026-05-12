@@ -282,6 +282,15 @@ class SessionManager(
     // resolved by ProjectionViewModel from PhoneDiscovery + knownPhonesStore.
     @Volatile private var _defaultPhoneName: String = ""
 
+    /**
+     * Last manualIpAddress used by start()/reconnect() for the current/most
+     * recent session. Cached so that "Save & Reconnect" — which doesn't know
+     * the resolved Car Hotspot IP — can keep dialing the same phone instead
+     * of dropping to mDNS-only resolution (which times out without an IP).
+     * Cleared by clearDefaultPhone().
+     */
+    @Volatile private var _lastManualIpAddress: String? = null
+
     /** Set the default phone name from preferences (called at session start). */
     fun setDefaultPhoneName(name: String) { _defaultPhoneName = name }
 
@@ -291,6 +300,7 @@ class SessionManager(
     /** Clear the default phone — next connection will pick any phone. */
     fun clearDefaultPhone() {
         _defaultPhoneName = ""
+        _lastManualIpAddress = null
         scope.launch {
             context?.let { AppPreferences.getInstance(it).setDefaultPhoneName("") }
         }
@@ -393,6 +403,9 @@ class SessionManager(
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
     ) {
+        // Cache for later reconnects that don't know the resolved IP (e.g.
+        // Settings "Save & Reconnect" in Car Hotspot mode).
+        if (!manualIpAddress.isNullOrBlank()) _lastManualIpAddress = manualIpAddress
         micSource = micSourcePreference
         observeJob?.cancel()
 
@@ -1050,6 +1063,13 @@ class SessionManager(
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
     ) {
+        // "Save & Reconnect" from Settings doesn't know the resolved Car
+        // Hotspot IP — fall back to the last value we successfully used so
+        // TcpConnector doesn't drop to mDNS-only mode and stall.
+        val effectiveManualIp = manualIpAddress?.takeIf { it.isNotBlank() }
+            ?: _lastManualIpAddress
+        if (!effectiveManualIp.isNullOrBlank()) _lastManualIpAddress = effectiveManualIp
+
         // If islands were never initialized, do a full start
         if (_audioPlayer == null) {
             start(
@@ -1059,7 +1079,7 @@ class SessionManager(
                 aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins, videoFps,
                 driveSide, hideClock, hideSignal, hideBattery,
                 volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
-                manualIpAddress, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
+                effectiveManualIp, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
             )
             return
         }
@@ -1094,7 +1114,7 @@ class SessionManager(
                     aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins,
                     videoFps, driveSide, hideClock, hideSignal, hideBattery,
                     volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
-                    manualIpAddress, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
+                    effectiveManualIp, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
                 )
             } catch (e: Exception) {
                 OalLog.e(TAG, "reconnect() failed: ${e.message}")
