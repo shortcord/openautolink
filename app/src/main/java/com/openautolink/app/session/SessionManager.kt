@@ -1405,12 +1405,41 @@ class SessionManager(
         val ctx = context ?: return
         val r = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: android.content.Context?, intent: android.content.Intent?) {
-                if (intent?.action != "com.openautolink.app.DEBUG_SIMULATE_SLEEP") return
-                val ms = intent.getLongExtra("duration_ms", 60_000L).coerceAtLeast(1_000L)
-                debugSimulateSleep(ms)
+                when (intent?.action) {
+                    "com.openautolink.app.DEBUG_SIMULATE_SLEEP" -> {
+                        val ms = intent.getLongExtra("duration_ms", 60_000L).coerceAtLeast(1_000L)
+                        debugSimulateSleep(ms)
+                    }
+                    "com.openautolink.app.DEBUG_INJECT_PHONE" -> {
+                        val host = intent.getStringExtra("host")
+                        if (host.isNullOrBlank()) {
+                            OalLog.w(TAG, "DEBUG_INJECT_PHONE missing 'host' extra")
+                            return
+                        }
+                        val port = intent.getIntExtra("port", 5277)
+                        val phoneId = intent.getStringExtra("phone_id")
+                            ?: "debug_inject_${host.replace('.', '_')}"
+                        val friendlyName = intent.getStringExtra("name")
+                            ?: "Test Phone @ $host"
+                        val ctxApp = context
+                        if (ctxApp != null) {
+                            com.openautolink.app.transport.PhoneDiscovery.getInstance(ctxApp)
+                                .injectDebugPhone(
+                                    host = host,
+                                    port = port,
+                                    friendlyName = friendlyName,
+                                    phoneId = phoneId,
+                                )
+                            OalLog.i(TAG, "DEBUG injected phone: $friendlyName ($phoneId) @ $host:$port")
+                        }
+                    }
+                }
             }
         }
-        val filter = android.content.IntentFilter("com.openautolink.app.DEBUG_SIMULATE_SLEEP")
+        val filter = android.content.IntentFilter().apply {
+            addAction("com.openautolink.app.DEBUG_SIMULATE_SLEEP")
+            addAction("com.openautolink.app.DEBUG_INJECT_PHONE")
+        }
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
                 ctx.registerReceiver(r, filter, android.content.Context.RECEIVER_EXPORTED)
@@ -1419,9 +1448,9 @@ class SessionManager(
                 ctx.registerReceiver(r, filter)
             }
             debugSleepReceiver = r
-            OalLog.i(TAG, "Debug sleep-sim receiver registered (action=com.openautolink.app.DEBUG_SIMULATE_SLEEP)")
+            OalLog.i(TAG, "Debug receivers registered (DEBUG_SIMULATE_SLEEP, DEBUG_INJECT_PHONE)")
         } catch (e: Exception) {
-            OalLog.w(TAG, "Debug sleep-sim receiver registration failed: ${e.message}")
+            OalLog.w(TAG, "Debug receiver registration failed: ${e.message}")
         }
     }
     private fun unregisterDebugReceiver() {
