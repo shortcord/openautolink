@@ -288,8 +288,8 @@ See [docs/architecture.md](architecture.md) for full component island breakdown 
 - [x] Cluster navigation: `Maneuver.TYPE_*` enums + distance + road name via `Trip` builder
 - [x] `MediaBrowserService` + `MediaSession` for cluster media: album artwork, track info
 - [x] Bridge → app: `album_art_base64` field in `media_metadata` control message
-- [x] `ClusterIconShimProvider` for Templates Host icon caching (GM-specific workaround)
-- [x] Register `ClusterIconShimProvider` in the app manifest with the GM Templates Host authority (`com.google.android.apps.automotive.templates.host.ClusterIconContentProvider`)
+- [x] `ClusterIconShimProvider` for Templates Host icon caching (GM-specific debug workaround)
+- [x] Register `ClusterIconShimProvider` only in the debug manifest with the GM Templates Host authority (`com.google.android.apps.automotive.templates.host.ClusterIconContentProvider`)
 - [x] Handle GM restrictions: `ClusterManager` detects session death via `ClusterBindingState.sessionAlive`, re-launches `CarAppActivity` binding chain with backoff
 - [x] Cluster Navigation setting is authoritative: disabled stops scheduled binding, disables the service component, clears cluster state, and prevents `CarAppActivity` launches
 - [x] Host validation tightened: exported `OalClusterService` uses `HostValidator.Builder` instead of `ALLOW_ALL_HOSTS_VALIDATOR`

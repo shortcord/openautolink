@@ -832,7 +832,7 @@ GM Templates Host converts `CarIcon` maneuver images into content-provider backe
 content://com.google.android.apps.automotive.templates.host.ClusterIconContentProvider
 ```
 
-On observed GM builds, the Templates Host contains the provider class but does not declare the provider authority in its manifest. The first failed insert causes the host to stop sending icons for the session. OpenAutoLink declares `ClusterIconShimProvider` with that exact authority and `android:exported="true"` so the cross-package host can call it.
+On observed GM builds, the Templates Host contains the provider class but does not declare the provider authority in its manifest. The first failed insert causes the host to stop sending icons for the session. OpenAutoLink debug builds declare `ClusterIconShimProvider` with that exact authority and `android:exported="true"` so the cross-package host can call it during sideload validation. Release builds cannot declare this provider because Play rejects uploads that claim another developer's authority.
 
 The shim implements the minimal observed contract:
 
@@ -842,7 +842,7 @@ The shim implements the minimal observed contract:
 | `query()` | Returns `contentUri` and `aspectRatio` metadata for a requested `iconId`. |
 | `openFile()` | Serves cached PNG bytes through a pipe. |
 
-If APK install fails because the target system image already owns `com.google.android.apps.automotive.templates.host.ClusterIconContentProvider`, remove the shim provider declaration; that means the system Templates Host image fixed the orphaned-provider issue.
+If APK install fails because the target system image already owns `com.google.android.apps.automotive.templates.host.ClusterIconContentProvider`, use a build without the debug shim; that means the system Templates Host image fixed the orphaned-provider issue.
 
 #### Manual Validation
 

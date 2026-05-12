@@ -122,14 +122,6 @@
             <meta-data android:name="com.gm.homescreen.visibility" android:value="HIDDEN" />
         </service>
 
-        <!-- GM Templates Host inserts cluster maneuver icons through this orphaned
-             authority from another package; exported access is required for that
-             cross-app ContentProvider contract. -->
-        <provider
-            android:name=".cluster.ClusterIconShimProvider"
-            android:authorities="com.google.android.apps.automotive.templates.host.ClusterIconContentProvider"
-            android:exported="true" />
-
         <!-- Required at application level — Templates Host reads minCarApiLevel
              from application metadata, not from service element -->
         <meta-data

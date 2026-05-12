@@ -13,12 +13,15 @@ import java.util.Collections
 import java.util.LinkedHashMap
 
 /**
- * Shim ContentProvider that claims the orphaned Templates Host authority for cluster icons.
+ * Debug-only shim ContentProvider that claims the orphaned Templates Host authority for cluster icons.
  *
  * GM's Templates Host has a ClusterIconContentProvider class but never registers it in its
  * manifest. When Templates Host converts CarIcon maneuver icons into navstate2 protobuf,
  * it calls contentResolver.insert() against this authority. The first failure sets
  * `skipIcons = true` permanently, disabling all icon delivery for the session.
+ *
+ * This shim must not be registered in release builds because Play requires provider authorities
+ * to be globally unique across developers, and this authority belongs to Google.
  *
  * This shim implements the 3-method contract Templates Host expects:
  * - insert(): cache PNG bytes keyed by iconId
@@ -87,7 +90,7 @@ class ClusterIconShimProvider : ContentProvider() {
         val data = iconCache[cacheKey]
         if (data != null) {
             val contentUri = "content://$AUTHORITY/img/$cacheKey"
-            cursor.addRow(arrayOf(contentUri, 1.0f))
+            cursor.addRow(arrayOf<Any>(contentUri, 1.0f))
             Log.i(TAG, "query() HIT iconId=$selection (${data.size} bytes) → $contentUri")
         } else {
             Log.w(TAG, "query() MISS iconId=$selection (not in cache, cache=${iconCache.size})")

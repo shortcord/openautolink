@@ -253,7 +253,7 @@ Rebinding must preserve active route state. `ClusterManager.restartClusterBindin
 
 The exported `OalClusterService` uses `HostValidator.Builder(this).build()`. This keeps normal Templates Host/system binders working through `android.car.permission.TEMPLATE_RENDERER` and rejects unknown third-party binders instead of accepting every host.
 
-GM Templates Host also attempts to insert maneuver icons into `content://com.google.android.apps.automotive.templates.host.ClusterIconContentProvider`. Some GM builds include the class but do not register the provider, so OpenAutoLink registers `ClusterIconShimProvider` under that authority. The provider is intentionally exported because Templates Host runs in another package. It implements the expected `insert()`, `query()`, and `openFile()` cache flow and should be removed if a target image already declares that authority and install fails with an authority collision.
+GM Templates Host also attempts to insert maneuver icons into `content://com.google.android.apps.automotive.templates.host.ClusterIconContentProvider`. Some GM builds include the class but do not register the provider, so debug builds register `ClusterIconShimProvider` under that authority for sideload validation. The provider is intentionally exported because Templates Host runs in another package. It implements the expected `insert()`, `query()`, and `openFile()` cache flow. Release builds must not declare this provider because Play requires provider authorities to be globally unique across developers, and this authority belongs to Google.
 
 ## External API Notes
 

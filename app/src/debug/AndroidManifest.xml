@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Debug-only GM Templates Host icon shim.
+             Play requires provider authorities to be globally unique across developers,
+             so this Google-owned authority must not appear in release artifacts. -->
+        <provider
+            android:name=".cluster.ClusterIconShimProvider"
+            android:authorities="com.google.android.apps.automotive.templates.host.ClusterIconContentProvider"
+            android:exported="true" />
+    </application>
+</manifest>
