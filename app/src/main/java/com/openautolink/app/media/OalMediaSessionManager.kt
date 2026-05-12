@@ -158,12 +158,17 @@ class OalMediaSessionManager(private val context: Context) {
     ) {
         synchronized(sessionLock) {
             val session = mediaSession ?: return
+            val displayTitle = title ?: "Unknown"
+            val displayArtist = artist ?: "Unknown"
+            val displayAlbum = album ?: ""
 
             val builder = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title ?: "Unknown")
-                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist ?: "Unknown")
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, album ?: "")
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, "OpenAutoLink")
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, displayTitle)
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, displayArtist)
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, displayAlbum)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, displayTitle)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, displayArtist)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAlbum)
 
             if (durationMs != null && durationMs > 0) {
                 builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
@@ -211,7 +216,11 @@ class OalMediaSessionManager(private val context: Context) {
             // Some AAOS dashboard widgets do not repaint metadata changes until the
             // playback state also changes. Re-push the latest known playback snapshot.
             // This ensures the widget refreshes even when the actual playback state is stale.
-            val state = PlaybackStateCompat.STATE_PLAYING
+            val state = if (lastPushedPlaying == false) {
+                PlaybackStateCompat.STATE_PAUSED
+            } else {
+                PlaybackStateCompat.STATE_PLAYING
+            }
             session.setPlaybackState(buildPlaybackState(state, lastPushedPositionMs ?: 0L))
         }
     }

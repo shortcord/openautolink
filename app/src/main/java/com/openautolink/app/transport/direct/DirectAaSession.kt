@@ -743,34 +743,22 @@ class DirectAaSession(
     }
 
     private suspend fun handleMediaPlayback(msg: AaMessage) {
-        when (msg.type) {
-            0x8001, 0x8003 -> {
-                try {
-                    val data = msg.payload.copyOfRange(msg.payloadOffset, msg.payloadOffset + msg.payloadLength)
-                    val metadata = com.openautolink.app.proto.MediaPlayback.MediaMetaData.parseFrom(data)
-                    val title = metadata.song.takeIf { it.isNotEmpty() }
-                    val artist = metadata.artist.takeIf { it.isNotEmpty() }
-                    val album = metadata.album.takeIf { it.isNotEmpty() }
-                    OalLog.d(TAG, "Media: $title - $artist")
-                    emitMediaMetadata(title, artist, album)
-                } catch (e: Exception) {
-                    OalLog.e(TAG, "MediaPlayback parse error: ${e.message}")
+        try {
+            when (val message = DirectMediaPlaybackParser.parse(msg)) {
+                is ControlMessage.MediaMetadata -> {
+                    OalLog.d(TAG, "Media: ${message.title} - ${message.artist}")
+                    _controlMessages.emit(message)
                 }
+                is ControlMessage.MediaPlaybackState -> {
+                    OalLog.d(TAG, "Media playback: playing=${message.playing} pos=${message.positionMs}ms")
+                    _controlMessages.emit(message)
+                }
+                null -> handleChannelControl(msg)
+                else -> Unit
             }
-            else -> handleChannelControl(msg)
+        } catch (e: Exception) {
+            OalLog.e(TAG, "MediaPlayback parse error: ${e.message}")
         }
-    }
-
-    /** Isolated method to avoid Kotlin type inference issues with sealed class + protobuf. */
-    private suspend fun emitMediaMetadata(title: String?, artist: String?, album: String?) {
-        _controlMessages.emit(ControlMessage.MediaMetadata(
-            title = title,
-            artist = artist,
-            album = album,
-            durationMs = null,
-            positionMs = null,
-            playing = null
-        ))
     }
 
     private suspend fun handlePhoneStatus(msg: AaMessage) {

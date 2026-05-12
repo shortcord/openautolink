@@ -5,9 +5,8 @@ option java_package = "com.openautolink.app.proto";
 option java_outer_classname = "MediaPlayback";
 
 enum PlaybackMsgType {
-    MSG_PLAYBACK_METADATA = 0x8001;
-    MSG_PLAYBACK_STARTRESPONSE = 0x8002;
-    MSG_PLAYBACK_METADATASTART = 0x8003;
+    MSG_PLAYBACK_STATUS = 0x8001;
+    MSG_PLAYBACK_METADATA = 0x8003;
 }
 
 message MediaPlaybackStatus
