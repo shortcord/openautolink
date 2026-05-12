@@ -755,7 +755,6 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         // and the user has to dismiss it manually.
         viewModelScope.launch {
             sessionManager.sessionState
-                .distinctUntilChanged()
                 .collect { state ->
                     if (state == SessionState.STREAMING && _showPhoneChooser.value) {
                         OalLog.i(TAG, "Session STREAMING — auto-closing phone chooser")
