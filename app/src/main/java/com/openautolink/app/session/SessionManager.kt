@@ -610,6 +610,7 @@ class SessionManager(
         // Listen for system sleep so we can gracefully tear down before the
         // socket goes stale. Wake is handled in MainActivity.onResume().
         registerScreenReceiver()
+        registerDebugReceiver()
     }
 
     private fun startSession(
@@ -978,6 +979,7 @@ class SessionManager(
 
     fun stop() {
         unregisterScreenReceiver()
+        unregisterDebugReceiver()
         observeJob?.cancel()
         observeJob = null
         decoderWatchJob?.cancel()
@@ -1285,6 +1287,45 @@ class SessionManager(
         DiagnosticLog.i("transport", "Going idle: $reason")
     }
 
+    /**
+     * Debug-only simulation of an AAOS car sleep → wake cycle.
+     *
+     * Drives the same code paths a real car sleep does:
+     *   1. markGoingIdle (publishes the idle timestamp used to compute the
+     *      next wake gap).
+     *   2. Stop the live aasdkSession with explicitStop=true so the
+     *      AasdkSession auto-reconnect loop does NOT fire during the
+     *      simulated sleep window. This leaves SessionState at IDLE just
+     *      like a real network loss would.
+     *   3. Wait [durationMs] real wall-clock seconds.
+     *   4. markWake → the WakeEvent flow fires with gap≈durationMs. The
+     *      ProjectionViewModel wake collector picks it up and (when
+     *      conditions match: Car Hotspot mode, default set, resolved phone
+     *      in discovery, idle) kicks connect(). This is exactly the same
+     *      auto-reconnect path real car-wake uses.
+     *
+     * Trigger from adb:
+     *   adb shell am broadcast \
+     *     -a com.openautolink.app.DEBUG_SIMULATE_SLEEP \
+     *     --el duration_ms 60000 \
+     *     com.openautolink.app
+     */
+    fun debugSimulateSleep(durationMs: Long) {
+        OalLog.i(TAG, "DEBUG: simulating car sleep for ${formatGap(durationMs)}")
+        markGoingIdle("debug_sleep_sim")
+        // Force a clean shutdown with explicitStop=true (AasdkSession.stop()
+        // sets that), so the AA session's own retry loop doesn't fire during
+        // the sleep window. The wake side will reconnect via the
+        // ProjectionViewModel wake collector.
+        aasdkSession?.stop()
+        aasdkSession = null
+        scope.launch {
+            kotlinx.coroutines.delay(durationMs)
+            OalLog.i(TAG, "DEBUG: simulating car wake (after ${formatGap(durationMs)})")
+            markWake("debug_wake_sim")
+        }
+    }
+
     private fun formatGap(ms: Long): String = when {
         ms < 1_000 -> "${ms}ms"
         ms < 60_000 -> "${ms / 1000}s"
@@ -1342,6 +1383,53 @@ class SessionManager(
             try { ctx.unregisterReceiver(it) } catch (_: Exception) {}
         }
         screenReceiver = null
+    }
+
+    // ------------------------------------------------------------------
+    // Debug-only: car sleep/wake simulation via broadcast.
+    //
+    // Trigger from a host running adb:
+    //   adb shell am broadcast \
+    //     -a com.openautolink.app.DEBUG_SIMULATE_SLEEP \
+    //     --el duration_ms 60000 \
+    //     com.openautolink.app
+    //
+    // Exposed for integration tests. Action is namespaced under our package
+    // and the receiver is package-internal (RECEIVER_NOT_EXPORTED on T+); on
+    // older platforms it's still package-scoped at the dispatch layer because
+    // we pass the package in the broadcast intent.
+    // ------------------------------------------------------------------
+    private var debugSleepReceiver: android.content.BroadcastReceiver? = null
+    private fun registerDebugReceiver() {
+        if (debugSleepReceiver != null) return
+        val ctx = context ?: return
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context?, intent: android.content.Intent?) {
+                if (intent?.action != "com.openautolink.app.DEBUG_SIMULATE_SLEEP") return
+                val ms = intent.getLongExtra("duration_ms", 60_000L).coerceAtLeast(1_000L)
+                debugSimulateSleep(ms)
+            }
+        }
+        val filter = android.content.IntentFilter("com.openautolink.app.DEBUG_SIMULATE_SLEEP")
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                ctx.registerReceiver(r, filter, android.content.Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                ctx.registerReceiver(r, filter)
+            }
+            debugSleepReceiver = r
+            OalLog.i(TAG, "Debug sleep-sim receiver registered (action=com.openautolink.app.DEBUG_SIMULATE_SLEEP)")
+        } catch (e: Exception) {
+            OalLog.w(TAG, "Debug sleep-sim receiver registration failed: ${e.message}")
+        }
+    }
+    private fun unregisterDebugReceiver() {
+        val ctx = context ?: return
+        debugSleepReceiver?.let {
+            try { ctx.unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        debugSleepReceiver = null
     }
 
     suspend fun requestKeyframe() {
