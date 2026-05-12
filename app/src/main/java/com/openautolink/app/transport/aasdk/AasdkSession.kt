@@ -322,6 +322,15 @@ class AasdkSession(
         transportPipe?.close()
         transportPipe = null
 
+        // Phone-initiated user exit (Exit button in AA app launcher) — treat
+        // as an explicit stop so the auto-reconnect path below is skipped.
+        // MainActivity will background the app in response to the
+        // PhoneDisconnected(reason) message; user re-launches our icon to come
+        // back, which starts a fresh session.
+        if (reason == "byebye_user_selection") {
+            explicitStop = true
+        }
+
         scope.launch {
             _connectionState.value = ConnectionState.DISCONNECTED
             _controlMessages.emit(ControlMessage.PhoneDisconnected(reason = reason))

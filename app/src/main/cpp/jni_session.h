@@ -263,6 +263,11 @@ private:
     std::atomic<bool> pingOutstanding_{false};
     std::atomic<bool> aborted_{false};
     std::atomic<bool> sessionStoppedFired_{false};
+    // Reason string passed to Kotlin onSessionStopped. Defaults to "stopped";
+    // ByeByeRequest from phone overrides this (e.g. "byebye_user_selection" when
+    // the user taps the Exit button in the AA app launcher) so Kotlin can decide
+    // whether to suppress auto-reconnect.
+    std::string stopReason_{"stopped"};
     std::atomic<int> negotiatedCodecType_{0};
     // Current video focus state for the main display.
     // 1 = VIDEO_FOCUS_PROJECTED (default — we always project on AAOS).

@@ -435,7 +435,7 @@ void JniSession::stop()
         JNIEnv* env = getEnv(attached);
         if (env) {
             if (!sessionStoppedFired_.exchange(true) && cbMethods_.onSessionStopped) {
-                jstring reason = env->NewStringUTF("stopped");
+                jstring reason = env->NewStringUTF(stopReason_.c_str());
                 env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
                 env->DeleteLocalRef(reason);
             }
@@ -600,15 +600,30 @@ void JniSession::onNavigationFocusRequest(
 }
 
 void JniSession::onByeByeRequest(
-    const aap_protobuf::service::control::message::ByeByeRequest& /*request*/)
+    const aap_protobuf::service::control::message::ByeByeRequest& request)
 {
-    LOGI("ByeBye request Ã¢â‚¬â€ disconnecting");
+    const char* reasonStr = "byebye_unknown";
+    switch (request.reason()) {
+        case aap_protobuf::service::control::message::USER_SELECTION:
+            reasonStr = "byebye_user_selection"; break;
+        case aap_protobuf::service::control::message::DEVICE_SWITCH:
+            reasonStr = "byebye_device_switch"; break;
+        case aap_protobuf::service::control::message::NOT_SUPPORTED:
+            reasonStr = "byebye_not_supported"; break;
+        case aap_protobuf::service::control::message::NOT_CURRENTLY_SUPPORTED:
+            reasonStr = "byebye_not_currently_supported"; break;
+        case aap_protobuf::service::control::message::PROBE_SUPPORTED:
+            reasonStr = "byebye_probe_supported"; break;
+        default: break;
+    }
+    LOGI("ByeBye request reason=%d (%s) - disconnecting",
+         static_cast<int>(request.reason()), reasonStr);
+    stopReason_ = reasonStr;
     aap_protobuf::service::control::message::ByeByeResponse response;
     auto promise = aasdk::channel::SendPromise::defer(*strand_);
     promise->then([this]() { stop(); }, [this](const auto&) { stop(); });
     controlChannel_->sendShutdownResponse(response, std::move(promise));
 }
-
 void JniSession::onByeByeResponse(
     const aap_protobuf::service::control::message::ByeByeResponse& /*response*/)
 {

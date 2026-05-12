@@ -358,6 +358,15 @@ class SessionManager(
     private val _wakeEvents = MutableSharedFlow<WakeEvent>(extraBufferCapacity = 4)
     val wakeEvents: SharedFlow<WakeEvent> = _wakeEvents.asSharedFlow()
 
+    /**
+     * Emitted when the user taps the Exit button in the AA app launcher on
+     * the phone (ByeByeReason.USER_SELECTION). MainActivity observes this and
+     * backgrounds the entire app — user re-enters by tapping our icon in the
+     * AAOS launcher, which starts a fresh session.
+     */
+    private val _userExitEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val userExitEvents: SharedFlow<Unit> = _userExitEvents.asSharedFlow()
+
     /** Dedupe window for wake signals from multiple sources firing in quick succession. */
     private val WAKE_DEDUPE_MS = 2_000L
     /** Wake gap beyond which the current TCP socket is presumed dead and we force a reconnect. */
@@ -1612,6 +1621,10 @@ class SessionManager(
                 stopDirectLocationForwarding()
                 _navigationDisplay.clear()
                 ClusterNavigationState.clear()
+                if (message.reason == "byebye_user_selection") {
+                    OalLog.i(TAG, "User tapped Exit in AA launcher — signalling app to background")
+                    _userExitEvents.tryEmit(Unit)
+                }
             }
             is ControlMessage.NavState -> {
                 _navigationDisplay.onNavState(message)

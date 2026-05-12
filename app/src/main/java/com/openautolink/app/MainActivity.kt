@@ -87,6 +87,32 @@ class MainActivity : ComponentActivity() {
                 AppNavHost()
             }
         }
+
+        // User tapped "Exit" in the AA app launcher on the phone. Background
+        // our app fully — both the MainActivity task and the hidden
+        // CarAppActivity task (templates host for cluster). User re-enters by
+        // tapping our icon in the AAOS launcher, which starts a fresh session.
+        lifecycleScope.launch {
+            com.openautolink.app.session.SessionManager.instanceOrNull()
+                ?.userExitEvents?.collect { handleUserExit() }
+        }
+    }
+
+    private fun handleUserExit() {
+        Log.i("MainActivity", "User exit from AA launcher — finishing all app tasks")
+        val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        // Finish every task this app owns (MainActivity + CarAppActivity live
+        // in separate tasks because CarAppActivity has its own taskAffinity).
+        // finishAndRemoveTask drops them from recents, so the AAOS launcher
+        // reappears with no traces of our app.
+        try {
+            am.appTasks.forEach { task ->
+                try { task.finishAndRemoveTask() } catch (_: Exception) { }
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "appTasks enumeration failed: ${e.message}")
+        }
+        if (!isFinishing) finishAndRemoveTask()
     }
 
     override fun onResume() {
