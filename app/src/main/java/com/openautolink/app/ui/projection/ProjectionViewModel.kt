@@ -290,6 +290,16 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      */
     private val MDNS_GRACE_MS = 3_000L
     /**
+     * "Head-start" grace given to the default phone when it isn't the
+     * first one to surface in discovery. If a non-default known phone
+     * shows up first, we wait this long for the default to also appear
+     * before committing. Keeps the default winning in races where both
+     * phones advertise within a small window of each other (common when
+     * both companions are pre-warmed) without sacrificing fallback speed
+     * when the default genuinely isn't going to arrive.
+     */
+    private val DEFAULT_HEAD_START_MS = 500L
+    /**
      * Background sweep cadence while idle in Car Hotspot mode with a
      * default phone set. Covers two scenarios where mDNS alone wouldn't
      * surface the phone: (1) mid-drive session drops where mDNS is
@@ -1284,9 +1294,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         // Phase 1: mDNS-only grace. Cheapest, fastest, no socket pressure.
         OalLog.i(TAG, "Resolving phone — mDNS grace ${MDNS_GRACE_MS}ms")
         val mdnsHit = kotlinx.coroutines.withTimeoutOrNull(MDNS_GRACE_MS) {
-            phoneDiscovery.phones
-                .map { list -> pickBestPhone(list, defaultId) }
-                .first { it != null }
+            collectWithDefaultHeadStart(defaultId)
         }
         if (mdnsHit != null) {
             OalLog.i(TAG, "Resolved via mDNS within ${MDNS_GRACE_MS}ms")
@@ -1311,9 +1319,70 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         kickSweep()
         val remaining = (timeoutMs - MDNS_GRACE_MS - 600L).coerceAtLeast(2_000L)
         return kotlinx.coroutines.withTimeoutOrNull(remaining) {
-            phoneDiscovery.phones
-                .map { list -> pickBestPhone(list, defaultId) }
+            collectWithDefaultHeadStart(defaultId)
+        }
+    }
+
+    /**
+     * Collect from discovery emitting the best-pick at each step, but if the
+     * first non-null pick isn't the default phone, give the default a brief
+     * head-start window ([DEFAULT_HEAD_START_MS]) to also appear before
+     * committing. If the default shows up during the window, return it
+     * instead. If it doesn't, return whatever non-default we have.
+     *
+     * No head-start when no default is configured — falls through to first
+     * resolved phone immediately.
+     *
+     * Caller is expected to wrap this in a `withTimeoutOrNull(...)` so the
+     * outer phase budget bounds total wait.
+     */
+    private suspend fun collectWithDefaultHeadStart(
+        defaultId: String?,
+    ): com.openautolink.app.transport.PhoneDiscovery.DiscoveredPhone? {
+        if (defaultId.isNullOrBlank()) {
+            // No default — first resolved phone wins, no head-start logic.
+            return phoneDiscovery.phones
+                .map { list -> pickBestPhone(list, null) }
                 .first { it != null }
+        }
+        return kotlinx.coroutines.coroutineScope {
+            // Concurrent collectors: one watches specifically for the default,
+            // the other for any pick. We need both running in parallel because
+            // a sequential .first{} chain would block on whichever we asked
+            // for first.
+            val defaultJob = async {
+                phoneDiscovery.phones
+                    .map { list -> list.firstOrNull { it.isResolved && it.phoneId == defaultId } }
+                    .first { it != null }!!
+            }
+            val anyJob = async {
+                phoneDiscovery.phones
+                    .map { list -> pickBestPhone(list, defaultId) }
+                    .first { it != null }!!
+            }
+
+            val firstPick = anyJob.await()
+            if (firstPick.phoneId == defaultId) {
+                defaultJob.cancel()
+                return@coroutineScope firstPick
+            }
+            // Non-default came up first. Race the default-finder against a
+            // short head-start window. Whichever wins decides.
+            OalLog.i(
+                TAG,
+                "Non-default '${firstPick.friendlyName}' arrived first — " +
+                    "waiting ${DEFAULT_HEAD_START_MS}ms for default head-start",
+            )
+            val maybeDefault = kotlinx.coroutines.withTimeoutOrNull(DEFAULT_HEAD_START_MS) {
+                defaultJob.await()
+            }
+            if (maybeDefault != null) {
+                OalLog.i(TAG, "Default arrived during head-start — using ${maybeDefault.friendlyName}")
+                return@coroutineScope maybeDefault
+            }
+            OalLog.i(TAG, "Default head-start elapsed — using ${firstPick.friendlyName}")
+            defaultJob.cancel()
+            firstPick
         }
     }
 
