@@ -317,6 +317,12 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      * given the existing exponential backoff in AasdkSession.
      */
     private val PICKER_ESCALATION_THRESHOLD = 3
+    /**
+     * Minimum wake gap that should force an auto-reconnect re-arm. Short
+     * pause/resume blips (sub-second) shouldn't trigger; anything that looks
+     * like the head unit actually suspended should.
+     */
+    private val WAKE_AUTO_RECONNECT_MIN_GAP_MS = 3_000L
     private val connectLock = Any()
 
     fun connect() {
@@ -718,7 +724,45 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     )
                     _activePhoneId.value = null
                 }
+                // Force-kick auto-reconnect on wake. `phoneDiscovery.phones`
+                // edge-triggered collector only fires when isResolved flips
+                // false→true; after a short sleep the phone often stays
+                // resolved across the gap, so the edge never happens and we
+                // sit idle. The wake event is a level signal — use it to
+                // resync. Gate on the same conditions as the edge collector.
+                if (event.gapMs >= WAKE_AUTO_RECONNECT_MIN_GAP_MS &&
+                    connectionMode.value == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT &&
+                    !alwaysAskPhone.value &&
+                    defaultPhoneId.value.isNotBlank() &&
+                    !connectInFlight &&
+                    sessionManager.sessionState.value == SessionState.IDLE &&
+                    phoneDiscovery.phones.value.any { it.isResolved }) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastAutoReconnectAttemptMs >= AUTO_RECONNECT_MIN_GAP_MS) {
+                        lastAutoReconnectAttemptMs = now
+                        OalLog.i(
+                            TAG,
+                            "Wake event (gap=${event.gapMs}ms) — kicking auto-reconnect",
+                        )
+                        hasConnected = false
+                        connect()
+                    }
+                }
             }
+        }
+        // Auto-close the phone chooser once we successfully reach STREAMING.
+        // Without this the picker stays up after a successful tap-reconnect
+        // and the user has to dismiss it manually.
+        viewModelScope.launch {
+            sessionManager.sessionState
+                .distinctUntilChanged()
+                .collect { state ->
+                    if (state == SessionState.STREAMING && _showPhoneChooser.value) {
+                        OalLog.i(TAG, "Session STREAMING — auto-closing phone chooser")
+                        _showPhoneChooser.value = false
+                        _carHotspotChooserMessage.value = null
+                    }
+                }
         }
         // Escalate to the picker after [PICKER_ESCALATION_THRESHOLD]
         // consecutive auto-reconnect failures. The reconnect itself is fine
