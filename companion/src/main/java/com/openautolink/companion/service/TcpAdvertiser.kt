@@ -272,10 +272,12 @@ class TcpAdvertiser(
                         }
 
                         override fun onDisconnected() {
-                            CompanionLog.i(TAG, "AA TCP proxy disconnected")
+                            val remoteIp = carSocket.inetAddress?.hostAddress ?: "unknown"
+                            CompanionLog.i(TAG, "AA local proxy disconnected; car socket remote=$remoteIp")
                             stateListener.onProxyDisconnected()
                             // Re-accept next connection
                             isLaunching = false
+                            CompanionLog.i(TAG, "TCP listener ready for next car connection on 0.0.0.0:$PORT")
                         }
                     },
                 )
@@ -288,6 +290,7 @@ class TcpAdvertiser(
                 CompanionLog.e(TAG, "Failed to launch AA: ${e.message}")
                 isLaunching = false
                 stateListener.onProxyDisconnected()
+                CompanionLog.i(TAG, "TCP listener ready after AA launch failure on 0.0.0.0:$PORT")
             }
         }
     }
