@@ -100,6 +100,28 @@ class MainActivity : ComponentActivity() {
 
     private fun handleUserExit() {
         Log.i("MainActivity", "User exit from AA launcher — finishing all app tasks")
+
+        // First: tell Templates Host the cluster trip is over. This calls
+        // NavigationManager.navigationEnded() on the active cluster Session,
+        // causing Templates Host (a separate process) to dismiss its
+        // ClusterTurnCardActivity. Without this, the cluster display keeps
+        // its last frame visible after our process is gone.
+        try {
+            com.openautolink.app.cluster.ClusterMainSession.endActiveNavigation()
+        } catch (e: Exception) {
+            Log.w("MainActivity", "endActiveNavigation() failed: ${e.message}")
+        }
+
+        // Tear down the SessionManager. This calls ClusterManager.release()
+        // which disables the OalClusterService component — Templates Host
+        // then unbinds, our Session.onDestroy runs, and the cluster Activity
+        // is fully released.
+        try {
+            com.openautolink.app.session.SessionManager.instanceOrNull()?.stop()
+        } catch (e: Exception) {
+            Log.w("MainActivity", "SessionManager.stop() failed: ${e.message}")
+        }
+
         val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
         // Finish every task this app owns (MainActivity + CarAppActivity live
         // in separate tasks because CarAppActivity has its own taskAffinity).

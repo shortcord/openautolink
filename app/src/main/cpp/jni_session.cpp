@@ -621,7 +621,12 @@ void JniSession::onByeByeRequest(
     stopReason_ = reasonStr;
     aap_protobuf::service::control::message::ByeByeResponse response;
     auto promise = aasdk::channel::SendPromise::defer(*strand_);
-    promise->then([this]() { stop(); }, [this](const auto&) { stop(); });
+    // See onVideoFocusRequest: stop() joins ioThread_, so detach it to avoid
+    // joining the thread we're running on.
+    auto self = shared_from_this();
+    promise->then(
+        [self]() { std::thread([self] { self->stop(); }).detach(); },
+        [self](const auto&) { std::thread([self] { self->stop(); }).detach(); });
     controlChannel_->sendShutdownResponse(response, std::move(promise));
 }
 void JniSession::onByeByeResponse(
@@ -1016,8 +1021,21 @@ void JniSession::onVideoFocusRequest(
         focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
         focus.set_unsolicited(false);
         auto promise = aasdk::channel::SendPromise::defer(*strand_);
-        promise->then([this]() { stopReason_ = "byebye_user_selection"; stop(); },
-                      [this](const auto&) { stopReason_ = "byebye_user_selection"; stop(); });
+        // stop() joins ioThread_; if we called it directly from this promise
+        // callback we'd be joining the thread we're running on (UB / silent
+        // abort — observed: the Kotlin onSessionStopped JNI call never fires,
+        // so cluster teardown is skipped). Detach onto a worker so stop() can
+        // safely join the io_thread.
+        auto self = shared_from_this();
+        promise->then(
+            [self]() {
+                self->stopReason_ = "byebye_user_selection";
+                std::thread([self] { self->stop(); }).detach();
+            },
+            [self](const auto&) {
+                self->stopReason_ = "byebye_user_selection";
+                std::thread([self] { self->stop(); }).detach();
+            });
         videoChannel_->sendVideoFocusIndication(focus, std::move(promise));
         return;
     }

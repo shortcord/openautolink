@@ -1657,7 +1657,44 @@ class SessionManager(
                 _navigationDisplay.clear()
                 ClusterNavigationState.clear()
                 if (message.reason == "byebye_user_selection") {
-                    OalLog.i(TAG, "User tapped Exit in AA launcher — signalling app to background")
+                    OalLog.i(TAG, "User tapped Exit in AA launcher — tearing down cluster + session")
+                    // Drive cluster + session teardown HERE rather than from
+                    // MainActivity. AAOS force-finishes our Activity within
+                    // ~1s of acknowledging VIDEO_FOCUS_NATIVE, which cancels
+                    // its lifecycleScope before any collector can run. Doing
+                    // the cleanup in SessionManager's own scope guarantees
+                    // navigationEnded() reaches Templates Host before our
+                    // process is wound down — otherwise Templates Host keeps
+                    // its cluster Activity bound and respawns our process to
+                    // serve it.
+                    try {
+                        com.openautolink.app.cluster.ClusterMainSession.endActiveNavigation()
+                    } catch (e: Exception) {
+                        OalLog.w(TAG, "endActiveNavigation() failed: ${e.message}")
+                    }
+                    try {
+                        _clusterManager?.release()
+                        _clusterManager = null
+                    } catch (e: Exception) {
+                        OalLog.w(TAG, "clusterManager.release() failed: ${e.message}")
+                    }
+                    // Finish every task this app owns. Doing this from
+                    // SessionManager (app-scoped) rather than MainActivity
+                    // (whose lifecycleScope is gone the moment the OS
+                    // force-finishes us) makes sure cleanup actually runs.
+                    try {
+                        val ctx = context
+                        if (ctx != null) {
+                            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE)
+                                as? android.app.ActivityManager
+                            am?.appTasks?.forEach { task ->
+                                try { task.finishAndRemoveTask() } catch (_: Exception) {}
+                            }
+                            OalLog.i(TAG, "User exit: finished all app tasks")
+                        }
+                    } catch (e: Exception) {
+                        OalLog.w(TAG, "appTasks teardown failed: ${e.message}")
+                    }
                     _userExitEvents.tryEmit(Unit)
                 }
             }
