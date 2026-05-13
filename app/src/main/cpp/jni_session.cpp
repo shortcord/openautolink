@@ -996,24 +996,36 @@ void JniSession::onMediaIndication(const aasdk::common::DataConstBuffer& buffer)
 void JniSession::onVideoFocusRequest(
     const aap_protobuf::service::media::video::message::VideoFocusRequestNotification& request)
 {
-    // The phone sends VideoFocusRequest when its projection state machine needs
-    // to re-arbitrate focus — e.g., day/night theme transitions (tunnel entry),
-    // phone-screen-off, or returning from a phone-native UI. The phone STALLS
-    // projection until we reply with a VideoFocusIndication, which on the car
-    // manifests as a black screen during a night-mode flip.
-    //
-    // Mirror GM's GALDisplayManager.onVideoFocusRequest pattern: reply with our
-    // *current* focus state, not the requested mode. On AAOS we are always
-    // projecting, so currentVideoFocus_ is PROJECTED unless a future feature
-    // (cluster surrender, back-to-Home-while-AA-alive) explicitly changes it.
-    // unsolicited=false: this IS a reply to a request.
     int mode = request.has_mode() ? static_cast<int>(request.mode()) : -1;
     int reason = request.has_reason() ? static_cast<int>(request.reason()) : -1;
-    int reply = currentVideoFocus_.load();
-    LOGI("Video focus request from phone: mode=%d reason=%d -> replying with current=%d "
+    LOGI("Video focus request from phone: mode=%d reason=%d "
          "(focus 1=PROJECTED 2=NATIVE 3=NATIVE_TRANSIENT; "
-         "reason 1=PHONE_SCREEN_OFF 2=LAUNCH_NATIVE)", mode, reason, reply);
+         "reason 1=PHONE_SCREEN_OFF 2=LAUNCH_NATIVE)", mode, reason);
 
+    // VIDEO_FOCUS_NATIVE = user tapped "Exit" in the AA app launcher on the
+    // phone (the phone never sends ByeBye for this; it just asks us to show
+    // our native UI). Mirror headunit-revived's AapControl.kt behavior: ack
+    // with NATIVE focus, mark this as a user exit, and tear down the session.
+    // The Kotlin onSessionStopped("byebye_user_selection") handler then drives
+    // MainActivity to finishAndRemoveTask() (returns AAOS to its launcher).
+    if (mode == static_cast<int>(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE)) {
+        LOGI("VIDEO_FOCUS_NATIVE received - treating as user Exit, stopping session");
+        currentVideoFocus_.store(
+            aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
+        aap_protobuf::service::media::video::message::VideoFocusNotification focus;
+        focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
+        focus.set_unsolicited(false);
+        auto promise = aasdk::channel::SendPromise::defer(*strand_);
+        promise->then([this]() { stopReason_ = "byebye_user_selection"; stop(); },
+                      [this](const auto&) { stopReason_ = "byebye_user_selection"; stop(); });
+        videoChannel_->sendVideoFocusIndication(focus, std::move(promise));
+        return;
+    }
+
+    // PROJECTED / NATIVE_TRANSIENT (e.g. day/night theme transitions, phone
+    // screen off) — keep projecting. Reply with our current focus state.
+    int reply = currentVideoFocus_.load();
+    LOGI("Replying with current focus=%d", reply);
     aap_protobuf::service::media::video::message::VideoFocusNotification focus;
     focus.set_focus(
         static_cast<aap_protobuf::service::media::video::message::VideoFocusMode>(reply));
