@@ -88,6 +88,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Seed SessionManager with the current AAOS day/night state even when
+        // no configuration change event has fired yet.
+        publishCurrentUiNightMode("onCreate")
+
         // User tapped "Exit" in the AA app launcher on the phone. Background
         // our app fully — both the MainActivity task and the hidden
         // CarAppActivity task (templates host for cluster). User re-enters by
@@ -140,6 +144,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         com.openautolink.app.diagnostics.DiagnosticLog.i("lifecycle", "MainActivity.onResume")
+        publishCurrentUiNightMode("onResume")
         // On AAOS, resume after car sleep leaves TCP sockets dead.
         // SessionManager dedupes against the SCREEN_ON broadcast receiver
         // (which empirically does not fire on this car) and emits a wake
@@ -200,7 +205,24 @@ class MainActivity : ComponentActivity() {
             nightMask == android.content.res.Configuration.UI_MODE_NIGHT_NO) {
             val isNight = nightMask == android.content.res.Configuration.UI_MODE_NIGHT_YES
             com.openautolink.app.session.SessionManager.instanceOrNull()?.onUiNightModeChanged(isNight)
+            com.openautolink.app.session.SessionManager.noteUiNightMode(isNight)
         }
+    }
+
+    private fun publishCurrentUiNightMode(reason: String) {
+        val nightMask = resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        if (nightMask != android.content.res.Configuration.UI_MODE_NIGHT_YES &&
+            nightMask != android.content.res.Configuration.UI_MODE_NIGHT_NO
+        ) {
+            return
+        }
+        val isNight = nightMask == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        com.openautolink.app.session.SessionManager.noteUiNightMode(isNight)
+        com.openautolink.app.session.SessionManager.instanceOrNull()?.onUiNightModeChanged(isNight)
+        com.openautolink.app.diagnostics.DiagnosticLog.i(
+            "lifecycle",
+            "publishCurrentUiNightMode[$reason]: night=$isNight"
+        )
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

@@ -67,6 +67,11 @@ class SessionManager(
     companion object {
         private const val TAG = "SessionManager"
 
+        // Activity-sourced UI-mode snapshot that can be published before
+        // SessionManager exists (ViewModel lazy creation path).
+        @Volatile
+        private var bootUiNightModeSnapshot: Boolean? = null
+
         @Volatile
         private var instance: SessionManager? = null
 
@@ -77,6 +82,11 @@ class SessionManager(
         }
 
         fun instanceOrNull(): SessionManager? = instance
+
+        fun noteUiNightMode(night: Boolean) {
+            bootUiNightModeSnapshot = night
+            instance?.lastKnownUiNightMode = night
+        }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
@@ -329,7 +339,7 @@ class SessionManager(
     // re-render UI (e.g. NIGHT_MODE → AA theme change) too frequently. We
     // only forward to native when the value differs from the last sent.
     // Reset to null on every new phone session so the very first tick always fires.
-    @Volatile private var lastKnownUiNightMode: Boolean? = currentUiNightMode()
+    @Volatile private var lastKnownUiNightMode: Boolean? = bootUiNightModeSnapshot
     @Volatile private var lastSentNightMode: Boolean? = null
     @Volatile private var lastSentParkingBrake: Boolean? = null
     @Volatile private var lastSentDriving: Boolean? = null
@@ -401,7 +411,9 @@ class SessionManager(
     }
 
     private fun seedCurrentUiNightMode(reason: String) {
-        val night = currentUiNightMode() ?: lastKnownUiNightMode
+        // Prefer Activity-reported state. Application-context config can be
+        // stale on AAOS and default to day mode until a config callback fires.
+        val night = lastKnownUiNightMode ?: currentUiNightMode()
         if (night == null) {
             OalLog.d(TAG, "UI night mode unknown — skipping seed ($reason)")
             return
