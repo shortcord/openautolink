@@ -220,6 +220,23 @@ class AudioPlayerImpl(private val audioManager: AudioManager) : AudioPlayer {
         updateStats()
     }
 
+    override fun stopAll() {
+        var changed = false
+        val now = System.currentTimeMillis()
+        for ((purpose, slot) in slots) {
+            if (!slot.isActive) continue
+            slot.stop()
+            explicitStopTimes[purpose] = now
+            coordinator.onPurposeStopped(purpose)
+            changed = true
+        }
+        if (changed) {
+            Log.i(TAG, "Stopped all active audio purposes")
+            DiagnosticLog.i("audio", "Stopped all active audio purposes")
+            updateStats()
+        }
+    }
+
     override fun setVolume(purpose: AudioPurpose, volume: Float) {
         slots[purpose]?.setVolume(volume)
     }

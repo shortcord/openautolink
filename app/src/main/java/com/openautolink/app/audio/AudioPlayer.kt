@@ -29,6 +29,9 @@ interface AudioPlayer {
     /** Deactivate a purpose slot (pause AudioTrack, don't release). */
     fun stopPurpose(purpose: AudioPurpose)
 
+    /** Deactivate every active purpose and flush pending playback. */
+    fun stopAll()
+
     /** Set volume for a specific purpose (0.0 to 1.0). */
     fun setVolume(purpose: AudioPurpose, volume: Float)
 }

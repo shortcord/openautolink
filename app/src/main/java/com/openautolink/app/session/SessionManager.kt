@@ -1046,16 +1046,11 @@ class SessionManager(
         _vehicleDataForwarder?.stop()
         _imuForwarder?.stop()
 
-        // 6. Clear stale navigation state
-        _navigationDisplay.clear()
-        ClusterNavigationState.clear()
+        // 6. Clear stale projection state
+        clearTransientSessionState(mediaStatus = "Reconnecting", suspendVideo = false)
 
         // 7. Update status — don't go to IDLE, just show reconnecting
         _statusMessage.value = "Reconnecting..."
-        _phoneBatteryLevel.value = null
-        _phoneBatteryCritical.value = false
-        _voiceSessionActive.value = false
-        _phoneSignalStrength.value = null
 
         // 8. Start new AA session with new SDR config
         lastNegotiationKey = buildVideoNegotiationKey(
@@ -1151,6 +1146,7 @@ class SessionManager(
         // than wait for the keepalive/ping watchdog to notice.
         if (elapsed > 30_000) {
             OalLog.w(TAG, "Long wake gap — forcing clean reconnect")
+            clearTransientSessionState(mediaStatus = "Reconnecting", suspendVideo = true)
             scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 aasdkSession?.forceReconnect("system wake after ${elapsed / 1000}s gap")
             }
@@ -1185,6 +1181,7 @@ class SessionManager(
                             DiagnosticLog.i("transport", "SCREEN_OFF: pause for sleep")
                             pausedForSleep = true
                             _statusMessage.value = "Paused for sleep"
+                            clearTransientSessionState(mediaStatus = "Paused for sleep", suspendVideo = true)
                             // Run aasdkSession.stop() off Main — it joins the C++
                             // io_thread via JNI and can take 100s of ms. Doing this
                             // on Main causes ANRs which are reported as crashes.
@@ -1416,6 +1413,8 @@ class SessionManager(
         when (message) {
             is ControlMessage.PhoneConnected -> {
                 _remoteDiagnostics?.log(DiagnosticLevel.INFO, "session", "Phone connected: ${message.phoneName}")
+                _videoDecoder?.restartStream()
+                _mediaSessionManager?.resetNowPlaying("Connected")
                 _sessionState.value = SessionState.STREAMING
                 _statusMessage.value = "Streaming"
                 aasdkSession?.let { startLocationForwarding(it) }
@@ -1433,8 +1432,7 @@ class SessionManager(
                 _vehicleDataForwarder?.stop()
                 _imuForwarder?.stop()
                 stopDirectLocationForwarding()
-                _navigationDisplay.clear()
-                ClusterNavigationState.clear()
+                clearTransientSessionState(mediaStatus = "Not connected", suspendVideo = true)
             }
             is ControlMessage.NavState -> {
                 _navigationDisplay.onNavState(message)
@@ -1503,6 +1501,21 @@ class SessionManager(
             }
             else -> {}
         }
+    }
+
+    private fun clearTransientSessionState(mediaStatus: String, suspendVideo: Boolean) {
+        _micCaptureManager?.stop()
+        _audioPlayer?.stopAll()
+        if (suspendVideo) {
+            _videoDecoder?.suspendStream()
+        }
+        _navigationDisplay.clear()
+        ClusterNavigationState.clear()
+        _mediaSessionManager?.resetNowPlaying(mediaStatus)
+        _phoneBatteryLevel.value = null
+        _phoneBatteryCritical.value = false
+        _voiceSessionActive.value = false
+        _phoneSignalStrength.value = null
     }
 
     private fun sendMediaKey(keyCode: Int) {

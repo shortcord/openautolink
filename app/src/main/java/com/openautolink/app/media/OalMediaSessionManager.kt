@@ -147,6 +147,32 @@ class OalMediaSessionManager(private val context: Context) {
     fun getSessionToken(): MediaSessionCompat.Token? = mediaSession?.sessionToken
 
     /**
+     * Clear stale now-playing state from AAOS widgets before a new phone/session
+     * starts sending media status again.
+     */
+    fun resetNowPlaying(status: String = "Not connected") {
+        synchronized(sessionLock) {
+            val session = mediaSession ?: return
+            cachedArtHash = 0
+            cachedBitmap = null
+            lastPushedPlaying = null
+            lastPushedPositionMs = null
+
+            session.setPlaybackState(buildPlaybackState(PlaybackStateCompat.STATE_STOPPED, 0L))
+            session.setMetadata(
+                MediaMetadataCompat.Builder()
+                    .putString(MediaMetadataCompat.METADATA_KEY_TITLE, "OpenAutoLink")
+                    .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, status)
+                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, "OpenAutoLink")
+                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, status)
+                    .build()
+            )
+            session.setPlaybackState(buildPlaybackState(PlaybackStateCompat.STATE_NONE, 0L))
+            Log.i(TAG, "MediaSession now-playing reset: $status")
+        }
+    }
+
+    /**
      * Update now-playing metadata from bridge media_metadata control message.
      */
     fun updateMetadata(
@@ -216,10 +242,10 @@ class OalMediaSessionManager(private val context: Context) {
             // Some AAOS dashboard widgets do not repaint metadata changes until the
             // playback state also changes. Re-push the latest known playback snapshot.
             // This ensures the widget refreshes even when the actual playback state is stale.
-            val state = if (lastPushedPlaying == false) {
-                PlaybackStateCompat.STATE_PAUSED
-            } else {
-                PlaybackStateCompat.STATE_PLAYING
+            val state = when (lastPushedPlaying) {
+                true -> PlaybackStateCompat.STATE_PLAYING
+                false -> PlaybackStateCompat.STATE_PAUSED
+                null -> PlaybackStateCompat.STATE_NONE
             }
             session.setPlaybackState(buildPlaybackState(state, lastPushedPositionMs ?: 0L))
         }
