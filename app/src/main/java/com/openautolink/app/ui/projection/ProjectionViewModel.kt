@@ -338,7 +338,10 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      * specific phone in the Car Hotspot chooser). The override is captured
      * by-value here so a concurrent caller can't race on a shared field.
      */
-    fun connect(overrideIp: String?) {
+    private fun connect(
+        overrideIp: String?,
+        connectIntent: CarHotspotConnectIntent = CarHotspotConnectIntent.MANUAL,
+    ) {
         // Open the chooser instead of auto-connecting when:
         //   - "Always ask" is on (Behavior 2), OR
         //   - No default phone is set yet (first-run or after Forget — the
@@ -428,26 +431,28 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             //   1. Explicit [overrideIp] from the Car Hotspot chooser wins.
             //   2. In Car Hotspot mode, look up the default (or first
             //      currently-discovered) phone via [phoneDiscovery] and use
-            //      its IP. If discovery hasn't surfaced anything yet, wait
-            //      briefly before giving up.
+            //      its IP. Manual connects keep the chooser-oriented 45s
+            //      budget; automatic reconnects use a short discovery pass.
             //   3. Fall back to the persistent manual-IP setting.
             val mode = preferences.connectionMode.first()
+            val isCarHotspotConnect = directTransport == "hotspot" &&
+                mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
+            val resolveBudget = CarHotspotResolvePolicy.budget(connectIntent)
             val carHotspotPhone = if (directTransport == "hotspot" && overrideIp == null && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
-                // Long budget: with directed probing (no /24 sweep) this is
-                // cheap — just one TCP probe per known IP every
-                // [WARM_CACHE_RETRY_GAP_MS]. The user's guidance is to set a
-                // static IP on the phone for the car's WiFi; once that's done
-                // we want to keep retrying the known IP rather than nag the
-                // user with a chooser. If the AP genuinely re-leased a new
-                // IP, the user can press Scan in the chooser.
-                resolveCarHotspotPhone(timeoutMs = 45_000)
+                resolveCarHotspotPhone(timeoutMs = resolveBudget.timeoutMs)
             } else null
             val carHotspotIp: String? = carHotspotPhone?.host
-            val manualIp = overrideIp ?: carHotspotIp ?: manualIpFromPrefs
-            if (directTransport == "hotspot" && mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
+            val manualFallback = if (isCarHotspotConnect && !resolveBudget.allowManualIpFallback) {
+                null
+            } else {
+                manualIpFromPrefs
+            }
+            val manualIp = overrideIp ?: carHotspotIp ?: manualFallback
+            if (isCarHotspotConnect) {
                 OalLog.i(
                     TAG,
-                    "Car Hotspot connect: overrideIp=$overrideIp resolved=$carHotspotIp final=$manualIp",
+                    "Car Hotspot connect: intent=${resolveBudget.logLabel} overrideIp=$overrideIp " +
+                        "resolved=$carHotspotIp source=${carHotspotPhone?.source} final=$manualIp",
                 )
                 // Track which phone we're dialing so the chooser can show
                 // the ACTIVE badge correctly. Explicit picks set this in
@@ -458,10 +463,11 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                         _activePhoneId.value = pickedId
                     }
                 }
-                // Resolve failed and we have nothing to fall back to → guide
-                // the user. Re-open the chooser with a clear message; the
-                // user can re-tap a phone or press Scan.
-                if (carHotspotPhone == null && manualIp == null) {
+                // Manual resolve failed and we have nothing to fall back to →
+                // guide the user. Automatic reconnects fall through with no
+                // manual IP so TcpConnector can keep its own mDNS/gateway
+                // discovery alive instead of retrying a stale address forever.
+                if (resolveBudget.showChooserOnFailure && carHotspotPhone == null && manualIp == null) {
                     val defaultName = try {
                         knownPhonesStore.phones.first()
                             .firstOrNull { it.phoneId == defaultPhoneId.value }
@@ -472,7 +478,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                         "Couldn't reach $who. Verify it's connected to this car's WiFi and the companion app is started. " +
                             "If the connection looks good, tap your phone again. If its IP changed, press Scan."
                     _showPhoneChooser.value = true
-                    OalLog.w(TAG, "Car Hotspot resolve gave up after 45s — re-opening chooser with guidance")
+                    OalLog.w(TAG, "Car Hotspot resolve gave up after ${resolveBudget.timeoutMs}ms — re-opening chooser with guidance")
                     return@launch
                 }
             }
@@ -830,7 +836,10 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     lastAutoReconnectAttemptMs = now
                     OalLog.i(TAG, "Car Hotspot auto-reconnect: phone discovered while idle")
                     hasConnected = false
-                    connect()
+                    connect(
+                        overrideIp = null,
+                        connectIntent = CarHotspotConnectIntent.AUTOMATIC_RECONNECT,
+                    )
                 }
         }
     }

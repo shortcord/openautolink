@@ -191,11 +191,13 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
 
     override fun onProxyDisconnected() {
         _isConnected.value = false
-        _statusText.value = "Disconnected"
-        CompanionLog.i(TAG, "AA proxy disconnected")
-        updateNotification("Disconnected — tap Start to retry")
-        // Auto-reconnect disabled during development to avoid interfering
-        // with the phone's AA session lifecycle.
+        val stillDesired = isDesiredRunning()
+        _statusText.value = if (stillDesired) "Waiting for car..." else "Disconnected"
+        CompanionLog.i(TAG, "AA local proxy disconnected; TCP listener remains available=${stillDesired && _isRunning.value}")
+        updateNotification(
+            if (stillDesired) "TCP: waiting for car on port ${TcpAdvertiser.PORT}..."
+            else "Disconnected",
+        )
     }
 
     override fun onLaunchTimeout() {

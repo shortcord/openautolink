@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.InputStream
 import java.io.OutputStream
@@ -105,12 +107,14 @@ class AasdkSession(
     private var lastFailureWasProtocolError = false
 
     private var transportPipe: AasdkTransportPipe? = null
+    private var reconnectJob: Job? = null
     private val sessionStartLock = Any()
     @Volatile private var sessionStartInFlight = false
 
     // -- Lifecycle --
 
     fun start() {
+        cancelReconnectJob()
         explicitStop = false
         consecutiveReconnectFailures = 0
         lastFailureWasProtocolError = false
@@ -200,6 +204,7 @@ class AasdkSession(
 
     fun stop() {
         explicitStop = true
+        cancelReconnectJob()
         OalLog.i(TAG, "Stopping aasdk session")
         _nearbyManager?.stop()
         _nearbyManager = null
@@ -222,6 +227,7 @@ class AasdkSession(
      */
     fun forceReconnect(reason: String) {
         OalLog.w(TAG, "Force reconnect: $reason")
+        cancelReconnectJob()
         // Treat the upcoming nativeStopSession() as an explicit stop so the
         // onSessionStopped handler doesn't schedule its own auto-reconnect 3s
         // later — we're doing the restart ourselves immediately. Without this
@@ -315,6 +321,7 @@ class AasdkSession(
 
     override fun onSessionStarted() {
         OalLog.i(TAG, "AA session started (native)")
+        cancelReconnectJob()
         consecutiveReconnectFailures = 0
         lastFailureWasProtocolError = false
         sessionStartInFlight = false
@@ -340,30 +347,8 @@ class AasdkSession(
             _connectionState.value = ConnectionState.DISCONNECTED
             _controlMessages.emit(ControlMessage.PhoneDisconnected(reason = reason))
 
-            // Auto-reconnect if this wasn't an explicit stop (e.g., car sleep/wake,
-            // phone disconnect). Restart the transport connector after a delay so it
-            // retries connecting once WiFi comes back.
             if (!explicitStop) {
-                consecutiveReconnectFailures++
-
-                // Exponential backoff: 3s base, longer if protocol error (phone
-                // needs time to tear down old SSL session). Cap at 30s.
-                val baseDelayMs = if (lastFailureWasProtocolError) 5000L else 3000L
-                val backoffMs = (baseDelayMs * (1L shl (consecutiveReconnectFailures - 1).coerceAtMost(3)))
-                    .coerceAtMost(30_000L)
-                OalLog.i(TAG, "Session died unexpectedly — retry #$consecutiveReconnectFailures in ${backoffMs}ms" +
-                    if (lastFailureWasProtocolError) " (protocol error, extended backoff)" else "")
-                lastFailureWasProtocolError = false
-
-                kotlinx.coroutines.delay(backoffMs)
-                if (!explicitStop) {
-                    OalLog.i(TAG, "Restarting transport connector")
-                    when (transportMode) {
-                        "hotspot" -> startTcp()
-                        "usb" -> startUsb()
-                        else -> startNearby()
-                    }
-                }
+                scheduleReconnect(reason)
             }
         }
     }
@@ -632,5 +617,47 @@ class AasdkSession(
             transportPipe = null
         }
         sessionStartInFlight = false
+    }
+
+    private fun scheduleReconnect(stopReason: String) {
+        reconnectJob?.cancel()
+        consecutiveReconnectFailures++
+        val attempt = consecutiveReconnectFailures
+        val wasProtocolError = lastFailureWasProtocolError
+        lastFailureWasProtocolError = false
+        val decision = AasdkReconnectPolicy.decision(
+            transportMode = transportMode,
+            attempt = attempt,
+            protocolError = wasProtocolError,
+            jitterSeed = System.nanoTime(),
+        )
+        val hostSource = manualIpAddress?.takeIf { it.isNotBlank() }?.let { "manualIp=$it" } ?: "discovery"
+        OalLog.i(
+            TAG,
+            "Reconnect scheduled: reason=$stopReason transport=$transportMode delayMs=${decision.delayMs} " +
+                "attempt=$attempt hostSource=$hostSource policy=${decision.reason}",
+        )
+        reconnectJob = scope.launch {
+            delay(decision.delayMs)
+            if (explicitStop) return@launch
+            OalLog.i(
+                TAG,
+                "Reconnect starting: reason=$stopReason transport=$transportMode attempt=$attempt hostSource=$hostSource",
+            )
+            restartTransportConnector()
+        }
+    }
+
+    private fun restartTransportConnector() {
+        when (transportMode) {
+            "hotspot" -> startTcp()
+            "usb" -> startUsb()
+            else -> startNearby()
+        }
+    }
+
+    private fun cancelReconnectJob() {
+        reconnectJob?.cancel()
+        reconnectJob = null
     }
 }
