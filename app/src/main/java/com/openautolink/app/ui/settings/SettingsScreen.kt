@@ -2160,43 +2160,20 @@ private fun AudioTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth(0.7f)
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Route calls through car (experimental)",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = "Stream in-call audio over Android Auto so the car " +
-                        "mic and speakers are used even when Bluetooth Call " +
-                        "audio is disabled on the phone. Known to crash the AA " +
-                        "session on some phones — leave off unless you've tested it. " +
-                        "Requires Save & Reconnect.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = uiState.callAudioViaCar,
-                onCheckedChange = { viewModel.updateCallAudioViaCar(it) },
-                modifier = Modifier.testTag("callAudioViaCarToggle"),
-            )
-        }
+        Text(
+            text = "Android Auto routes call audio through your phone's Bluetooth pairing, not through OpenAutoLink. " +
+                "With \"Call audio\" enabled on the phone for this car's BT pairing, calls play through the car " +
+                "speakers and the car's built-in phone app takes the screen during the call. With \"Call audio\" " +
+                "disabled, AA shows its in-projection call card and audio plays through the phone earpiece. " +
+                "This matches every factory head unit.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(0.7f).padding(bottom = 12.dp),
+        )
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // BT MAC override — for AAOS builds where Settings.Secure[
-        // "bluetooth_address"] / BluetoothAdapter.getAddress() return empty
-        // or 02:00:00:00:00:00. Without a real MAC in the SDR's
-        // bluetooth_service.car_address, the phone won't route call audio
-        // over Android Auto. User can read the real MAC from AAOS Settings
-        // -> About -> Bluetooth address and paste it here.
+        // BT MAC override — used in the SDR's bluetooth_service.car_address.
+        // Some phones won't enter wireless AA pairing without a valid car MAC.
+        // Does NOT affect call audio routing.
         Column(
             modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 8.dp),
         ) {
@@ -2206,11 +2183,11 @@ private fun AudioTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "Leave blank to auto-detect. If auto-detect returns empty " +
-                    "or 02:00:00:00:00:00, calls won't route through the car. " +
-                    "Read your head unit's BT MAC from Settings → About → " +
-                    "Bluetooth address and paste it here (format AA:BB:CC:DD:EE:FF). " +
-                    "Requires Save & Reconnect.",
+                text = "Override the Bluetooth MAC reported to the phone in the AA Service Discovery " +
+                    "Response. Leave blank to auto-detect. Some phones won't enter wireless AA pairing " +
+                    "if auto-detect returns empty or 02:00:00:00:00:00. Read the head unit's BT MAC from " +
+                    "Settings → About → Bluetooth address and paste it here (format AA:BB:CC:DD:EE:FF). " +
+                    "Does NOT affect call audio routing. Requires Save & Reconnect.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 8.dp),

@@ -134,10 +134,6 @@ class SettingsReceiver : BroadcastReceiver() {
                     val v = intent.getStringExtra("svalue") ?: return@runBlocking
                     prefs.setMicSource(v); log("mic_source=$v")
                 }
-                "call_audio_via_car" -> {
-                    val v = intent.getBooleanExtra("bvalue", false)
-                    prefs.setCallAudioViaCar(v); log("call_audio_via_car=$v")
-                }
                 "bt_mac_override" -> {
                     val v = intent.getStringExtra("svalue") ?: ""
                     prefs.setBtMacOverride(v); log("bt_mac_override=$v")
@@ -192,7 +188,6 @@ class SettingsReceiver : BroadcastReceiver() {
                     driveSide = prefs.driveSide.first(),
                     manualIpAddress = if (prefs.manualIpEnabled.first())
                         prefs.manualIpAddress.first().takeIf { it.isNotBlank() } else null,
-                    callAudioViaCar = prefs.callAudioViaCar.first(),
                 )
                 OalLog.i("SettingsRcv", "RECONNECT: triggered")
             } catch (e: Exception) {

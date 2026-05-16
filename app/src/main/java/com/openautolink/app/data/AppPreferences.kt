@@ -8,11 +8,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
@@ -20,22 +17,6 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
  * App preferences backed by DataStore.
  */
 class AppPreferences private constructor(private val dataStore: DataStore<Preferences>) {
-
-    init {
-        // Run one-shot migrations off the main thread. DataStore edits are
-        // serialized internally so this is safe even if other reads/writes
-        // race with it.
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                dataStore.edit { prefs ->
-                    if (prefs[CALL_AUDIO_DISABLE_MIGRATION_V1] != true) {
-                        prefs.remove(CALL_AUDIO_VIA_CAR)
-                        prefs[CALL_AUDIO_DISABLE_MIGRATION_V1] = true
-                    }
-                }
-            } catch (_: Exception) { /* best effort */ }
-        }
-    }
 
     companion object {
         @Volatile
@@ -54,25 +35,16 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val VIDEO_FPS = intPreferencesKey("video_fps")
         val DISPLAY_MODE = stringPreferencesKey("display_mode")
         val MIC_SOURCE = stringPreferencesKey("mic_source")
-        // When true, advertise the AA telephony audio sink so the phone
-        // streams in-call audio (and pulls mic) over Android Auto instead
-        // of relying on Bluetooth HFP. Lets users keep BT call/media
-        // toggles off on the phone but still route calls to the car.
-        val CALL_AUDIO_VIA_CAR = booleanPreferencesKey("call_audio_via_car")
         // Manual override for the head unit's Bluetooth MAC, advertised in
         // the AA ServiceDiscoveryResponse's bluetooth_service.car_address.
         // Some AAOS builds return empty / 02:00:00:00:00:00 / "None" from
         // both Settings.Secure["bluetooth_address"] and BluetoothAdapter
-        // .getAddress(), in which case we drop the BT channel entirely and
-        // the phone won't route call audio over AA. Users can read the real
-        // MAC from AAOS Settings -> About -> Bluetooth address and paste it
-        // here. Empty = auto-detect.
+        // .getAddress(), and a few phones won't enter wireless AA pairing
+        // without a valid car MAC. Users can read the real MAC from
+        // AAOS Settings → About → Bluetooth address and paste it here.
+        // Does NOT affect call audio routing — calls always follow the
+        // phone's BT pairing settings, regardless of what's in the SDR.
         val BT_MAC_OVERRIDE = stringPreferencesKey("bt_mac_override")
-        // One-shot migration flag: when unset, the AppPreferences init coroutine
-        // wipes any previously-stored CALL_AUDIO_VIA_CAR value so 0.1.306/0.1.307
-        // installs (where this defaulted to true and crashed the AA session on
-        // some phones) revert to the safe off-by-default state on next launch.
-        val CALL_AUDIO_DISABLE_MIGRATION_V1 = booleanPreferencesKey("call_audio_disable_migration_v1")
         val SYNC_AA_THEME = booleanPreferencesKey("sync_aa_theme")
         val HIDE_AA_CLOCK = booleanPreferencesKey("hide_aa_clock")
         val HIDE_PHONE_SIGNAL = booleanPreferencesKey("hide_phone_signal")
@@ -197,7 +169,6 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_VIDEO_FPS = 60
         const val DEFAULT_DISPLAY_MODE = "fullscreen_immersive"
         const val DEFAULT_MIC_SOURCE = "car"
-        const val DEFAULT_CALL_AUDIO_VIA_CAR = false
         const val DEFAULT_BT_MAC_OVERRIDE = ""
         const val DEFAULT_SYNC_AA_THEME = true
         const val DEFAULT_HIDE_AA_CLOCK = false
@@ -310,10 +281,6 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     val micSource: Flow<String> = dataStore.data.map { prefs ->
         prefs[MIC_SOURCE] ?: DEFAULT_MIC_SOURCE
-    }
-
-    val callAudioViaCar: Flow<Boolean> = dataStore.data.map { prefs ->
-        prefs[CALL_AUDIO_VIA_CAR] ?: DEFAULT_CALL_AUDIO_VIA_CAR
     }
 
     val btMacOverride: Flow<String> = dataStore.data.map { prefs ->
@@ -545,10 +512,6 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setMicSource(source: String) {
         dataStore.edit { it[MIC_SOURCE] = source }
-    }
-
-    suspend fun setCallAudioViaCar(enabled: Boolean) {
-        dataStore.edit { it[CALL_AUDIO_VIA_CAR] = enabled }
     }
 
     /** Normalise a user-entered MAC: strip whitespace, uppercase, accept blank to clear. */

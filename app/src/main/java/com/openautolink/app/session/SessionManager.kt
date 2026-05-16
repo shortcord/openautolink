@@ -187,6 +187,13 @@ class SessionManager(
     private var _micCaptureManager: MicCaptureManager? = null
     private var micSource: String = "car"
 
+    // HFP RFCOMM "presence" advertiser — mirrors headunit-revived's trick of
+    // listening on the Hands-Free Profile UUID so the phone sees an
+    // HFP-advertising device during BT scan. We never speak HFP AT commands
+    // and never accept SCO; this is purely for discovery/handshake. See
+    // [com.openautolink.app.transport.bluetooth.HfpPresenceServer].
+    private var _hfpPresence: com.openautolink.app.transport.bluetooth.HfpPresenceServer? = null
+
     val callState: StateFlow<CallState>? get() = _audioPlayer?.callState
 
     // GNSS forwarder
@@ -456,7 +463,6 @@ class SessionManager(
         safeAreaBottom: Int = 0,
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
-        callAudioViaCar: Boolean = false,
     ) {
         // Cache for later reconnects that don't know the resolved IP (e.g.
         // Settings "Save & Reconnect" in Car Hotspot mode).
@@ -485,6 +491,15 @@ class SessionManager(
             aasdkSession?.let { session ->
                 scope.launch { session.sendMicAudio(frame.data) }
             }
+        }
+
+        // Start HFP RFCOMM presence advertiser (no-op call audio path, just a
+        // discovery hint for the phone). Recreated per-start so it survives
+        // BT adapter cycles across sleep/wake.
+        _hfpPresence?.stop()
+        _hfpPresence = context?.let { ctx ->
+            com.openautolink.app.transport.bluetooth.HfpPresenceServer(ctx, scope)
+                .also { it.start() }
         }
 
         // Create GNSS forwarder (NMEA not used in direct mode -- LocationListener used instead)
@@ -679,7 +694,6 @@ class SessionManager(
         scalingMode: String = "letterbox",
         manualIpAddress: String? = null,
         safeAreaTop: Int = 0, safeAreaBottom: Int = 0, safeAreaLeft: Int = 0, safeAreaRight: Int = 0,
-        callAudioViaCar: Boolean = false,
     ) {
         aasdkSession?.stop()
         _transportMode.value = directTransport
@@ -906,7 +920,6 @@ class SessionManager(
             panelWidth = panelW,
             panelHeight = panelH,
             autoMargins = aaAutoMargins,
-            enableTelephonyAudio = callAudioViaCar,
         )
         _touchWidth.value = resW
         _touchHeight.value = resH
@@ -1066,6 +1079,8 @@ class SessionManager(
         _audioPlayer = null
         _micCaptureManager?.release()
         _micCaptureManager = null
+        _hfpPresence?.stop()
+        _hfpPresence = null
         _gnssForwarder?.stop()
         _gnssForwarder = null
         _vehicleDataForwarder?.stop()
@@ -1133,7 +1148,6 @@ class SessionManager(
         safeAreaBottom: Int = 0,
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
-        callAudioViaCar: Boolean = false,
     ) {
         // "Save & Reconnect" from Settings doesn't know the resolved Car
         // Hotspot IP — fall back to the last value we successfully used so
@@ -1152,7 +1166,6 @@ class SessionManager(
                 driveSide, hideClock, hideSignal, hideBattery,
                 volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
                 effectiveManualIp, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
-                callAudioViaCar,
             )
             return
         }
@@ -1188,7 +1201,6 @@ class SessionManager(
                     videoFps, driveSide, hideClock, hideSignal, hideBattery,
                     volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
                     effectiveManualIp, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
-                    callAudioViaCar,
                 )
             } catch (e: Exception) {
                 OalLog.e(TAG, "reconnect() failed: ${e.message}")
@@ -1213,7 +1225,6 @@ class SessionManager(
         volumeOffsetMedia: Int, volumeOffsetNavigation: Int, volumeOffsetAssistant: Int,
         manualIpAddress: String?,
         safeAreaTop: Int, safeAreaBottom: Int, safeAreaLeft: Int, safeAreaRight: Int,
-        callAudioViaCar: Boolean,
     ) {
         observeJob = null
         decoderWatchJob = null
@@ -1265,8 +1276,7 @@ class SessionManager(
                 videoFps,
                 driveSide, hideClock, hideSignal, hideBattery, scalingMode,
                 manualIpAddress,
-                safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
-                callAudioViaCar)
+                safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight)
         }
 
         // 9. Re-establish cluster binding — GM Templates Host may have killed
