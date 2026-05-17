@@ -339,6 +339,15 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
      * like the head unit actually suspended should.
      */
     private val WAKE_AUTO_RECONNECT_MIN_GAP_MS = 3_000L
+
+    /**
+     * Cooldown held after a successful [doConnect] before [connectInFlight]
+     * is released. sessionState transitions from IDLE → CONNECTING are not
+     * always synchronous with start(); without this guard, the auto-reconnect
+     * collector can fire a second [connect] mid-handshake and abort the
+     * in-flight aasdk session with `AASDK Error 30` (OPERATION_ABORTED).
+     */
+    private val CONNECT_SETTLE_MS = 2_000L
     private val connectLock = Any()
 
     fun connect() {
@@ -381,6 +390,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 hasConnected = true
             }
             viewModelScope.launch {
+                var settle = false
                 try {
                     val mode = preferences.connectionMode.first()
                     if (mode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
@@ -400,9 +410,16 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                         }
                     }
                     doConnect(overrideIp = null)
+                    settle = true
                 } catch (e: Exception) {
                     OalLog.e(TAG, "connect() failed: ${e.message}")
                 } finally {
+                    // Hold the in-flight slot briefly so sessionState has
+                    // time to transition out of IDLE — otherwise a second
+                    // auto-reconnect edge (mDNS resolved + sweep result)
+                    // can race past the state guard mid-handshake and tear
+                    // down the in-flight session with AASDK Error 30.
+                    if (settle) kotlinx.coroutines.delay(CONNECT_SETTLE_MS)
                     connectInFlight = false
                 }
             }
@@ -424,11 +441,14 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             hasConnected = true
         }
         viewModelScope.launch {
+            var settle = false
             try {
                 doConnect(overrideIp)
+                settle = true
             } catch (e: Exception) {
                 OalLog.e(TAG, "connect() failed: ${e.message}")
             } finally {
+                if (settle) kotlinx.coroutines.delay(CONNECT_SETTLE_MS)
                 connectInFlight = false
             }
         }
@@ -549,11 +569,21 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                             ?.friendlyName
                     } catch (_: Exception) { null }
                     val who = defaultName ?: "your phone"
-                    _carHotspotChooserMessage.value =
+                    val noIface = !phoneDiscovery.hasAnyIpv4Interface()
+                    _carHotspotChooserMessage.value = if (noIface) {
+                        "Waiting for the car's WiFi network. Make sure the car hotspot is on " +
+                            "(or that this head unit is connected to your phone's hotspot). " +
+                            "We'll reconnect automatically as soon as it's available."
+                    } else {
                         "Couldn't reach $who. Verify it's connected to this car's WiFi and the companion app is started. " +
                             "If the connection looks good, tap your phone again. If its IP changed, press Scan."
+                    }
                     _showPhoneChooser.value = true
-                    OalLog.w(TAG, "Car Hotspot resolve gave up after 45s — re-opening chooser with guidance")
+                    OalLog.w(
+                        TAG,
+                        if (noIface) "Car Hotspot resolve gave up after 45s \u2014 no IPv4 interface present, awaiting WiFi"
+                        else "Car Hotspot resolve gave up after 45s \u2014 re-opening chooser with guidance",
+                    )
                     return
                 }
             }
