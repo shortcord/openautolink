@@ -32,6 +32,8 @@ data class LocalLogEntry(
 object DiagnosticLog {
 
     private const val MAX_LOCAL_ENTRIES = 500
+    private val syslogSink = TcpSyslogSink("openautolink-app")
+    @Volatile private var remoteSyslogEnabled: Boolean = false
 
     /**
      * Called from native C++ via JNI to route native log lines into the
@@ -48,6 +50,7 @@ object DiagnosticLog {
         }
         addLocal(diagLevel, tag, msg)
         instance?.log(diagLevel, tag, msg)
+        if (remoteSyslogEnabled) syslogSink.enqueue(diagLevel, tag, msg)
     }
 
     @Volatile
@@ -70,22 +73,33 @@ object DiagnosticLog {
     fun d(tag: String, msg: String) {
         addLocal(DiagnosticLevel.DEBUG, tag, msg)
         instance?.log(DiagnosticLevel.DEBUG, tag, msg)
+        if (remoteSyslogEnabled) syslogSink.enqueue(DiagnosticLevel.DEBUG, tag, msg)
     }
 
     fun i(tag: String, msg: String) {
         addLocal(DiagnosticLevel.INFO, tag, msg)
         instance?.log(DiagnosticLevel.INFO, tag, msg)
+        if (remoteSyslogEnabled) syslogSink.enqueue(DiagnosticLevel.INFO, tag, msg)
     }
 
     fun w(tag: String, msg: String) {
         addLocal(DiagnosticLevel.WARN, tag, msg)
         instance?.log(DiagnosticLevel.WARN, tag, msg)
+        if (remoteSyslogEnabled) syslogSink.enqueue(DiagnosticLevel.WARN, tag, msg)
     }
 
     fun e(tag: String, msg: String) {
         addLocal(DiagnosticLevel.ERROR, tag, msg)
         instance?.log(DiagnosticLevel.ERROR, tag, msg)
+        if (remoteSyslogEnabled) syslogSink.enqueue(DiagnosticLevel.ERROR, tag, msg)
     }
+
+    fun setRemoteSyslogEnabled(enabled: Boolean) {
+        remoteSyslogEnabled = enabled
+        if (enabled) syslogSink.start() else syslogSink.stop()
+    }
+
+    fun remoteSyslogStatus(): String = syslogSink.status()
 
     fun clearLocal() {
         synchronized(ring) { ring.clear() }

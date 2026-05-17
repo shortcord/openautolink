@@ -149,6 +149,8 @@ fun DiagnosticsScreen(
                         currentFilter = uiState.logFilter,
                         fileLoggingEnabled = uiState.fileLoggingEnabled,
                         logcatCaptureEnabled = uiState.logcatCaptureEnabled,
+                        remoteSyslogEnabled = uiState.remoteSyslogEnabled,
+                        remoteSyslogStatus = uiState.remoteSyslogStatus,
                         viewModel = viewModel,
                     )
                 }
@@ -1118,6 +1120,8 @@ private fun LogsTab(
     currentFilter: LogSeverity,
     fileLoggingEnabled: Boolean,
     logcatCaptureEnabled: Boolean,
+    remoteSyslogEnabled: Boolean,
+    remoteSyslogStatus: String,
     viewModel: DiagnosticsViewModel,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1147,6 +1151,32 @@ private fun LogsTab(
                     checked = fileLoggingEnabled,
                     onCheckedChange = { viewModel.updateFileLoggingEnabled(it) },
                     modifier = Modifier.testTag("fileLoggingToggle"),
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Remote Syslog", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Stream logs to ns2.owo.systems over TCP. Uses an in-memory 5MB ring buffer.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        remoteSyslogStatus,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = remoteSyslogEnabled,
+                    onCheckedChange = { viewModel.updateRemoteSyslogEnabled(it) },
+                    modifier = Modifier.testTag("remoteSyslogToggle"),
                 )
             }
 

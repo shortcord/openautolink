@@ -20,33 +20,44 @@ object CompanionLog {
     @Volatile
     var fileLogger: CompanionFileLogger? = null
 
+    @Volatile
+    var remoteSyslogSink: TcpSyslogSink? = null
+
     fun d(tag: String, msg: String) {
         Log.d(tag, _prefix + msg)
         fileLogger?.writeLog('D', tag, msg)
+        remoteSyslogSink?.enqueue('D', tag, msg)
     }
 
     fun i(tag: String, msg: String) {
         Log.i(tag, _prefix + msg)
         fileLogger?.writeLog('I', tag, msg)
+        remoteSyslogSink?.enqueue('I', tag, msg)
     }
 
     fun w(tag: String, msg: String) {
         Log.w(tag, _prefix + msg)
         fileLogger?.writeLog('W', tag, msg)
+        remoteSyslogSink?.enqueue('W', tag, msg)
     }
 
     fun w(tag: String, msg: String, tr: Throwable) {
         Log.w(tag, _prefix + msg, tr)
-        fileLogger?.writeLog('W', tag, "$msg: ${tr.message}")
+        val line = "$msg: ${tr.message}"
+        fileLogger?.writeLog('W', tag, line)
+        remoteSyslogSink?.enqueue('W', tag, line)
     }
 
     fun e(tag: String, msg: String) {
         Log.e(tag, _prefix + msg)
         fileLogger?.writeLog('E', tag, msg)
+        remoteSyslogSink?.enqueue('E', tag, msg)
     }
 
     fun e(tag: String, msg: String, tr: Throwable) {
         Log.e(tag, _prefix + msg, tr)
-        fileLogger?.writeLog('E', tag, "$msg: ${tr.message}")
+        val line = "$msg: ${tr.message}"
+        fileLogger?.writeLog('E', tag, line)
+        remoteSyslogSink?.enqueue('E', tag, line)
     }
 }

@@ -15,6 +15,7 @@ import com.openautolink.companion.MainActivity
 import com.openautolink.companion.R
 import com.openautolink.companion.diagnostics.CompanionFileLogger
 import com.openautolink.companion.diagnostics.CompanionLog
+import com.openautolink.companion.diagnostics.TcpSyslogSink
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -38,6 +39,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
     private var fileLogger: CompanionFileLogger? = null
+    private var remoteSyslogSink: TcpSyslogSink? = null
     private var fileLogIdleTimeoutJob: kotlinx.coroutines.Job? = null
     /** True once a connection has been observed during the current logging session. */
     @Volatile private var loggingSessionEverConnected: Boolean = false
@@ -79,6 +81,9 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
                 _isConnected.value = false
                 _statusText.value = "Advertising..."
                 startNearby()
+                val remoteEnabled = getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
+                    .getBoolean(CompanionPrefs.REMOTE_SYSLOG_ENABLED, false)
+                setRemoteSyslogEnabled(remoteEnabled)
                 if (intent.getBooleanExtra(EXTRA_START_LOGGING, false)) {
                     startFileLogging()
                 }
@@ -92,6 +97,9 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
                     _isConnected.value = false
                     _statusText.value = "Advertising..."
                     startNearby()
+                    val remoteEnabled = getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
+                        .getBoolean(CompanionPrefs.REMOTE_SYSLOG_ENABLED, false)
+                    setRemoteSyslogEnabled(remoteEnabled)
                 } else {
                     CompanionLog.i(TAG, "Service restarted by system with no desired running state")
                     stopSelf()
@@ -271,6 +279,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         tcpAdvertiser?.stop()
         carWifiManager?.stop()
         stopFileLogging()
+        setRemoteSyslogEnabled(false)
         releaseWakeLock()
         if (multicastLock?.isHeld == true) {
             multicastLock?.release()
@@ -324,6 +333,23 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         _fileLoggingPath.value = null
     }
 
+    fun setRemoteSyslogEnabled(enabled: Boolean) {
+        if (enabled) {
+            if (remoteSyslogSink == null) {
+                remoteSyslogSink = TcpSyslogSink("openautolink-companion")
+            }
+            remoteSyslogSink?.start()
+            CompanionLog.remoteSyslogSink = remoteSyslogSink
+            _remoteSyslogEnabled.value = true
+        } else {
+            CompanionLog.remoteSyslogSink = null
+            remoteSyslogSink?.stop()
+            remoteSyslogSink = null
+            _remoteSyslogEnabled.value = false
+        }
+        _remoteSyslogStatus.value = CompanionLog.remoteSyslogSink?.status() ?: "disabled"
+    }
+
     companion object {
         private const val TAG = "OAL_Service"
         private const val CHANNEL_ID = "oal_companion_channel"
@@ -351,6 +377,12 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
 
         private val _fileLoggingPath = MutableStateFlow<String?>(null)
         val fileLoggingPath: kotlinx.coroutines.flow.StateFlow<String?> = _fileLoggingPath
+
+        private val _remoteSyslogEnabled = MutableStateFlow(false)
+        val remoteSyslogEnabled: kotlinx.coroutines.flow.StateFlow<Boolean> = _remoteSyslogEnabled
+
+        private val _remoteSyslogStatus = MutableStateFlow("disabled")
+        val remoteSyslogStatus: kotlinx.coroutines.flow.StateFlow<String> = _remoteSyslogStatus
 
         @Volatile
         private var _instance: CompanionService? = null

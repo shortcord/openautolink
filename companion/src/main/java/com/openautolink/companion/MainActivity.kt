@@ -137,6 +137,7 @@ object CompanionPrefs {
     const val CAR_WIFI_ENTRIES = "car_wifi_entries"
 
     const val TRANSPORT_MODE = "transport_mode"
+    const val REMOTE_SYSLOG_ENABLED = "remote_syslog_enabled"
     const val TRANSPORT_NEARBY = "nearby"
     const val TRANSPORT_TCP = "tcp"
     const val DEFAULT_TRANSPORT = TRANSPORT_TCP

@@ -146,6 +146,8 @@ data class DiagnosticsUiState(
     val logFilter: LogSeverity = LogSeverity.DEBUG,
     val fileLoggingEnabled: Boolean = AppPreferences.DEFAULT_FILE_LOGGING_ENABLED,
     val logcatCaptureEnabled: Boolean = AppPreferences.DEFAULT_LOGCAT_CAPTURE_ENABLED,
+    val remoteSyslogEnabled: Boolean = AppPreferences.DEFAULT_REMOTE_SYSLOG_ENABLED,
+    val remoteSyslogStatus: String = "disabled",
     val networkProbe: NetworkProbeState = NetworkProbeState(),
     val debugProbe: DebugProbeState = DebugProbeState(),
 )
@@ -200,6 +202,7 @@ private data class CombinedInner(
     val debug: DebugProbeState,
     val fileLoggingEnabled: Boolean = AppPreferences.DEFAULT_FILE_LOGGING_ENABLED,
     val logcatCaptureEnabled: Boolean = AppPreferences.DEFAULT_LOGCAT_CAPTURE_ENABLED,
+    val remoteSyslogEnabled: Boolean = AppPreferences.DEFAULT_REMOTE_SYSLOG_ENABLED,
 )
 
 class DiagnosticsViewModel(application: Application) : AndroidViewModel(application) {
@@ -239,10 +242,12 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             },
             preferences.fileLoggingEnabled,
             preferences.logcatCaptureEnabled,
-        ) { inner, fileLoggingEnabled, logcatCaptureEnabled ->
+            preferences.remoteSyslogEnabled,
+        ) { inner, fileLoggingEnabled, logcatCaptureEnabled, remoteSyslogEnabled ->
             inner.copy(
                 fileLoggingEnabled = fileLoggingEnabled,
                 logcatCaptureEnabled = logcatCaptureEnabled,
+                remoteSyslogEnabled = remoteSyslogEnabled,
             )
         },
     ) { system, network, streaming, car, inner ->
@@ -271,6 +276,8 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             logFilter = inner.filter,
             fileLoggingEnabled = inner.fileLoggingEnabled,
             logcatCaptureEnabled = inner.logcatCaptureEnabled,
+            remoteSyslogEnabled = inner.remoteSyslogEnabled,
+            remoteSyslogStatus = com.openautolink.app.diagnostics.DiagnosticLog.remoteSyslogStatus(),
             networkProbe = inner.probe,
             debugProbe = inner.debug,
         )
@@ -300,6 +307,12 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
                 )
             }.collect { info ->
                 _network.value = info
+            }
+        }
+
+        viewModelScope.launch {
+            preferences.remoteSyslogEnabled.collectLatest {
+                com.openautolink.app.diagnostics.DiagnosticLog.setRemoteSyslogEnabled(it)
             }
         }
 
@@ -385,6 +398,10 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
 
     fun updateLogcatCaptureEnabled(enabled: Boolean) {
         viewModelScope.launch { preferences.setLogcatCaptureEnabled(enabled) }
+    }
+
+    fun updateRemoteSyslogEnabled(enabled: Boolean) {
+        viewModelScope.launch { preferences.setRemoteSyslogEnabled(enabled) }
     }
 
     // ── Network Probe ─────────────────────────────────────────────────

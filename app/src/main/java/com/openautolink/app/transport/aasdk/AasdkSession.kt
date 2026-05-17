@@ -94,6 +94,16 @@ class AasdkSession(
     /** Manual IP address for testing (emulator). Overrides gateway/mDNS discovery. */
     var manualIpAddress: String? = null
 
+    /**
+     * Optional owner hook for reconnects that need context outside this transport
+     * class. Car Hotspot mode resolves a fresh phone IP through the projection
+     * discovery pipeline; retrying the old manual IP here can loop forever after
+     * the AP changes DHCP scope.
+     *
+     * Return true when the owner accepted responsibility for reconnecting.
+     */
+    var onReconnectRequested: ((reason: String, attempt: Int, protocolError: Boolean) -> Boolean)? = null
+
     /** True when stop() was called explicitly (user-initiated). False when session died on its own. */
     @Volatile
     private var explicitStop = false
@@ -142,11 +152,13 @@ class AasdkSession(
     }
 
     private fun startTcp() {
-        OalLog.i(TAG, "Starting aasdk session (TCP/hotspot transport)")
+        val hostSource = manualIpAddress?.takeIf { it.isNotBlank() }?.let { "manualIp=$it" } ?: "discovery"
+        OalLog.i(TAG, "Starting aasdk session (TCP/hotspot transport, hostSource=$hostSource)")
         _tcpConnector?.stop()
         _tcpConnector = TcpConnector(context, scope) { tcpSocket ->
             scope.launch(Dispatchers.IO) {
-                OalLog.i(TAG, "TCP socket ready — starting aasdk native session")
+                val remote = tcpSocket.inetAddress?.hostAddress ?: "unknown"
+                OalLog.i(TAG, "TCP socket ready from $remote — starting aasdk native session")
                 handleConnection(tcpSocket)
             }
         }
@@ -625,6 +637,23 @@ class AasdkSession(
         val attempt = consecutiveReconnectFailures
         val wasProtocolError = lastFailureWasProtocolError
         lastFailureWasProtocolError = false
+        if (transportMode == "hotspot") {
+            val handledByOwner = try {
+                onReconnectRequested?.invoke(stopReason, attempt, wasProtocolError) == true
+            } catch (e: Exception) {
+                OalLog.w(TAG, "Owner reconnect hook failed: ${e.message}")
+                false
+            }
+            if (handledByOwner) {
+                val hostSource = manualIpAddress?.takeIf { it.isNotBlank() }?.let { "manualIp=$it" } ?: "discovery"
+                OalLog.i(
+                    TAG,
+                    "Reconnect delegated to owner: reason=$stopReason attempt=$attempt " +
+                        "hostSource=$hostSource protocolError=$wasProtocolError",
+                )
+                return
+            }
+        }
         val decision = AasdkReconnectPolicy.decision(
             transportMode = transportMode,
             attempt = attempt,

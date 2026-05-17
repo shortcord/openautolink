@@ -65,6 +65,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val OVERLAY_STATS_BUTTON = booleanPreferencesKey("overlay_stats_button")
         val FILE_LOGGING_ENABLED = booleanPreferencesKey("file_logging_enabled")
         val LOGCAT_CAPTURE_ENABLED = booleanPreferencesKey("logcat_capture_enabled")
+        val REMOTE_SYSLOG_ENABLED = booleanPreferencesKey("remote_syslog_enabled")
 
         // AA safe area (stable) insets — maps render, UI stays inside
         val SAFE_AREA_TOP = intPreferencesKey("safe_area_top")
@@ -176,6 +177,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_OVERLAY_STATS_BUTTON = true
         const val DEFAULT_FILE_LOGGING_ENABLED = false
         const val DEFAULT_LOGCAT_CAPTURE_ENABLED = false
+        const val DEFAULT_REMOTE_SYSLOG_ENABLED = false
         const val DEFAULT_SAFE_AREA_TOP = 0
         const val DEFAULT_SAFE_AREA_BOTTOM = 0
         const val DEFAULT_SAFE_AREA_LEFT = 0
@@ -359,6 +361,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[LOGCAT_CAPTURE_ENABLED] ?: DEFAULT_LOGCAT_CAPTURE_ENABLED
     }
 
+    val remoteSyslogEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[REMOTE_SYSLOG_ENABLED] ?: DEFAULT_REMOTE_SYSLOG_ENABLED
+    }
+
     val safeAreaTop: Flow<Int> = dataStore.data.map { prefs ->
         prefs[SAFE_AREA_TOP] ?: DEFAULT_SAFE_AREA_TOP
     }
@@ -513,6 +519,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setLogcatCaptureEnabled(enabled: Boolean) {
         dataStore.edit { it[LOGCAT_CAPTURE_ENABLED] = enabled }
+    }
+
+    suspend fun setRemoteSyslogEnabled(enabled: Boolean) {
+        dataStore.edit { it[REMOTE_SYSLOG_ENABLED] = enabled }
     }
 
     suspend fun setSafeAreaTop(value: Int) {

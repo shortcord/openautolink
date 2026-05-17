@@ -109,7 +109,12 @@ class TcpConnector(
             } catch (e: Exception) {
                 OalLog.d(TAG, "TCP keepalive tuning unavailable: ${e.message}")
             }
-            OalLog.i(TAG, "Connected to companion at $host:$port ($source)")
+            val local = socket.localAddress?.hostAddress ?: "unknown"
+            val remote = socket.inetAddress?.hostAddress ?: host
+            OalLog.i(
+                TAG,
+                "Connected to companion at $remote:$port ($source), local=$local:${socket.localPort}",
+            )
             isRunning = false
             stopNsdDiscovery()
             onSocketReady(socket)

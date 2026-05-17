@@ -514,6 +514,9 @@ fun MainScreen(
             // ── File Logging ───────────────────────────────────────
             FileLoggingSection()
 
+            Spacer(Modifier.height(16.dp))
+            RemoteSyslogSection()
+
             Spacer(Modifier.height(28.dp))
             HorizontalDivider()
             Spacer(Modifier.height(20.dp))
@@ -1383,6 +1386,65 @@ private fun FileLoggingSection() {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+private fun RemoteSyslogSection() {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(CompanionPrefs.NAME, Context.MODE_PRIVATE) }
+    val isServiceRunning by CompanionService.isRunning.collectAsState()
+    val remoteEnabled by CompanionService.remoteSyslogEnabled.collectAsState()
+    val remoteStatus by CompanionService.remoteSyslogStatus.collectAsState()
+
+    Text(
+        text = "Remote Syslog",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Send to ns2.owo.systems", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "TCP only, async FIFO ring buffer (5MB, overwrites oldest).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        remoteStatus,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = remoteEnabled,
+                    onCheckedChange = { enabled ->
+                        prefs.edit().putBoolean(CompanionPrefs.REMOTE_SYSLOG_ENABLED, enabled).apply()
+                        val service = getCompanionService(context)
+                        if (service != null) {
+                            service.setRemoteSyslogEnabled(enabled)
+                        } else if (enabled && !isServiceRunning) {
+                            val intent = android.content.Intent(context, CompanionService::class.java).apply {
+                                action = CompanionService.ACTION_START
+                            }
+                            androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                        }
+                    },
+                )
+            }
         }
     }
 }

@@ -238,6 +238,9 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
     )
 
     init {
+        sessionManager.hotspotReconnectHandler = { reason, attempt, protocolError ->
+            handleOwnerHotspotReconnect(reason, attempt, protocolError)
+        }
         registerTransportNetworkCallback()
 
         // Collect connected phone name from Nearby
@@ -897,6 +900,65 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /**
+     * Own unexpected reconnects in Car Hotspot mode when the previous session
+     * dialed a resolved phone IP. The lower transport cannot know whether that
+     * IP is still valid after a hotspot flap or sleep/wake DHCP scope change,
+     * so re-enter the projection resolver instead of retrying the stale host.
+     */
+    private fun handleOwnerHotspotReconnect(
+        reason: String,
+        attempt: Int,
+        protocolError: Boolean,
+    ): Boolean {
+        val isCarHotspot = directTransport.value == "hotspot" &&
+            connectionMode.value == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
+        if (!isCarHotspot) return false
+
+        val delayMs = ownerHotspotReconnectDelayMs(attempt, protocolError)
+        OalLog.i(
+            TAG,
+            "Owner hotspot reconnect scheduled: reason=$reason attempt=$attempt " +
+                "delayMs=$delayMs protocolError=$protocolError",
+        )
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(delayMs)
+            if (directTransport.value != "hotspot" ||
+                connectionMode.value != AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
+            ) return@launch
+            if (connectInFlight) return@launch
+            if (sessionManager.sessionState.value != SessionState.IDLE) {
+                val becameIdle = kotlinx.coroutines.withTimeoutOrNull(2_000L) {
+                    sessionManager.sessionState.first { it == SessionState.IDLE }
+                } != null
+                if (!becameIdle) {
+                    OalLog.d(TAG, "Owner hotspot reconnect skipped; session is ${sessionManager.sessionState.value}")
+                    return@launch
+                }
+            }
+
+            if (alwaysAskPhone.value || defaultPhoneId.value.isBlank()) {
+                OalLog.i(TAG, "Owner hotspot reconnect opening chooser (no auto-connect target)")
+                _showPhoneChooser.value = true
+                phoneDiscovery.start()
+                kickSweep()
+                return@launch
+            }
+
+            OalLog.i(TAG, "Owner hotspot reconnect re-running phone discovery")
+            hasConnected = false
+            connect(
+                overrideIp = null,
+                connectIntent = CarHotspotConnectIntent.AUTOMATIC_RECONNECT,
+            )
+        }
+        return true
+    }
+
+    private fun ownerHotspotReconnectDelayMs(attempt: Int, protocolError: Boolean): Long {
+        return CarHotspotReconnectPolicy.delayMs(attempt, protocolError)
+    }
+
     /** Whether the phone chooser overlay is showing. */
     val showPhoneChooser: StateFlow<Boolean> = _showPhoneChooser.asStateFlow()
 
@@ -1405,6 +1467,7 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
             try { connectivityManager.unregisterNetworkCallback(it) } catch (_: Exception) {}
         }
         wifiAvailableCallback = null
+        sessionManager.hotspotReconnectHandler = null
         // Stop file logging if active
         logcatCapture?.stop()
         fileLogWriter?.stop()

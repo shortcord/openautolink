@@ -271,12 +271,21 @@ class SessionManager(
     private var keyframeWatchJob: Job? = null
     private var callStateJob: Job? = null
     private var clusterPreferenceJob: Job? = null
+    private var remoteSyslogPreferenceJob: Job? = null
 
     // Track last known active time for sleep/wake detection
     private var lastActiveTimestamp = SystemClock.elapsedRealtime()
 
     /** Reentrancy guard for reconnect() so rapid Save&Reconnect taps coalesce. */
     @Volatile private var reconnectInProgress = false
+
+    /**
+     * Optional projection-level reconnect hook for hotspot sessions whose host
+     * was selected outside [AasdkSession]. Car Hotspot mode uses this to
+     * re-run phone discovery instead of reusing a stale resolved IP.
+     */
+    @Volatile
+    var hotspotReconnectHandler: ((reason: String, attempt: Int, protocolError: Boolean) -> Boolean)? = null
 
     /**
      * Snapshot of settings that affect the AA Service Discovery Response (SDR) / video
@@ -546,6 +555,14 @@ class SessionManager(
         _telemetryCollector?.audioPlayer = _audioPlayer
         _telemetryCollector?.start()
 
+        remoteSyslogPreferenceJob?.cancel()
+        val ctx = context ?: return
+        remoteSyslogPreferenceJob = scope.launch {
+            AppPreferences.getInstance(ctx).remoteSyslogEnabled.collectLatest { enabled ->
+                DiagnosticLog.setRemoteSyslogEnabled(enabled)
+            }
+        }
+
         observeJob = scope.launch {
             // Watch for decoder errors
             decoderWatchJob?.cancel()
@@ -703,6 +720,11 @@ class SessionManager(
         val session = AasdkSession(scope, ctx)
         session.transportMode = directTransport
         session.manualIpAddress = manualIpAddress
+        if (directTransport == "hotspot") {
+            session.onReconnectRequested = { reason, attempt, protocolError ->
+                hotspotReconnectHandler?.invoke(reason, attempt, protocolError) == true
+            }
+        }
         session.sdrConfig = AasdkSdrConfig(
             videoWidth = resW,
             videoHeight = resH,
@@ -902,6 +924,9 @@ class SessionManager(
         _mediaSessionManager = null
         clusterPreferenceJob?.cancel()
         clusterPreferenceJob = null
+        remoteSyslogPreferenceJob?.cancel()
+        remoteSyslogPreferenceJob = null
+        DiagnosticLog.setRemoteSyslogEnabled(false)
         _clusterManager?.release()
         _clusterManager = null
         _telemetryCollector?.stop()

@@ -97,7 +97,11 @@ class TcpAdvertiser(
                 while (isRunning) {
                     val carSocket = server.accept()
                     val remoteIp = carSocket.inetAddress?.hostAddress ?: "unknown"
-                    CompanionLog.i(TAG, "Car connected from $remoteIp")
+                    val localIp = carSocket.localAddress?.hostAddress ?: "unknown"
+                    CompanionLog.i(
+                        TAG,
+                        "Car connected from $remoteIp:${carSocket.port} to $localIp:${carSocket.localPort}",
+                    )
                     stateListener.onConnecting()
                     handleCarConnection(carSocket)
                 }
