@@ -631,15 +631,38 @@ class SessionManager(
             }
         }
 
-        // Enable cluster service — always enable so Templates Host can discover it.
-        // On non-AAOS devices Templates Host won't exist so the service simply won't bind.
+        // Cluster service is gated by user preference (default ON). When disabled,
+        // the CarAppService component is disabled so Templates Host won't bind it.
         _clusterManager?.release()
-        _clusterManager = context?.let { com.openautolink.app.cluster.ClusterManager(it) }
-        _clusterManager?.setClusterEnabled(true)
-        // Proactively launch cluster binding — Templates Host on GM doesn't auto-discover
-        // the service via intent filter; it requires CarAppActivity to be launched first.
-        _clusterManager?.launchClusterBinding()
-        OalLog.i(TAG, "Cluster manager initialized and binding launched")
+        _clusterManager = null
+        val clusterEnabled = context?.let { ctx ->
+            try {
+                kotlinx.coroutines.runBlocking {
+                    AppPreferences.getInstance(ctx).clusterNavigation.first()
+                }
+            } catch (e: Exception) {
+                OalLog.w(TAG, "Failed to read clusterNavigation pref: ${e.message}")
+                AppPreferences.DEFAULT_CLUSTER_NAVIGATION
+            }
+        } ?: false
+        if (clusterEnabled) {
+            _clusterManager = context?.let { com.openautolink.app.cluster.ClusterManager(it) }
+            _clusterManager?.setClusterEnabled(true)
+            // Proactively launch cluster binding — Templates Host on GM doesn't auto-discover
+            // the service via intent filter; it requires CarAppActivity to be launched first.
+            _clusterManager?.launchClusterBinding()
+            OalLog.i(TAG, "Cluster manager initialized and binding launched")
+        } else {
+            // Disable the component so Templates Host won't try to bind it on next boot.
+            context?.let { ctx ->
+                try {
+                    com.openautolink.app.cluster.ClusterManager(ctx).setClusterEnabled(false)
+                } catch (e: Exception) {
+                    OalLog.w(TAG, "Failed to disable cluster component: ${e.message}")
+                }
+            }
+            OalLog.i(TAG, "Cluster service disabled by user preference")
+        }
 
         // Create diagnostics (local-only)
         _telemetryCollector?.stop()

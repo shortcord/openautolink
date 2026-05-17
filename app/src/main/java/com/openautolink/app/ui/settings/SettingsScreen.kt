@@ -782,7 +782,7 @@ private fun DisplayTab(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "Show turn-by-turn directions on the instrument cluster.",
+                    text = "Enable the cluster service to show turn-by-turn directions on the instrument cluster. Disable if your car doesn't have a cluster display or Templates Host. Takes effect on next connect.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
