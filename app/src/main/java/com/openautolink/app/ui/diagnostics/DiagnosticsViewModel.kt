@@ -123,7 +123,7 @@ data class DebugProbeState(
     val usbDevices: List<com.openautolink.app.diagnostics.DeviceDebugProbe.UsbDeviceInfo> = emptyList(),
     val sysfsDevices: List<Map<String, String>> = emptyList(),
     val usbScanDone: Boolean = false,
-    // GM AAOS recon probes — see docs/gm-aaos-recon.md §10
+    // GM AAOS recon probes — see recon_dump/gm-aaos-recon.md §10 (local-only; gitignored)
     val gmRecon: com.openautolink.app.diagnostics.GmReconProbe.Result? = null,
     val gmReconRunning: Boolean = false,
     val gmAdbEnableResult: String? = null,
@@ -692,7 +692,7 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     // ── GM AAOS Recon Probes ────────────────────────────────────────
-    // Pen-test the four enable paths documented in docs/gm-aaos-recon.md §10.
+    // Pen-test the four enable paths documented in recon_dump/gm-aaos-recon.md §10 (local-only; gitignored).
 
     fun runGmReconProbes() {
         if (_debugProbe.value.gmReconRunning) return

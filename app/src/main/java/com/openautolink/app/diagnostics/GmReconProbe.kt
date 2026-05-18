@@ -8,7 +8,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 /**
- * Pen-test probes derived from the GM AAOS recon (see docs/gm-aaos-recon.md §10).
+ * Pen-test probes derived from the GM AAOS recon (see recon_dump/gm-aaos-recon.md §10, local-only / gitignored).
  *
  * Each probe is read-only-by-default and captures the failure mode (SecurityException,
  * SELinux denial, missing binary, etc.) without crashing. Run on demand from the

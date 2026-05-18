@@ -910,7 +910,7 @@ private fun DebugTab(debug: DebugProbeState, viewModel: DiagnosticsViewModel) {
             }
         }
 
-        // GM AAOS Recon Probes — see docs/gm-aaos-recon.md §10
+        // GM AAOS Recon Probes — see recon_dump/gm-aaos-recon.md §10 (local-only; gitignored)
         Spacer(modifier = Modifier.height(24.dp))
         GmReconSection(debug, viewModel)
     }
@@ -924,7 +924,7 @@ private fun GmReconSection(debug: DebugProbeState, viewModel: DiagnosticsViewMod
 
     SectionHeader("GM AAOS Recon Probes")
     Text(
-        "Probes the four ADB-enable paths documented in docs/gm-aaos-recon.md §10. " +
+        "Probes the four ADB-enable paths from the GM AAOS recon notes (local-only). " +
             "All probes are read-only — toggling ADB requires the separate button below " +
             "and a confirmation dialog. Safe to run on any device.",
         color = Color(0xFF808080),
