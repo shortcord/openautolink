@@ -94,6 +94,12 @@ object GmReconProbe {
         out += probeNetworkInterfaces()
         out += probeAdbOnLanGateways(context)
 
+        // ── Phase 3: Round-3 audit findings (gm-aaos-recon §12) ─────
+        // Verify the DDB DeviceConnectionProvider paired-phone disclosure
+        // bug live on the head unit. Reads only the columns + row counts —
+        // does NOT dump WiFi passwords or other PII to logs.
+        out += probeDdbContentProvider(context)
+
         // Bonus useful properties
         out += probeReadGmProperty("service.adb.tcp.port")
         out += probeReadGmProperty("persist.adb.tcp.port")
@@ -695,6 +701,64 @@ object GmReconProbe {
 
     private fun intToIp(addr: Int): String =
         "${addr and 0xFF}.${addr shr 8 and 0xFF}.${addr shr 16 and 0xFF}.${addr shr 24 and 0xFF}"
+
+    // ── Phase 3 probe: DDB DeviceConnectionProvider (gm-aaos-recon §12.1) ──
+
+    /**
+     * Verifies the paired-phone ContentProvider disclosure bug (Finding D).
+     * Queries each of the three tables in the DDB provider via a URI that
+     * any app can construct. Reports row counts and the presence of
+     * sensitive column names — does NOT log actual values, so running the
+     * probe on a real car does not leak the user's WiFi passwords or BT
+     * addresses to our logs.
+     */
+    private fun probeDdbContentProvider(context: Context): ProbeOutcome {
+        val sensitiveCols = setOf(
+            "wifi_pwd", "vehicle_wf_pwd", "remote_wf_ap_pwd", "hidden_wf_ap_pwd",
+            "bt_addr", "wp_bluetooth_address", "usb_bluetooth_address",
+            "imei_number", "device_serial_number", "wp_usb_serial_number",
+            "token", "ssid", "vehicle_hotspot_ssid", "remote_wf_ap_ssid",
+            "hidden_wf_ap_ssid", "mac_addr", "wifi_mac",
+        )
+        val tables = listOf("devices", "property", "vca_devices")
+        val results = mutableListOf<String>()
+        var totalSensitive = 0
+        var totalRows = 0
+
+        for (table in tables) {
+            val uri = android.net.Uri.parse("content://com.gm.ddb_contentprovider/$table")
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    val cols = c.columnNames.toSet()
+                    val sensitiveInTable = cols.intersect(sensitiveCols)
+                    totalSensitive += sensitiveInTable.size
+                    totalRows += c.count
+                    results += "$table: ${c.count} row(s), " +
+                        "${cols.size} cols, ${sensitiveInTable.size} sensitive " +
+                        "(${sensitiveInTable.joinToString().take(80)})"
+                } ?: run {
+                    results += "$table: query returned null"
+                }
+            } catch (e: SecurityException) {
+                results += "$table: SecurityException — ${e.message?.take(80)}"
+            } catch (e: Exception) {
+                results += "$table: ${e.javaClass.simpleName} — ${e.message?.take(80)}"
+            }
+        }
+
+        val status = if (totalRows > 0 || totalSensitive > 0) {
+            ProbeOutcome.Status.WIN
+        } else if (results.any { it.contains("Security") }) {
+            ProbeOutcome.Status.BLOCKED
+        } else {
+            ProbeOutcome.Status.INFO
+        }
+        return ProbeOutcome(
+            "DDB provider (paired-phone leak)",
+            status,
+            results.joinToString("\n") + if (totalRows > 0) "\n→ Finding D CONFIRMED on this car" else "",
+        )
+    }
 
     // ── Dangerous action: try running ADBoverBCS.sh directly ─────────
 
