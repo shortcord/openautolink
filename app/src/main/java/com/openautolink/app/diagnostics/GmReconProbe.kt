@@ -100,6 +100,24 @@ object GmReconProbe {
         // does NOT dump WiFi passwords or other PII to logs.
         out += probeDdbContentProvider(context)
 
+        // ── Round-5 audit: com.gm.vehicleinfo unprotected providers (§14) ─
+        // Two ContentProviders declared exported with no android:permission.
+        // EnergyEfficiencyGraphProvider would give us per-trip Wh/km ground
+        // truth; HistoryProvider would expose drive history. Manifest is
+        // open but query() may still gate at runtime — probe to confirm.
+        out += probeVehicleInfoProvider(
+            context,
+            "EnergyEfficiencyGraphProvider",
+            "com.gm.vehicleinfo.EnergyEfficiencyGraphProvider",
+            listOf("graph", "energy_efficiency", "efficiency", "trips", "data"),
+        )
+        out += probeVehicleInfoProvider(
+            context,
+            "HistoryProvider",
+            "com.gm.vehicleinfo.HistoryProvider",
+            listOf("history", "trips", "drives", "data"),
+        )
+
         // Bonus useful properties
         out += probeReadGmProperty("service.adb.tcp.port")
         out += probeReadGmProperty("persist.adb.tcp.port")
@@ -760,10 +778,54 @@ object GmReconProbe {
         )
     }
 
-    // ── Dangerous action: try running ADBoverBCS.sh directly ─────────
-
     /**
-     * Phase 1 reported /system/bin/ADBoverBCS.sh has read=true exec=true
+     * Tries common table-name guesses for an exported provider whose
+     * manifest does not specify android:permission. We probe a handful
+     * of likely table names; if any returns a non-null cursor with rows,
+     * the provider is unprotected from `untrusted_app`.
+     *
+     * Reports table name + row count + column count only — no row values.
+     */
+    private fun probeVehicleInfoProvider(
+        context: Context,
+        label: String,
+        authority: String,
+        tableGuesses: List<String>,
+    ): ProbeOutcome {
+        val results = mutableListOf<String>()
+        var anyRows = 0
+        var anyOpened = false
+        for (t in tableGuesses) {
+            val uri = android.net.Uri.parse("content://$authority/$t")
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    anyOpened = true
+                    anyRows += c.count
+                    results += "$t: ${c.count} row(s), ${c.columnNames.size} cols " +
+                        "(${c.columnNames.take(6).joinToString().take(80)})"
+                } ?: run {
+                    results += "$t: null cursor"
+                }
+            } catch (e: SecurityException) {
+                results += "$t: SecurityException"
+            } catch (e: Exception) {
+                results += "$t: ${e.javaClass.simpleName}"
+            }
+        }
+        val status = when {
+            anyRows > 0 -> ProbeOutcome.Status.WIN
+            anyOpened -> ProbeOutcome.Status.INFO  // queryable but empty
+            results.any { it.contains("Security") } -> ProbeOutcome.Status.BLOCKED
+            else -> ProbeOutcome.Status.INFO
+        }
+        return ProbeOutcome(
+            "vehicleinfo $label",
+            status,
+            "$authority\n" + results.joinToString("\n"),
+        )
+    }
+
+    // ── Dangerous action: try running ADBoverBCS.sh directly ─────────
      * from our UID. This action attempts to actually run it. Worst case
      * SELinux denies the configfs writes inside the script; best case the
      * USB hub flips and a connected laptop sees an ADB device.
