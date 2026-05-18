@@ -615,3 +615,255 @@ The **highest-realism attack** is the dealer UDS path (10.3.C). The **highest-va
 
 For OpenAutoLink specifically, none of this is on the critical path â€” we don't need ADB on the head unit to develop our app, we have wireless debugging on the phone side, and the in-app Remote Log Server (TCP 6555) covers our diagnostics. But the recon answers the long-standing "why doesn't a USB cable in the AA port enumerate" question definitively, and gives us a clear unlock recipe if we ever do need it.
 
+
+## 11. Confused-deputy audit across system-uid APKs (2026-05-18)
+
+After the Â§10 conclusion that every direct ADB-enable path was gated by SELinux
+or `signatureOrSystem` permissions, we did a broader audit looking for a
+**confused-deputy bug**: an exported component in a privileged process that
+accepts attacker-controlled input and forwards it into a privileged sink
+(`Settings.Global.put*`, `SystemProperties.set`, `Runtime.exec`,
+`grantRuntimePermission`, etc.). If any such component exists, an
+unprivileged sideloaded app can ride its UID's permissions to achieve
+the privileged effect â€” including potentially flipping
+`Settings.Global.adb_wifi_enabled`.
+
+### 11.1 Tooling produced
+
+Three reusable scanners live in `recon_dump/`. Each one builds on the
+previous and produces a CSV for follow-up analysis.
+
+- **`scan-attack-surface.ps1`** â€” decodes every decompiled APK's manifest
+  via `aapt`, emits `attack-surface.csv` containing every
+  `(activity|service|receiver|provider)` with `exported=true`, its
+  `android:permission` (and resolved protection level), its intent-filter
+  actions, and a crude grep of the component's own class file for
+  privileged sinks. Also prints a summary sorted by *number of permission-less
+  exported components*.
+- **`scan-taint-flow.ps1`** â€” for each exported + no-permission component,
+  reads only its declared `.java` class file and looks for both
+  `getStringExtra`-class sources *and* a privileged sink. Flags components
+  where source and sink lines are within ~30 lines of each other as **HIGH**.
+- **`scan-taint-flow-deep.ps1`** â€” same heuristic but scanning the
+  **entire package directory** of each component, not just the class file.
+  This catches the common pattern where a thin BroadcastReceiver delegates
+  work to a sibling helper class (which is where the real source-to-sink
+  flow lives).
+
+Run them in order; the deep scanner is the one with usable signal.
+
+### 11.2 Audit corpus
+
+This pass decompiled an additional 14 high-value system-uid APKs on top of
+what Â§10 already covered:
+
+```
+com_android_car                  com_gm_ultifi_bus
+com_android_systemui             com_gm_ultifi_lvmapp
+com_android_phone                com_gm_homescreen
+com_android_bluetooth            com_gm_rhmi
+com_android_providers_settings   com_gm_deviceinformation
+com_android_providers_telephony  com_gm_linkviewer
+com_ultifi_vehicle_session       com_gm_ddb_contentprovider
+```
+
+Combined with the Â§10 corpus, the audit covered every system-uid APK on the
+device except the >100 MB ones (`com_gm_hmi_sxm`, `com_gm_vehicleinfo`,
+`com_google_android_gms`, `com_gm_ultifi_tipsandtour`), which were skipped
+for time. The skipped APKs are infotainment-feature payloads, not
+privilege-management code; lower a-priori value.
+
+### 11.3 Top three confirmed findings
+
+Each of these is a real cross-UID weakness on the live head unit. None of
+them unlocks ADB, but all are worth a low-severity report to GM.
+
+#### Finding A â€” `com.gm.settings.receivers.DeviceConnectionEventReceiver` UI spoofing
+
+| | |
+|---|---|
+| APK | `com.gm.hmi.connection` |
+| UID | `android.uid.system` |
+| Component | `BroadcastReceiver`, `android:exported=true`, **no `android:permission`** |
+| Intent-filter actions | `gm.connection.DEVICE_CONNECTION_EVENT`, `gm.dcm.intent.action.wifi.connect.status.changed` |
+| Class | `com.gm.settings.receivers.DeviceConnectionEventReceiver` |
+| Bug class | CWE-862 Missing Authorization |
+
+The whole onReceive body is:
+
+```java
+public void onReceive(Context context, Intent intent) {
+    Log.d("DeviceConnectionEventReceiver", "onReceive action: " + intent.getAction());
+    context.startService(SettingsDeviceService.createDeviceServiceIntent(context, intent));
+}
+```
+
+`createDeviceServiceIntent` just copies the action and all extras onto a
+new Intent targeting `SettingsDeviceService` (an `IntentService` in the
+same `android.uid.system` process). Because the receiver is exported with
+no permission, an unprivileged app can address it via *explicit* component
+intent and bypass the intent-filter action constraint. The forwarded
+extras are then consumed by `SettingsDeviceService.onHandleIntent`, which
+dispatches on a `String event` extra to drive HMI navigation:
+
+```
+event = "UNPLUG"                       â†’ MEDIA_DEVICE_UNPLUGGED dialog
+event = "PLUG"                         â†’ projection consent / hotspot prompt
+event = "Connection fail"              â†’ DEVICE_CONNECTION_FAILED dialog
+event = "WIRELESS_PROJECTION_DISABLED" â†’ projection-disabled dialog
+event = "Disconnection success"        â†’ unplug toast
+... and a handful of others
+```
+
+The service also accepts an attacker-controlled `DeviceInfo` Parcelable
+(`"device Info"` extra) which carries the displayed device name, BT MAC,
+and projection type into the dialogs. **The service does NOT call any
+privileged write sink** â€” it only reads `Settings.Global.bt_auto_launch`
+and triggers UI events on `aVar.i(...)`. So the impact is bounded to:
+
+- Spamming arbitrary "Connection failed" / "Enable location required" /
+  "Turn on hotspot" / "Device unplugged" dialogs at the user.
+- Social-engineering the user into re-pairing a phone with a chosen
+  display name and BT MAC (the values flow into the UI directly).
+
+Severity: **Low.** No EOP. Real bug because the gate is misconfigured â€”
+an unprivileged app should not be able to drive system HMI flows.
+
+**Fix:** add `android:permission="..."` with at least `signature`
+protection on the receiver, or set `android:exported="false"` and have
+the actual sender of `gm.connection.DEVICE_CONNECTION_EVENT` (the
+`DeviceConnectionManager`) deliver the broadcast via the implicit-target
+path with a signature-protected permission.
+
+#### Finding B â€” `com.gm.gmbugreport.service.ServiceControllerHelper.takeScreenShot` command injection
+
+| | |
+|---|---|
+| APK | `com.gm.gmbugreport.service` |
+| UID | `android.uid.system` |
+| Permission gate | `com.gm.gmbugreport.permission.MANAGE_BUG_REPORTS` (`signatureOrSystem`) |
+| Bug class | CWE-78 Command Injection |
+
+In [`ServiceControllerHelper.takeScreenShot(String str)`](../recon_dump/apks/com_gm_gmbugreport_service/java_src/com/p002gm/gmbugreport/service/ServiceControllerHelper.java):
+
+```java
+file = Runtime.getRuntime().exec("/system/bin/screencap -p " + str + "/" + Utils.SCREENSHOT_NAME);
+```
+
+The `str` parameter is concatenated unescaped into a shell command line.
+A caller controlling `str` can inject command separators:
+`"; sh -c 'whatever' #"`.
+
+The redeeming feature is the entire entrypoint chain is gated by
+`MANAGE_BUG_REPORTS` at the **manifest layer** (protection level
+`signatureOrSystem`). Only signature-or-system apps can invoke. So this is
+a **defence-in-depth issue**, not directly exploitable from
+`untrusted_app`. But: if a signature-gated app is ever shown to
+mis-validate caller identity (the kind of bug Â§11.5.4 hunts for), this is
+a fast root primitive.
+
+**Fix:** swap `Runtime.exec(String)` for `ProcessBuilder(List<String>)`
+which doesn't pass through a shell. Saves having to argue about
+defence-in-depth.
+
+#### Finding C â€” `com.gm.settings.receivers.AppsDispatcherReceiver` constrained Settings write
+
+| | |
+|---|---|
+| APK | `com.gm.hmi.connection` |
+| UID | `android.uid.system` |
+| Permission gate | `com.gm.settings.permission.APPS_DISPATCHER` (declared in the same APK, protection level `0x3` = `signatureOrSystem`) |
+| Bug class | CWE-20 Improper Input Validation (defence-in-depth) |
+
+Receiver listens on `com.gm.server.appsdispatcherservice.intent.action.dispatch`,
+unpacks an `intent.getParcelableExtra("CarProperty")` (Parcelable
+constructable by any caller), and writes one of four named
+`Settings.Global` entries:
+
+```java
+case 557850888: str = "wireless_charging_1_available"; break;
+case 557850889: str = "wireless_charging_2_available"; break;
+case 557850890: str = "wireless_charging_3_available"; break;
+case 557850891: str = "wireless_charging_4_available"; break;
+Settings.Global.putInt(contentResolver, str, carPropertyValue.getStatus());
+```
+
+Setting names are constrained to four hard-coded strings, so an attacker
+cannot pivot this into writing `adb_enabled` or anything else useful.
+The `status` int *is* attacker-controlled. The receiver is gated by
+signature permission, so reachable only from sig-trusted apps. Like
+Finding B: defence-in-depth issue. The receiver should at minimum verify
+the `CarPropertyValue.getPropertyId()` was emitted by `CarPropertyManager`
+itself (e.g. by binding to `CarService` and reading the live value), not
+trust an attacker-supplied Parcelable.
+
+### 11.4 Non-issues investigated and rejected
+
+| Component | Why not exploitable |
+|---|---|
+| `com.android.car.CarService` | AOSP. Exported with no perm, but the Car Service API enforces per-method permission checks inside `CarServiceBase` and Binder transactions. |
+| `com.android.car.settings.bluetooth.BluetoothPairingRequest` | Only acts on `android.bluetooth.device.action.PAIRING_REQUEST`, a `<protected-broadcast>`. Explicit-component dispatch lands in a path that requires a `BluetoothDevice` Parcelable obtained from BluetoothManager, which an untrusted app cannot mint. |
+| `com.android.systemui.controls.management.ControlsRequestReceiver` | Verifies caller package is in foreground (`isPackageInForeground`). Working-as-intended Smart Home Controls UX. |
+| `com.android.systemui.tuner.TunerActivity` | `Class.forName(preference.getFragment())` reads from a static XML preference resource, not intent extras. |
+| `com.android.bluetooth.avrcpcontroller.AvrcpControllerService` | `SystemProperties.set` uses six hard-coded `AvrcpCoverArtManager.AVRCP_CONTROLLER_COVER_ART_*` keys; values come from AVRCP cover-art response parsing, not intent extras. |
+| `com.gm.isaplugin.service.ISABroadcastReceiver` | Stores `media_mounted` extra in `ISAWrapper.updatePath` LiveData. Path is only consumed if the user manually navigates to `ISAPluginInstallingUpdateFragment` and taps "Install update". No drive-by trigger. |
+| `com.gm.homescreen.app.UninstallPackageReceiver` | Reads `PACKAGE_NAME` and `STATUS_MESSAGE` extras from `PackageInstaller` callback intent â€” only logs them. No install/uninstall side effect. |
+
+### 11.5 What we did *not* exhaustively audit
+
+If a future round wants to push further, the remaining stones to turn over:
+
+1. **ContentProvider entry points across the corpus.** Our scanner enumerates
+   exported providers but doesn't model `query`/`update`/`delete`/`call`/
+   `openFile` separately. A no-`readPermission`/`writePermission` provider
+   that performs SQL `selection` string concatenation, file path traversal
+   in `openFile`, or `call()` arbitrary-method dispatch is the classic
+   Android attack vector. Suspect targets:
+   `com.gm.server.carplay.service.internals.CarplayContentProvider`,
+   `com.gm.server.gal.service.internals.GALMediaContentProvider`,
+   `com.android.car.settings.qc.SettingsQCProvider`,
+   `com.android.providers.settings.SettingsProvider` (the actual Settings
+   backend â€” any GM-added URI?).
+2. **Ultifi vehicle-bus AIDLs.** `com.gm.ultifi.service.bodyaccess` (doors/
+   locks), `com.gm.ultifi.service.propulsion` (motor/torque),
+   `com.gm.ultifi.service.lighting`, `com.gm.ultifi.service.chassis`, etc.
+   Each runs as `ultifi.uid.core` and exposes AIDL methods. Several of
+   their Service stanzas have **no `android:permission`**. Bind to them
+   and enumerate transaction codes to see what they expose without
+   authentication. (We caught `BodyAccessService` and
+   `PowerManagementService` in Â§11.3's scanner under "shutdown" sinks but
+   skipped because "shutdown" was a Service-lifecycle method match, not a
+   privileged sink. Still: their AIDL surfaces are unexamined.)
+3. **The 4 huge APKs we skipped** (sxm, vehicleinfo, gms, tipsandtour).
+   Lower a-priori value but `com.gm.vehicleinfo` has the right name to
+   matter for vehicle-data tampering.
+4. **Caller-identity bypass in signature-gated entry points.** Finding B
+   and C are gated by sig permissions today, but if any of those gates
+   trusts a `Binder.getCallingUid()` value that an attacker can spoof
+   (e.g. by impersonating a known sig-app UID via shared-user â€” won't
+   work in practice â€” or by exploiting an unrelated sig-app that
+   forwards on the attacker's behalf), the gate falls. Worth a
+   per-component review of how each `enforceCallingPermission` is wired.
+5. **`com.android.providers.settings`** â€” the actual SettingsProvider.
+   AOSP enforces `WRITE_SECURE_SETTINGS` on writes, but GM may have added
+   URIs. The deep scanner flagged it for `reboot` sinks (false positives
+   from `DeviceConfigService`/`SettingsProtoDumpUtil` dumps); a manual
+   `query`/`call` audit would catch anything GM-added.
+
+### 11.6 Verdict
+
+The audit did not surface a path to ADB or to writing privileged
+settings. Three real but low-severity weaknesses were identified, all
+worth reporting to GM as security hardening:
+
+- **A**: missing permission on `DeviceConnectionEventReceiver` â†’
+  UI spoofing.
+- **B**: shell-string concatenation in `takeScreenShot` â†’ command
+  injection (defence-in-depth, behind sig-gate).
+- **C**: weak input validation in `AppsDispatcherReceiver` â†’
+  trust-boundary issue (defence-in-depth, behind sig-gate).
+
+The scanners produced in Â§11.1 are committed and reusable. They are
+the right tool to run against future AAOS firmware drops to confirm GM
+has fixed these or to surface new ones.
+
