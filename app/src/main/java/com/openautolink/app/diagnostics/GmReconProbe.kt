@@ -102,21 +102,15 @@ object GmReconProbe {
 
         // ── Round-5 audit: com.gm.vehicleinfo unprotected providers (§14) ─
         // Two ContentProviders declared exported with no android:permission.
-        // EnergyEfficiencyGraphProvider would give us per-trip Wh/km ground
-        // truth; HistoryProvider would expose drive history. Manifest is
-        // open but query() may still gate at runtime — probe to confirm.
-        out += probeVehicleInfoProvider(
-            context,
-            "EnergyEfficiencyGraphProvider",
-            "com.gm.vehicleinfo.EnergyEfficiencyGraphProvider",
-            listOf("graph", "energy_efficiency", "efficiency", "trips", "data"),
-        )
-        out += probeVehicleInfoProvider(
-            context,
-            "HistoryProvider",
-            "com.gm.vehicleinfo.HistoryProvider",
-            listOf("history", "trips", "drives", "data"),
-        )
+        // EnergyEfficiencyGraphProvider: query() returns null (write-only,
+        //   but insert() accepts arbitrary CarPropertyValues from any app —
+        //   UI-spoof vector against GM's efficiency graph). Not probed live
+        //   because writing is destructive to user data.
+        // HistoryProvider: query() has NO permission check and returns real
+        //   timeseries cursors of motor power / torque / battery level.
+        //   Selection arg must be "SELECTION_HISTORY_DATA" or
+        //   "SELECTION_HISTORY_TIMESTAMP".
+        out += probeVehicleInfoHistoryProvider(context)
 
         // Bonus useful properties
         out += probeReadGmProperty("service.adb.tcp.port")
@@ -779,49 +773,54 @@ object GmReconProbe {
     }
 
     /**
-     * Tries common table-name guesses for an exported provider whose
-     * manifest does not specify android:permission. We probe a handful
-     * of likely table names; if any returns a non-null cursor with rows,
-     * the provider is unprotected from `untrusted_app`.
+     * Probes com.gm.vehicleinfo.HistoryProvider — exported with no
+     * android:permission, query() has no runtime check (verified by
+     * decompiling the APK, see recon_dump/gm-aaos-recon.md §15).
      *
-     * Reports table name + row count + column count only — no row values.
+     * Returns timeseries cursors for:
+     *   history/e_power     — electric motor power (W)
+     *   history/e_torque    — electric motor torque (Nm)
+     *   history/e_battery   — battery level
+     *   history/ice_power   — ICE power (irrelevant on EV)
+     *   history/ice_torque  — ICE torque (irrelevant on EV)
+     *
+     * Selection arg must be "SELECTION_HISTORY_DATA" (values) or
+     * "SELECTION_HISTORY_TIMESTAMP" (timestamps in ms).
+     *
+     * Reports row counts only — no actual timeseries data is logged.
      */
-    private fun probeVehicleInfoProvider(
-        context: Context,
-        label: String,
-        authority: String,
-        tableGuesses: List<String>,
-    ): ProbeOutcome {
+    private fun probeVehicleInfoHistoryProvider(context: Context): ProbeOutcome {
+        val authority = "com.gm.vehicleinfo.HistoryProvider"
+        val paths = listOf("history/e_power", "history/e_torque", "history/e_battery",
+                           "history/ice_power", "history/ice_torque")
         val results = mutableListOf<String>()
         var anyRows = 0
         var anyOpened = false
-        for (t in tableGuesses) {
-            val uri = android.net.Uri.parse("content://$authority/$t")
+        for (path in paths) {
+            val uri = android.net.Uri.parse("content://$authority/$path")
             try {
-                context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                context.contentResolver.query(uri, null, "SELECTION_HISTORY_DATA", null, null)?.use { c ->
                     anyOpened = true
                     anyRows += c.count
-                    results += "$t: ${c.count} row(s), ${c.columnNames.size} cols " +
-                        "(${c.columnNames.take(6).joinToString().take(80)})"
-                } ?: run {
-                    results += "$t: null cursor"
-                }
+                    results += "$path: ${c.count} rows, ${c.columnNames.size} cols"
+                } ?: run { results += "$path: null cursor" }
             } catch (e: SecurityException) {
-                results += "$t: SecurityException"
+                results += "$path: SecurityException"
             } catch (e: Exception) {
-                results += "$t: ${e.javaClass.simpleName}"
+                results += "$path: ${e.javaClass.simpleName}"
             }
         }
         val status = when {
             anyRows > 0 -> ProbeOutcome.Status.WIN
-            anyOpened -> ProbeOutcome.Status.INFO  // queryable but empty
+            anyOpened -> ProbeOutcome.Status.INFO
             results.any { it.contains("Security") } -> ProbeOutcome.Status.BLOCKED
             else -> ProbeOutcome.Status.INFO
         }
         return ProbeOutcome(
-            "vehicleinfo $label",
+            "vehicleinfo HistoryProvider",
             status,
-            "$authority\n" + results.joinToString("\n"),
+            "$authority\n" + results.joinToString("\n") +
+                if (anyRows > 0) "\n→ Finding F CONFIRMED — drive history leak" else "",
         )
     }
 
