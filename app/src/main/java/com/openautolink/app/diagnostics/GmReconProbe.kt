@@ -826,6 +826,9 @@ object GmReconProbe {
     }
 
     // ── Dangerous action: try running ADBoverBCS.sh directly ─────────
+
+    /**
+     * Phase 1 reported /system/bin/ADBoverBCS.sh has read=true exec=true
      * from our UID. This action attempts to actually run it. Worst case
      * SELinux denies the configfs writes inside the script; best case the
      * USB hub flips and a connected laptop sees an ADB device.
