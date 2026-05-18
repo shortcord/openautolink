@@ -107,6 +107,12 @@ data class CarInfo(
     val evRegenBrakingLevel: Int? = null,
     val evStoppingMode: Int? = null,
     val distanceDisplayUnits: Int? = null,
+    // Round-6 additions
+    val tirePressuresKpa: List<Float>? = null,
+    val absActive: Boolean? = null,
+    val tractionControlActive: Boolean? = null,
+    val evMotorPowerW: Float? = null,
+    val evMotorTorqueNm: Float? = null,
     // Property access status — key = field name, value = "subscribed"|"not_exposed"|etc
     val propertyStatus: Map<String, String> = emptyMap(),
 )
@@ -340,6 +346,11 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
                     evRegenBrakingLevel = vd.evRegenBrakingLevel,
                     evStoppingMode = vd.evStoppingMode,
                     distanceDisplayUnits = vd.distanceDisplayUnits,
+                    tirePressuresKpa = vd.tirePressuresKpa,
+                    absActive = vd.absActive,
+                    tractionControlActive = vd.tractionControlActive,
+                    evMotorPowerW = vd.evMotorPowerW,
+                    evMotorTorqueNm = vd.evMotorTorqueNm,
                     propertyStatus = forwarder.propertyStatus,
                 )
             }

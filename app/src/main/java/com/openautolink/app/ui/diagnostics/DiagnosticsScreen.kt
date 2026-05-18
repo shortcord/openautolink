@@ -1329,6 +1329,41 @@ private fun CarTab(car: CarInfo) {
             SectionHeader("EV Driving")
             car.evRegenBrakingLevel?.let { DiagRow("Regen Braking", "Level $it") }
             car.evStoppingMode?.let { DiagRow("Stopping Mode", evStoppingModeToString(it)) }
+            car.evMotorPowerW?.let {
+                val kw = it / 1000f
+                DiagRow("Motor Power", "${"%.1f".format(kw)} kW",
+                    valueColor = when {
+                        it > 0f -> Color(0xFF4CAF50)
+                        it < 0f -> Color(0xFF64B5F6)  // regen
+                        else -> Color.White
+                    })
+            }
+            car.evMotorTorqueNm?.let {
+                DiagRow("Motor Torque", "${"%.0f".format(it)} Nm")
+            }
+            if (car.evMotorPowerW != null || car.evMotorTorqueNm != null) {
+                DiagRow("Source", "GM HistoryProvider (Finding F.2)",
+                    valueColor = Color(0xFF9E9E9E))
+            }
+
+            // Round-6 additions — driving dynamics + tires
+            if (car.absActive != null || car.tractionControlActive != null ||
+                !car.tirePressuresKpa.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                SectionHeader("Dynamics & Tires")
+                car.absActive?.let { DiagRow("ABS Active", if (it) "ENGAGED" else "—",
+                    valueColor = if (it) Color(0xFFFF9800) else Color.White) }
+                car.tractionControlActive?.let { DiagRow("Traction Control", if (it) "ENGAGED" else "—",
+                    valueColor = if (it) Color(0xFFFF9800) else Color.White) }
+                car.tirePressuresKpa?.forEachIndexed { idx, kpa ->
+                    val label = when (idx) {
+                        0 -> "Tire FL"; 1 -> "Tire FR"; 2 -> "Tire RL"; 3 -> "Tire RR"
+                        else -> "Tire $idx"
+                    }
+                    val psi = kpa * 0.145038f
+                    DiagRow(label, "${"%.0f".format(kpa)} kPa / ${"%.1f".format(psi)} psi")
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
             SectionHeader("Environment")

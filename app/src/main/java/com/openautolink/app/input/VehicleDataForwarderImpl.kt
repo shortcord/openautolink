@@ -72,6 +72,10 @@ class VehicleDataForwarderImpl(
             "INFO_MAKE" to 0x11100101,
             "INFO_MODEL" to 0x11100102,
             "INFO_MODEL_YEAR" to 0x11400103,
+            // Round-6 additions — read-only props gated by CAR_MILEAGE/CAR_TIRES/CAR_DYNAMICS_STATE
+            "TIRE_PRESSURE" to 0x07410F07,
+            "ABS_ACTIVE" to 0x1120040A,
+            "TRACTION_CONTROL_ACTIVE" to 0x1120040B,
         )
     }
 
@@ -90,6 +94,13 @@ class VehicleDataForwarderImpl(
     // Latest values — updated by property callbacks, sent as batch
     private val currentValues = ConcurrentHashMap<Int, Any>()
     private var lastSendTime = 0L
+
+    // HistoryProvider polling cache (Finding F.2). Refreshed every 5s on a
+    // dedicated coroutine; nullable when the provider is patched or returns
+    // no data. The build path falls back to SOC-derived math transparently.
+    @Volatile private var latestMotorPowerW: Float? = null
+    @Volatile private var latestMotorTorqueNm: Float? = null
+    private var historyPollerJob: kotlinx.coroutines.Job? = null
 
     // Previous ignition state — used to detect ON transitions for wake signaling
     @Volatile
@@ -142,6 +153,7 @@ class VehicleDataForwarderImpl(
                 DiagnosticLog.i("vhal", "Vehicle data forwarding started")
                 // Re-emit current data so collectors see isActive=true
                 _latestVehicleData.value = buildVehicleData()
+                startHistoryPoller()
             } catch (e: Exception) {
                 val root = e.rootCause()
                 Log.w(TAG, "Failed to start vehicle data forwarding: ${root.message}")
@@ -337,6 +349,11 @@ class VehicleDataForwarderImpl(
             PropDef("EV_CHARGE_CURRENT_DRAW_LIMIT", "android.car.permission.CAR_ENERGY"),
             PropDef("EV_BRAKE_REGENERATION_LEVEL", "android.car.permission.CAR_POWERTRAIN"),
             PropDef("EV_STOPPING_MODE", "android.car.permission.CAR_POWERTRAIN"),
+            // Round-6 additions — see recon_dump/gm-aaos-recon.md §14
+            PropDef("PERF_ODOMETER", "android.car.permission.CAR_MILEAGE"),
+            PropDef("TIRE_PRESSURE", "android.car.permission.CAR_TIRES"),
+            PropDef("ABS_ACTIVE", "android.car.permission.CAR_DYNAMICS_STATE"),
+            PropDef("TRACTION_CONTROL_ACTIVE", "android.car.permission.CAR_DYNAMICS_STATE"),
         )
 
         var subscribed = 0
@@ -668,6 +685,23 @@ class VehicleDataForwarderImpl(
         val evRegenLevel = regenId?.let { currentValues[it] as? Int }
         val evStoppingMode = stopModeId?.let { currentValues[it] as? Int }
 
+        // Round-6 additions
+        val odometerKm = propId("PERF_ODOMETER")?.let { (currentValues[it] as? Float)?.let { v -> v / 1000f } }
+        val tirePressures = propId("TIRE_PRESSURE")?.let { id ->
+            // TIRE_PRESSURE is per-area (one float per wheel). Per-area cache
+            // entries arrive keyed by combined propId|areaId — until that
+            // routing lands, surface whichever single scalar is present so
+            // the diag screen can at least show one value.
+            (currentValues[id] as? Float)?.let { listOf(it) }
+        }
+        val absActive = propId("ABS_ACTIVE")?.let { currentValues[it] as? Boolean }
+        val tcActive = propId("TRACTION_CONTROL_ACTIVE")?.let { currentValues[it] as? Boolean }
+
+        // HistoryProvider — latest sample (or null when patched / unavailable).
+        // Cached snapshot is refreshed by historyPoller every 5s; we just read.
+        val motorPowerW = latestMotorPowerW
+        val motorTorqueNm = latestMotorTorqueNm
+
         // Derive driving status: in a drive gear (not P/N/Unknown)
         val driving = gearInt != null && gearInt !in listOf(0, 1, 4)
 
@@ -682,7 +716,7 @@ class VehicleDataForwarderImpl(
             fuelLevelPct = null,
             rangeKm = rangeRemaining,
             lowFuel = null,
-            odometerKm = null,
+            odometerKm = odometerKm,
             ambientTempC = ambientTemp,
             steeringAngleDeg = null,
             headlight = null,
@@ -708,8 +742,40 @@ class VehicleDataForwarderImpl(
             carModel = carModel,
             carYear = carYear,
             fuelTypes = fuelTypes,
-            evConnectorTypes = evConnectorTypes
+            evConnectorTypes = evConnectorTypes,
+            tirePressuresKpa = tirePressures,
+            absActive = absActive,
+            tractionControlActive = tcActive,
+            evMotorPowerW = motorPowerW,
+            evMotorTorqueNm = motorTorqueNm,
         )
+    }
+
+    /**
+     * Polls com.gm.vehicleinfo.HistoryProvider every 5s for the latest motor
+     * power / torque samples. Silently no-ops if the provider is patched.
+     * See recon_dump/gm-aaos-recon.md §15 (Finding F.2).
+     */
+    private fun startHistoryPoller() {
+        historyPollerJob?.cancel()
+        historyPollerJob = scope.launch {
+            val available = try {
+                com.openautolink.app.data.GmHistoryProviderRepository.isAvailable(context)
+            } catch (_: Throwable) { false }
+            if (!available) return@launch
+            while (true) {
+                try {
+                    latestMotorPowerW = com.openautolink.app.data.GmHistoryProviderRepository
+                        .latestMotorPowerW(context)
+                    latestMotorTorqueNm = com.openautolink.app.data.GmHistoryProviderRepository
+                        .latestMotorTorqueNm(context)
+                } catch (_: Throwable) {
+                    latestMotorPowerW = null
+                    latestMotorTorqueNm = null
+                }
+                kotlinx.coroutines.delay(5_000L)
+            }
+        }
     }
 
     private fun gearToString(gear: Int): String = when (gear) {
@@ -733,6 +799,11 @@ class VehicleDataForwarderImpl(
     }
 
     private fun cleanup() {
+        historyPollerJob?.cancel()
+        historyPollerJob = null
+        latestMotorPowerW = null
+        latestMotorTorqueNm = null
+
         val pm = propertyManager
         val callback = callbackProxy
 
