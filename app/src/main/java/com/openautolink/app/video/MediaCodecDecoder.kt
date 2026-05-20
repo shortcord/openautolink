@@ -165,6 +165,16 @@ class MediaCodecDecoder(
                     DiagnosticLog.i("video", "Replaying cached IDR (${cachedIdr.data.size} bytes) after surface attach")
                     cachedIdrFrame = null
                     handleKeyframe(cachedIdr)
+                    // Cached IDR gives us a fast unblank, but it's only the
+                    // anchor frame for a P-frame chain we no longer have
+                    // (we missed everything between when the IDR was sent
+                    // and now). Without a fresh IDR, incoming P-frames
+                    // reference data we never decoded → permanent blocky
+                    // artifacts until something else (Save&Reconnect,
+                    // periodic ~2min IDR) clears it. Ask the phone for a
+                    // new keyframe right away so the next IDR re-anchors.
+                    _needsKeyframe = false
+                    _needsKeyframeFlow.value = true
                 } else {
                     _needsKeyframe = false
                     _needsKeyframeFlow.value = true  // Signal caller to request IDR

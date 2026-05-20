@@ -80,16 +80,31 @@ class HfpPresenceServer(
         }
 
         while (running && scope.isActive) {
+            var threw = false
             val client: BluetoothSocket? = try {
                 serverSocket?.accept()
             } catch (e: Exception) {
                 if (running) OalLog.w(TAG, "HFP accept() failed: ${e.message}")
+                threw = true
                 null
             }
             if (client != null) {
                 val remote = try { client.remoteDevice?.address ?: "?" } catch (_: Throwable) { "?" }
                 OalLog.i(TAG, "HFP presence connection from $remote — closing (presence-only)")
                 try { client.close() } catch (_: Throwable) {}
+                continue
+            }
+            // accept() returned null or threw. If serverSocket is gone we
+            // can't recover — bail out. Otherwise back off so a torn-down
+            // socket (BT adapter cycling on car shutdown) doesn't pin a
+            // thread at 100% CPU spamming 'accept() failed' lines. Without
+            // this guard, shutdown saw ~5000 such lines/sec.
+            if (serverSocket == null) {
+                if (running) OalLog.w(TAG, "HFP server socket closed — exiting accept loop")
+                break
+            }
+            if (threw) {
+                try { kotlinx.coroutines.delay(1000) } catch (_: Throwable) { break }
             }
         }
     }
