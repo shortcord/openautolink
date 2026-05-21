@@ -137,6 +137,12 @@ class MediaCodecDecoder(
     // The bridge-side fix (no stale IDR replay) ensures the first IDR the app
     // receives is always fresh from the phone, so a single-IDR gate suffices.
     @Volatile private var renderingEnabled = false
+    // After replaying a cached IDR on surface re-attach, P-frames will
+    // reference content we never decoded (we missed everything between
+    // the cached IDR and now). Feed them to the decoder → blocky artifacts.
+    // Instead, drop all P-frames until a fresh real IDR arrives from the
+    // phone, showing a frozen-but-clean cached frame in the meantime.
+    @Volatile private var awaitingFreshIdr = false
     // Skip first few frames after codec init to avoid green hue from resolution
     // transition. When codec is configured at 1920x1080 but video is 2560x1440,
     // the first frames decode with wrong color plane alignment until the codec
@@ -168,11 +174,10 @@ class MediaCodecDecoder(
                     // Cached IDR gives us a fast unblank, but it's only the
                     // anchor frame for a P-frame chain we no longer have
                     // (we missed everything between when the IDR was sent
-                    // and now). Without a fresh IDR, incoming P-frames
-                    // reference data we never decoded → permanent blocky
-                    // artifacts until something else (Save&Reconnect,
-                    // periodic ~2min IDR) clears it. Ask the phone for a
-                    // new keyframe right away so the next IDR re-anchors.
+                    // and now). Drop all P-frames until a fresh real IDR
+                    // arrives — shows a frozen-but-clean cached frame
+                    // instead of progressively-corrupting blocky garbage.
+                    awaitingFreshIdr = true
                     _needsKeyframe = false
                     _needsKeyframeFlow.value = true
                 } else {
@@ -255,6 +260,7 @@ class MediaCodecDecoder(
         Log.i(TAG, "Resuming decoder")
         _decoderState.value = DecoderState.IDLE
         receivedIdr = false
+        awaitingFreshIdr = false
         _needsKeyframe = true
         _needsKeyframeFlow.value = true
         codecConfigData?.let { config ->
@@ -306,6 +312,7 @@ class MediaCodecDecoder(
 
         codecConfigData = frame.data.copyOf()
         receivedIdr = false
+        awaitingFreshIdr = false
         _needsKeyframe = true  // Request IDR after codec reconfigure
         _needsKeyframeFlow.value = true
 
@@ -393,6 +400,13 @@ class MediaCodecDecoder(
         receivedIdr = true
         _needsKeyframe = false
         _needsKeyframeFlow.value = false
+        // Fresh IDR from the phone re-anchors the reference chain — safe to
+        // resume feeding P-frames (clears the cached-IDR-replay guard).
+        if (awaitingFreshIdr) {
+            Log.i(TAG, "Fresh IDR arrived — clearing awaitingFreshIdr, P-frames will flow")
+            DiagnosticLog.i("video", "Fresh IDR cleared awaitingFreshIdr")
+            awaitingFreshIdr = false
+        }
         // Always keep the latest IDR cached — if the surface is destroyed (user
         // navigates away), we can replay it instantly when the surface returns
         // instead of requesting a fresh keyframe from the bridge and waiting.
@@ -411,6 +425,16 @@ class MediaCodecDecoder(
             // No IDR received yet — P-frames can't decode without a reference.
             // These MUST be dropped, not queued — they corrupt the decoder's
             // reference picture buffer.
+            framesDropped.incrementAndGet()
+            updateDropStats()
+            return
+        }
+        if (awaitingFreshIdr) {
+            // After replaying a cached IDR on surface re-attach, we show a
+            // frozen-but-clean frame. P-frames arriving now reference content
+            // we never decoded (missed during backgrounding). Feeding them
+            // would produce progressively-worse blockiness. Drop until a
+            // fresh real IDR from the phone re-anchors the reference chain.
             framesDropped.incrementAndGet()
             updateDropStats()
             return
@@ -832,6 +856,7 @@ class MediaCodecDecoder(
             activeDecoderName = null
             receivedIdr = false
             renderingEnabled = false
+            awaitingFreshIdr = false
             seedIdrTimeMs = 0
             lastQueuedPtsMs = -1
             consecutiveDrops = 0

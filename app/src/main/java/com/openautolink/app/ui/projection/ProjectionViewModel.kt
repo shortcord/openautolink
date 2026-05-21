@@ -555,7 +555,13 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 // we want to keep retrying the known IP rather than nag the
                 // user with a chooser. If the AP genuinely re-leased a new
                 // IP, the user can press Scan in the chooser.
-                resolveCarHotspotPhone(timeoutMs = 45_000)
+                //
+                // Budget shortened from 45s → 20s: auto-recovery (ignition-ON
+                // edge + fast idle sweep) typically lands within ~5s of
+                // giveup anyway, so a long initial wait only delays the
+                // first successful retry. We still cover the common
+                // "phone joins AP shortly after car-on" case.
+                resolveCarHotspotPhone(timeoutMs = 20_000)
             } else null
             val carHotspotIp: String? = carHotspotPhone?.let { phone ->
                 // Append the discovered port if it differs from the canonical
@@ -611,8 +617,8 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                     }
                     OalLog.w(
                         TAG,
-                        if (noIface) "Car Hotspot resolve gave up after 45s \u2014 no IPv4 interface, retrying silently"
-                        else "Car Hotspot resolve gave up after 45s \u2014 retrying silently (auto-recovery handles it)",
+                        if (noIface) "Car Hotspot resolve gave up after 20s \u2014 no IPv4 interface, retrying silently"
+                        else "Car Hotspot resolve gave up after 20s \u2014 retrying silently (auto-recovery handles it)",
                     )
                     // Mark a recent failure so the idle sweep cadence
                     // tightens for the next ~90s. Helps the auto-recovery

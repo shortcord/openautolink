@@ -64,10 +64,6 @@ class PhoneDiscovery private constructor(private val context: Context) {
          */
         private const val SWEEP_PARALLELISM = 128
 
-        /** Max retries when NSD resolves with no usable host. */
-        private const val MDNS_RESOLVE_MAX_ATTEMPTS = 4
-        private const val MDNS_RESOLVE_RETRY_GAP_MS = 500L
-
         /** Throttle for the "no IPv4 on any interface" warning. */
         private const val NO_IFACE_WARN_GAP_MS = 60_000L
 
@@ -358,20 +354,21 @@ class PhoneDiscovery private constructor(private val context: Context) {
     }
 
     @Suppress("DEPRECATION")
-    private fun resolveLegacy(serviceInfo: NsdServiceInfo, attempt: Int = 1) {
+    private fun resolveLegacy(serviceInfo: NsdServiceInfo) {
+        // NsdManager.resolveService is one-shot and on AAOS frequently
+        // returns a null host on the first resolve (A record not yet
+        // cached). Re-calling resolveService on the same NsdServiceInfo
+        // is rejected silently by the platform, so don't bother retrying
+        // in-callback — the periodic /24 sweep and the next onServiceFound
+        // edge are what actually recover this case.
         try {
             nsdManager?.resolveService(serviceInfo, object : NsdManager.ResolveListener {
                 override fun onResolveFailed(si: NsdServiceInfo, errorCode: Int) {
-                    OalLog.d(TAG, "Resolve failed for ${si.serviceName}: error $errorCode (attempt $attempt)")
-                    maybeRetry(si)
+                    OalLog.d(TAG, "Resolve failed for ${si.serviceName}: error $errorCode")
                 }
 
                 override fun onServiceResolved(si: NsdServiceInfo) {
                     val rawHost = si.host
-                    // IPv6 link-local addresses (fe80::/10) require a scope ID
-                    // (e.g. %wlan0) to connect. Android NSD doesn't surface
-                    // the scope so the address is unusable. Reject and let
-                    // the sweep mechanism find the IPv4 host instead.
                     val host: String? = when {
                         rawHost == null -> null
                         rawHost is java.net.Inet6Address && rawHost.isLinkLocalAddress -> {
@@ -384,18 +381,14 @@ class PhoneDiscovery private constructor(private val context: Context) {
                     val attrs = readTxt(si)
                     val phoneId = attrs["phone_id"]
                     val friendlyName = attrs["friendly_name"]
-                    OalLog.i(
-                        TAG,
-                        "Resolved ${si.serviceName} → $host:$port phone_id=${phoneId?.take(8)} name=$friendlyName (attempt $attempt)",
-                    )
-                    // NSD on AAOS sometimes returns null host or only an
-                    // unusable IPv6 link-local on the first resolve, then
-                    // the A record on a subsequent call. Don't publish a
-                    // ghost — retry with a small backoff before giving up.
                     if (host == null) {
-                        maybeRetry(si)
+                        OalLog.d(TAG, "Resolved ${si.serviceName} with no usable host — letting sweep recover")
                         return
                     }
+                    OalLog.i(
+                        TAG,
+                        "Resolved ${si.serviceName} → $host:$port phone_id=${phoneId?.take(8)} name=$friendlyName",
+                    )
                     addOrUpdate(
                         phoneId = phoneId,
                         friendlyName = friendlyName,
@@ -404,17 +397,6 @@ class PhoneDiscovery private constructor(private val context: Context) {
                         mdnsServiceName = si.serviceName,
                         viaSource = SourceBit.MDNS,
                     )
-                }
-
-                private fun maybeRetry(si: NsdServiceInfo) {
-                    if (attempt >= MDNS_RESOLVE_MAX_ATTEMPTS) {
-                        OalLog.d(TAG, "Giving up resolve for ${si.serviceName} after $attempt attempts")
-                        return
-                    }
-                    sweepScope.launch {
-                        kotlinx.coroutines.delay(MDNS_RESOLVE_RETRY_GAP_MS)
-                        resolveLegacy(si, attempt + 1)
-                    }
                 }
             })
         } catch (e: Exception) {
