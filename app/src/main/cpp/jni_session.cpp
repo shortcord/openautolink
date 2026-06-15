@@ -12,9 +12,8 @@
 #include "jni_channel_handlers.h"
 
 #include <android/log.h>
-#include <chrono>
-#include <cstring>
-#include <sstream>
+#include <cmath>
+#include <utility>
 #include <vector>
 
 // Protobuf messages for SDR building
@@ -60,18 +59,6 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-
-namespace {
-constexpr int kNativeEventSessionStarted = 1;
-constexpr int kNativeEventSessionStopped = 2;
-constexpr int kNativeEventError = 3;
-constexpr int kNativeEventVideoCodecConfigured = 4;
-
-int64_t nowNs() {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-} // namespace
 
 // Hex-dump helper for raw protobuf bytes
 static std::string hexDump(const uint8_t* data, size_t len, size_t maxBytes = 512) {
@@ -181,54 +168,11 @@ void JniSession::releaseEnv(bool attached)
 
 void JniSession::callVoidCallback(jmethodID method)
 {
-    if (!method) return;
+    if (!callbackRef_ || !method) return;
     bool attached;
     JNIEnv* env = getEnv(attached);
-    if (env) {
-        std::lock_guard<std::mutex> lock(callbackMutex_);
-        if (!callbacksClosed_ && callbackRef_) {
-            env->CallVoidMethod(callbackRef_, method);
-            clearCallbackException(env, "voidCallback");
-        }
-    }
+    if (env) env->CallVoidMethod(callbackRef_, method);
     releaseEnv(attached);
-}
-
-void JniSession::emitNativeEvent(int type, const uint8_t* payload, size_t length, int64_t timestampNs)
-{
-    bool attached;
-    JNIEnv* env = getEnv(attached);
-    if (env) {
-        std::lock_guard<std::mutex> lock(callbackMutex_);
-        if (!callbacksClosed_ && callbackRef_ && cbMethods_.onNativeEvent) {
-            jbyteArray data = env->NewByteArray(static_cast<jsize>(length));
-            if (data) {
-                if (payload && length > 0) {
-                    env->SetByteArrayRegion(data, 0, static_cast<jsize>(length),
-                                            reinterpret_cast<const jbyte*>(payload));
-                }
-                env->CallVoidMethod(callbackRef_, cbMethods_.onNativeEvent,
-                                    static_cast<jint>(type), data,
-                                    static_cast<jlong>(timestampNs));
-                env->DeleteLocalRef(data);
-            }
-            clearCallbackException(env, "onNativeEvent");
-        }
-    }
-    releaseEnv(attached);
-}
-
-void JniSession::emitNativeEvent(int type, const std::string& payload)
-{
-    emitNativeEvent(type, reinterpret_cast<const uint8_t*>(payload.data()), payload.size(), nowNs());
-}
-
-void JniSession::clearCallbackException(JNIEnv* env, const char* callbackName)
-{
-    if (!env || !env->ExceptionCheck()) return;
-    LOGE("Kotlin callback threw from %s; clearing JNI exception", callbackName);
-    env->ExceptionDescribe();
-    env->ExceptionClear();
 }
 
 // ============================================================================
@@ -243,11 +187,7 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     }
 
     // Create global refs
-    {
-        std::lock_guard<std::mutex> lock(callbackMutex_);
-        callbacksClosed_ = false;
-        callbackRef_ = env->NewGlobalRef(callback);
-    }
+    callbackRef_ = env->NewGlobalRef(callback);
     jobject transportRef = env->NewGlobalRef(transportPipe);
 
     // Cache callback method IDs
@@ -275,7 +215,6 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     cbMethods_.onVoiceSession = env->GetMethodID(cbClass, "onVoiceSession", "(Z)V");
     cbMethods_.onAudioFocusRequest = env->GetMethodID(cbClass, "onAudioFocusRequest", "(I)V");
     cbMethods_.onError = env->GetMethodID(cbClass, "onError", "(Ljava/lang/String;)V");
-    cbMethods_.onNativeEvent = env->GetMethodID(cbClass, "onNativeEvent", "(I[BJ)V");
     env->DeleteLocalRef(cbClass);
 
     // Read SDR config from Kotlin
@@ -315,6 +254,11 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
     sdrConfig_.safeAreaLeft = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "safeAreaLeft", "I"));
     sdrConfig_.safeAreaRight = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "safeAreaRight", "I"));
     sdrConfig_.targetLayoutWidthDp = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "targetLayoutWidthDp", "I"));
+    sdrConfig_.viewingDistanceMm = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "viewingDistanceMm", "I"));
+    sdrConfig_.decoderAdditionalDepth = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "decoderAdditionalDepth", "I"));
+    sdrConfig_.panelWidth = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "panelWidth", "I"));
+    sdrConfig_.panelHeight = env->GetIntField(sdrConfig, env->GetFieldID(sdrClass, "panelHeight", "I"));
+    sdrConfig_.autoMargins = env->GetBooleanField(sdrConfig, env->GetFieldID(sdrClass, "autoMargins", "Z")) != JNI_FALSE;
 
     // Read int arrays: fuelTypes and evConnectorTypes
     auto readIntArray = [&](const char* field) -> std::vector<int> {
@@ -332,10 +276,11 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
 
     env->DeleteLocalRef(sdrClass);
 
-    LOGI("Starting session: video=%dx%d@%dfps dpi=%d realDpi=%d pixelAspect=%d marginW=%d marginH=%d autoNeg=%d codec=%s targetLayoutDp=%d",
+    LOGI("Starting session: video=%dx%d@%dfps dpi=%d realDpi=%d pixelAspect=%d marginW=%d marginH=%d viewDistMm=%d decAddDepth=%d autoNeg=%d codec=%s targetLayoutDp=%d",
          sdrConfig_.videoWidth, sdrConfig_.videoHeight,
          sdrConfig_.videoFps, sdrConfig_.videoDpi, sdrConfig_.realDensity,
          sdrConfig_.pixelAspectE4, sdrConfig_.marginWidth, sdrConfig_.marginHeight,
+         sdrConfig_.viewingDistanceMm, sdrConfig_.decoderAdditionalDepth,
          sdrConfig_.autoNegotiate, sdrConfig_.videoCodec.c_str(),
          sdrConfig_.targetLayoutWidthDp);
     if (sdrConfig_.safeAreaTop > 0 || sdrConfig_.safeAreaBottom > 0 ||
@@ -345,7 +290,7 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
              sdrConfig_.safeAreaLeft, sdrConfig_.safeAreaRight);
     }
 
-    // Create JNI transport from the Nearby stream pipe
+    // Create JNI transport from the TCP stream pipe (Kotlin side)
     transport_ = std::make_shared<JniTransport>(*ioService_, jvm_, transportRef);
     rawTransport_ = transport_;
 
@@ -396,8 +341,10 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
             *strand_, messenger_);
         systemAudioChannel_ = std::make_shared<aasdk::channel::mediasink::audio::channel::SystemAudioChannel>(
             *strand_, messenger_);
-        // Telephony audio disabled — crashes AA without BT HFP
-        // telephonyAudioChannel_ = ...
+        // NOTE: TelephonyAudioChannel intentionally not created — phone-side
+        // AA's CAR.AUDIO.AFM explicitly refuses focus events for phone calls,
+        // and the obfuscated C0000a.m5F mapper crashes on AUDIO_STREAM_TELEPHONY.
+        // See docs/aa-undocumented-features.md.
         inputChannel_ = std::make_shared<aasdk::channel::inputsource::InputSourceService>(
             *strand_, messenger_);
         sensorChannel_ = std::make_shared<aasdk::channel::sensorsource::SensorSourceService>(
@@ -479,25 +426,20 @@ void JniSession::stop()
     if (ioThread_.joinable()) ioThread_.join();
 
     // Notify Kotlin (only if onSessionStopped hasn't already been fired by triggerAbort)
-    bool attached;
-    JNIEnv* env = getEnv(attached);
-    if (env) {
-        std::lock_guard<std::mutex> lock(callbackMutex_);
-        if (callbackRef_) {
+    if (callbackRef_) {
+        bool attached;
+        JNIEnv* env = getEnv(attached);
+        if (env) {
             if (!sessionStoppedFired_.exchange(true) && cbMethods_.onSessionStopped) {
-                jstring reason = env->NewStringUTF("stopped");
-                if (reason) {
-                    env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
-                    env->DeleteLocalRef(reason);
-                    clearCallbackException(env, "onSessionStopped");
-                }
+                jstring reason = env->NewStringUTF(stopReason_.c_str());
+                env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
+                env->DeleteLocalRef(reason);
             }
-            callbacksClosed_ = true;
             env->DeleteGlobalRef(callbackRef_);
             callbackRef_ = nullptr;
         }
+        releaseEnv(attached);
     }
-    releaseEnv(attached);
     transport_.reset();
 }
 
@@ -580,7 +522,6 @@ void JniSession::onServiceDiscoveryRequest(
             LOGI("SDR sent Ã¢â‚¬â€ starting all service handlers");
             startAllHandlers();
             streaming_ = true;
-            emitNativeEvent(kNativeEventSessionStarted, "session_active");
             callVoidCallback(cbMethods_.onSessionStarted);
         },
         [this](const auto& e) { this->onChannelError(e); });
@@ -594,13 +535,23 @@ void JniSession::onAudioFocusRequest(
 {
     auto focus_type = request.audio_focus_type();
     logProtoRaw("AudioFocusReq", request);
-    // Be permissive here: the phone is the real media owner, and AAOS focus
-    // arbitration already happens locally through AudioFocusManager/AudioTrack
-    // usage attributes. Treating RELEASE as LOSS can make some phone players
-    // pause immediately after first connection, then bounce when focus is
-    // re-granted during audio setup. The old Kotlin direct session always
-    // responded with GAIN; mirror that behavior for the JNI path.
-    auto state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_GAIN;
+    // Match bridge logic: map request type → response state
+    aap_protobuf::service::control::message::AudioFocusStateType state;
+    switch (focus_type) {
+        case aap_protobuf::service::control::message::AUDIO_FOCUS_GAIN:
+            state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_GAIN;
+            break;
+        case aap_protobuf::service::control::message::AUDIO_FOCUS_GAIN_TRANSIENT:
+        case aap_protobuf::service::control::message::AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK:
+            state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_GAIN_TRANSIENT;
+            break;
+        case aap_protobuf::service::control::message::AUDIO_FOCUS_RELEASE:
+            state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_LOSS;
+            break;
+        default:
+            state = aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_LOSS;
+            break;
+    }
     LOGI("Audio focus request: type=%d → state=%d", (int)focus_type, (int)state);
 
     aap_protobuf::service::control::message::AudioFocusNotification response;
@@ -645,15 +596,35 @@ void JniSession::onNavigationFocusRequest(
 }
 
 void JniSession::onByeByeRequest(
-    const aap_protobuf::service::control::message::ByeByeRequest& /*request*/)
+    const aap_protobuf::service::control::message::ByeByeRequest& request)
 {
-    LOGI("ByeBye request Ã¢â‚¬â€ disconnecting");
+    const char* reasonStr = "byebye_unknown";
+    switch (request.reason()) {
+        case aap_protobuf::service::control::message::USER_SELECTION:
+            reasonStr = "byebye_user_selection"; break;
+        case aap_protobuf::service::control::message::DEVICE_SWITCH:
+            reasonStr = "byebye_device_switch"; break;
+        case aap_protobuf::service::control::message::NOT_SUPPORTED:
+            reasonStr = "byebye_not_supported"; break;
+        case aap_protobuf::service::control::message::NOT_CURRENTLY_SUPPORTED:
+            reasonStr = "byebye_not_currently_supported"; break;
+        case aap_protobuf::service::control::message::PROBE_SUPPORTED:
+            reasonStr = "byebye_probe_supported"; break;
+        default: break;
+    }
+    LOGI("ByeBye request reason=%d (%s) - disconnecting",
+         static_cast<int>(request.reason()), reasonStr);
+    stopReason_ = reasonStr;
     aap_protobuf::service::control::message::ByeByeResponse response;
     auto promise = aasdk::channel::SendPromise::defer(*strand_);
-    promise->then([this]() { stop(); }, [this](const auto&) { stop(); });
+    // See onVideoFocusRequest: stop() joins ioThread_, so detach it to avoid
+    // joining the thread we're running on.
+    auto self = shared_from_this();
+    promise->then(
+        [self]() { std::thread([self] { self->stop(); }).detach(); },
+        [self](const auto&) { std::thread([self] { self->stop(); }).detach(); });
     controlChannel_->sendShutdownResponse(response, std::move(promise));
 }
-
 void JniSession::onByeByeResponse(
     const aap_protobuf::service::control::message::ByeByeResponse& /*response*/)
 {
@@ -767,21 +738,16 @@ void JniSession::triggerAbort(const std::string& reason)
     if (transport_) transport_->stop();
 
     if (sessionStoppedFired_.exchange(true)) return;
-    emitNativeEvent(kNativeEventSessionStopped, reason);
-    bool attached;
-    JNIEnv* env = getEnv(attached);
-    if (env) {
-        std::lock_guard<std::mutex> lock(callbackMutex_);
-        if (!callbacksClosed_ && callbackRef_ && cbMethods_.onSessionStopped) {
+    if (callbackRef_ && cbMethods_.onSessionStopped) {
+        bool attached;
+        JNIEnv* env = getEnv(attached);
+        if (env) {
             jstring r = env->NewStringUTF(reason.c_str());
-            if (r) {
-                env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, r);
-                env->DeleteLocalRef(r);
-                clearCallbackException(env, "onSessionStopped");
-            }
+            env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, r);
+            env->DeleteLocalRef(r);
         }
+        releaseEnv(attached);
     }
-    releaseEnv(attached);
 }
 
 void JniSession::onChannelError(const aasdk::error::Error& e)
@@ -822,20 +788,13 @@ void JniSession::reportChannelError(const char* channelName, const aasdk::error:
              channelName, e.what(), totalInWindow);
     }
 
-    if (shouldLog) {
-        emitNativeEvent(kNativeEventError, e.what());
+    if (cbMethods_.onError && callbackRef_ && shouldLog) {
         bool attached;
         JNIEnv* env = getEnv(attached);
         if (env) {
-            std::lock_guard<std::mutex> lock(callbackMutex_);
-            if (!callbacksClosed_ && callbackRef_ && cbMethods_.onError) {
-                jstring msg = env->NewStringUTF(e.what());
-                if (msg) {
-                    env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
-                    env->DeleteLocalRef(msg);
-                    clearCallbackException(env, "onError");
-                }
-            }
+            jstring msg = env->NewStringUTF(e.what());
+            env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
+            env->DeleteLocalRef(msg);
         }
         releaseEnv(attached);
     }
@@ -866,31 +825,29 @@ void JniSession::onChannelOpenRequest(
 void JniSession::onMediaChannelSetupRequest(
     const aap_protobuf::service::media::shared::message::Setup& request)
 {
-    LOGI("Video setup from phone: type=%d (3=H264 5=VP9 6=AV1 7=H265)", request.type());
+    LOGI("Video setup from phone: type=%d (0=H264 1=H265 2=VP9)", request.type());
     logProtoRaw("VideoSetup", request);
     negotiatedCodecType_ = request.type();
 
     // Notify Kotlin of the negotiated codec type so the decoder configures correctly
-    emitNativeEvent(kNativeEventVideoCodecConfigured, std::to_string(request.type()));
-    bool attached;
-    JNIEnv* env = getEnv(attached);
-    if (env) {
-        std::lock_guard<std::mutex> lock(callbackMutex_);
-        if (!callbacksClosed_ && callbackRef_ && cbMethods_.onVideoCodecConfigured) {
+    if (cbMethods_.onVideoCodecConfigured && callbackRef_) {
+        bool attached;
+        JNIEnv* env = getEnv(attached);
+        if (env) {
             env->CallVoidMethod(callbackRef_, cbMethods_.onVideoCodecConfigured,
                                 static_cast<jint>(request.type()));
-            clearCallbackException(env, "onVideoCodecConfigured");
         }
+        releaseEnv(attached);
     }
-    releaseEnv(attached);
 
     aap_protobuf::service::media::shared::message::Config config;
     config.set_status(aap_protobuf::service::media::shared::message::Config::STATUS_READY);
     config.set_max_unacked(30);
     if (sdrConfig_.autoNegotiate) {
-        // Auto mode: accept all configurations
-        // SDR has 5 H.265 + 3 VP9 + 3 H.264 = 11 total
-        for (int i = 0; i < 11; i++) {
+        // Auto mode: accept every config we advertised.
+        int n = advertisedVideoConfigCount_.load();
+        if (n <= 0) n = 1;
+        for (int i = 0; i < n; i++) {
             config.add_configuration_indices(i);
         }
     } else {
@@ -903,7 +860,10 @@ void JniSession::onMediaChannelSetupRequest(
 
     // Send VIDEO_FOCUS_PROJECTED immediately after setup — the phone's
     // ProjectionWindowManager waits for this before it can start projection.
-    LOGI("Sending VIDEO_FOCUS_PROJECTED after setup");
+    // unsolicited=true: we're declaring our state proactively (not in reply).
+    currentVideoFocus_.store(
+        aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
+    LOGI("Sending VIDEO_FOCUS_PROJECTED after setup (unsolicited)");
     aap_protobuf::service::media::video::message::VideoFocusNotification focus;
     focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
     focus.set_unsolicited(true);
@@ -920,8 +880,9 @@ void JniSession::onMediaChannelStartIndication(
     LOGI("Video stream starting: session=%d config_idx=%d",
          indication.session_id(), indication.configuration_index());
     logProtoRaw("VideoStart", indication);
-    videoSessionId_.store(indication.session_id());
 
+    currentVideoFocus_.store(
+        aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
     aap_protobuf::service::media::video::message::VideoFocusNotification focus;
     focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
     focus.set_unsolicited(false);
@@ -936,7 +897,6 @@ void JniSession::onMediaChannelStopIndication(
     const aap_protobuf::service::media::shared::message::Stop& /*indication*/)
 {
     LOGI("Video stream stopping");
-    videoSessionId_.store(0);
     videoChannel_->receive(shared_from_this());
 }
 
@@ -946,7 +906,7 @@ void JniSession::onMediaWithTimestampIndication(
 {
     // Hot path Ã¢â‚¬â€ video frame. Send ACK immediately (flow control).
     aap_protobuf::service::media::source::message::Ack ack;
-    ack.set_session_id(videoSessionId_.load());
+    ack.set_session_id(0);
     ack.set_ack(1);
     auto promise = aasdk::channel::SendPromise::defer(*strand_);
     promise->then([]() {}, [](const auto&) {});
@@ -986,7 +946,7 @@ void JniSession::onMediaWithTimestampIndication(
                 uint8_t hevcNalType = (d[nalStart] >> 1) & 0x3F;
                 if (hevcNalType >= 16 && hevcNalType <= 21) isKeyFrame = true;
                 if (hevcNalType == 32 || hevcNalType == 33 || hevcNalType == 34) isCodecConfig = true;
-            } else if (codec == 3) {
+            } else {
                 uint8_t nalType = d[nalStart] & 0x1F;
                 if (nalType == 5) isKeyFrame = true;
                 if (nalType == 7 || nalType == 8) isCodecConfig = true;
@@ -995,16 +955,6 @@ void JniSession::onMediaWithTimestampIndication(
             if (isKeyFrame && isCodecConfig) break;
             pos = nalStart + 1;
         }
-    }
-    if (codec == 5 && buffer.size >= 1) {
-        // VP9 raw frame header: frame marker must be 2, show_existing_frame=0,
-        // and frame_type=0 for keyframes. This covers the common AA profile 0
-        // stream and avoids relying on H.264/H.265 NAL parsing for VP9.
-        const uint8_t first = buffer.cdata[0];
-        const bool frameMarkerOk = (first & 0xC0) == 0x80;
-        const bool showExistingFrame = (first & 0x08) != 0;
-        const bool interFrame = (first & 0x04) != 0;
-        isKeyFrame = frameMarkerOk && !showExistingFrame && !interFrame;
     }
 
     // Build flags matching VideoFrame.FLAG_* constants
@@ -1016,15 +966,6 @@ void JniSession::onMediaWithTimestampIndication(
     if (isKeyFrame && isCodecConfig) {
         LOGI("Video frame: combined config+keyframe detected (%zu bytes, codec=%d)",
              buffer.size, codec);
-    }
-    if (isKeyFrame) {
-        const int64_t requestedAt = keyframeRequestedAtMs_.exchange(0);
-        if (requestedAt > 0) {
-            const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count();
-            LOGI("Video keyframe received %lld ms after request (%zu bytes, codec=%d)",
-                 static_cast<long long>(nowMs - requestedAt), buffer.size, codec);
-        }
     }
 
     // Dispatch to Kotlin
@@ -1054,9 +995,59 @@ void JniSession::onMediaIndication(const aasdk::common::DataConstBuffer& buffer)
 }
 
 void JniSession::onVideoFocusRequest(
-    const aap_protobuf::service::media::video::message::VideoFocusRequestNotification& /*request*/)
+    const aap_protobuf::service::media::video::message::VideoFocusRequestNotification& request)
 {
-    LOGI("Video focus request from phone");
+    int mode = request.has_mode() ? static_cast<int>(request.mode()) : -1;
+    int reason = request.has_reason() ? static_cast<int>(request.reason()) : -1;
+    LOGI("Video focus request from phone: mode=%d reason=%d "
+         "(focus 1=PROJECTED 2=NATIVE 3=NATIVE_TRANSIENT; "
+         "reason 1=PHONE_SCREEN_OFF 2=LAUNCH_NATIVE)", mode, reason);
+
+    // VIDEO_FOCUS_NATIVE = user tapped "Exit" in the AA app launcher on the
+    // phone (the phone never sends ByeBye for this; it just asks us to show
+    // our native UI). Mirror headunit-revived's AapControl.kt behavior: ack
+    // with NATIVE focus, mark this as a user exit, and tear down the session.
+    // The Kotlin onSessionStopped("byebye_user_selection") handler then drives
+    // MainActivity to finishAndRemoveTask() (returns AAOS to its launcher).
+    if (mode == static_cast<int>(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE)) {
+        LOGI("VIDEO_FOCUS_NATIVE received - treating as user Exit, stopping session");
+        currentVideoFocus_.store(
+            aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
+        aap_protobuf::service::media::video::message::VideoFocusNotification focus;
+        focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_NATIVE);
+        focus.set_unsolicited(false);
+        auto promise = aasdk::channel::SendPromise::defer(*strand_);
+        // stop() joins ioThread_; if we called it directly from this promise
+        // callback we'd be joining the thread we're running on (UB / silent
+        // abort — observed: the Kotlin onSessionStopped JNI call never fires,
+        // so cluster teardown is skipped). Detach onto a worker so stop() can
+        // safely join the io_thread.
+        auto self = shared_from_this();
+        promise->then(
+            [self]() {
+                self->stopReason_ = "byebye_user_selection";
+                std::thread([self] { self->stop(); }).detach();
+            },
+            [self](const auto&) {
+                self->stopReason_ = "byebye_user_selection";
+                std::thread([self] { self->stop(); }).detach();
+            });
+        videoChannel_->sendVideoFocusIndication(focus, std::move(promise));
+        return;
+    }
+
+    // PROJECTED / NATIVE_TRANSIENT (e.g. day/night theme transitions, phone
+    // screen off) — keep projecting. Reply with our current focus state.
+    int reply = currentVideoFocus_.load();
+    LOGI("Replying with current focus=%d", reply);
+    aap_protobuf::service::media::video::message::VideoFocusNotification focus;
+    focus.set_focus(
+        static_cast<aap_protobuf::service::media::video::message::VideoFocusMode>(reply));
+    focus.set_unsolicited(false);
+    auto promise = aasdk::channel::SendPromise::defer(*strand_);
+    promise->then([]() {}, [this](const auto& e) { this->onChannelError(e); });
+    videoChannel_->sendVideoFocusIndication(focus, std::move(promise));
+
     videoChannel_->receive(shared_from_this());
 }
 
@@ -1083,10 +1074,6 @@ void JniSession::startAllHandlers()
     systemAudioHandler_ = std::make_shared<JniAudioSinkHandler>(
         *strand_, systemAudioChannel_, *this, JniAudioSinkHandler::AudioType::System);
     systemAudioHandler_->start();
-
-    // Telephony audio disabled — crashes AA without BT HFP
-    // telephonyAudioHandler_ = ...
-    // telephonyAudioHandler_->start();
 
     // Sensor handler
     sensorHandler_ = std::make_shared<JniSensorHandler>(*strand_, sensorChannel_, *this);
@@ -1194,26 +1181,53 @@ void JniSession::buildServiceDiscoveryResponse(
     { auto* svc = response.add_channels();
       svc->set_id(2); // VIDEO — Java uses 2 (MEDIA_SINK), works with localhost proxy
       auto* ms = svc->mutable_media_sink_service();
-      auto primaryVideoCodec = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265;
-      if (!sdrConfig_.autoNegotiate) {
-          if (sdrConfig_.videoCodec == "h264") {
-              primaryVideoCodec = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP;
-          } else if (sdrConfig_.videoCodec == "vp9") {
-              primaryVideoCodec = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_VP9;
-          }
-      }
-      ms->set_available_type(primaryVideoCodec);
+      ms->set_available_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
       ms->set_available_while_in_call(true);
 
       using VRes = aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
       using VFps = aap_protobuf::service::media::sink::message::VideoFrameRateType;
-      auto res = VRes::VIDEO_1920x1080;
-      if (sdrConfig_.videoHeight <= 480) res = VRes::VIDEO_800x480;
-      else if (sdrConfig_.videoHeight <= 720) res = VRes::VIDEO_1280x720;
-      else if (sdrConfig_.videoHeight <= 1080) res = VRes::VIDEO_1920x1080;
-      else if (sdrConfig_.videoHeight <= 1440) res = VRes::VIDEO_2560x1440;
-      else res = VRes::VIDEO_3840x2160;
       auto fps = sdrConfig_.videoFps >= 60 ? VFps::VIDEO_FPS_60 : VFps::VIDEO_FPS_30;
+
+      // Codec frame size for each VRes enum value. Index 0 unused. 1-5 land-
+      // scape tiers, 6-9 portrait variants of 720p/1080p/1440p/4K.
+      struct CodecDims { int w, h; };
+      static constexpr CodecDims kDims[] = {
+          {0, 0},                 // 0 unused
+          {800, 480},             // 1 VIDEO_800x480
+          {1280, 720},            // 2 VIDEO_1280x720
+          {1920, 1080},           // 3 VIDEO_1920x1080
+          {2560, 1440},           // 4 VIDEO_2560x1440
+          {3840, 2160},           // 5 VIDEO_3840x2160
+          {720, 1280},            // 6 VIDEO_720x1280
+          {1080, 1920},           // 7 VIDEO_1080x1920
+          {1440, 2560},           // 8 VIDEO_1440x2560
+          {2160, 3840},           // 9 VIDEO_2160x3840
+      };
+
+      // Auto-margin: pick wm/hm so the inner content rect of the codec
+      // frame has the same aspect ratio as the panel. Renderer then zooms
+      // and clips the margin pixels off-screen → uniform square-pixel scale.
+      // Returns (wm, hm). Both 0 when codec aspect already matches panel.
+      auto autoMargins = [&](int codecW, int codecH) -> std::pair<int,int> {
+          if (sdrConfig_.panelWidth <= 0 || sdrConfig_.panelHeight <= 0) {
+              return {0, 0};
+          }
+          double codecAR = static_cast<double>(codecW) / codecH;
+          double panelAR = static_cast<double>(sdrConfig_.panelWidth) /
+                           sdrConfig_.panelHeight;
+          if (std::abs(codecAR - panelAR) / panelAR < 0.005) return {0, 0};
+          if (codecAR > panelAR) {
+              // Codec wider than panel → trim left/right
+              int innerW = static_cast<int>(std::lround(codecH * panelAR));
+              int wm = std::max(0, codecW - innerW);
+              return {wm, 0};
+          } else {
+              // Codec taller than panel → trim top/bottom
+              int innerH = static_cast<int>(std::lround(codecW / panelAR));
+              int hm = std::max(0, codecH - innerH);
+              return {0, hm};
+          }
+      };
 
       bool hasSafeArea = sdrConfig_.safeAreaTop > 0 || sdrConfig_.safeAreaBottom > 0 ||
                          sdrConfig_.safeAreaLeft > 0 || sdrConfig_.safeAreaRight > 0;
@@ -1227,73 +1241,135 @@ void JniSession::buildServiceDiscoveryResponse(
           }
       };
 
-      auto applyCommonVideoFields = [&](auto* vc) {
-          if (sdrConfig_.marginWidth > 0) vc->set_width_margin(sdrConfig_.marginWidth);
-          if (sdrConfig_.marginHeight > 0) vc->set_height_margin(sdrConfig_.marginHeight);
+      auto applyVideoConfig = [&](auto* vc, int tier) {
+          // Margins:
+          //  - autoMargins=true (default): compute from panel AR per tier.
+          //  - autoMargins=false: send literal user-set marginWidth/Height
+          //    (0 = no margins, decoder stretches full codec frame).
+          int wm = 0;
+          int hm = 0;
+          if (sdrConfig_.autoMargins) {
+              auto pr = autoMargins(kDims[tier].w, kDims[tier].h);
+              wm = pr.first;
+              hm = pr.second;
+          } else {
+              wm = sdrConfig_.marginWidth;
+              hm = sdrConfig_.marginHeight;
+          }
+          if (wm > 0) vc->set_width_margin(wm);
+          if (hm > 0) vc->set_height_margin(hm);
+          // Mirror GM: split the margin half/half via UiConfig.margins so
+          // the phone centers its UI inside the inner rect. Without this,
+          // the phone is free to place the entire margin on one side
+          // (observed: bottom-only) which doesn't match our renderer's
+          // centred zoom-and-clip and looks "shifted".
+          if (wm > 0 || hm > 0) {
+              auto* margins = vc->mutable_ui_config()->mutable_margins();
+              if (wm > 0) {
+                  margins->set_left(wm / 2);
+                  margins->set_right((wm + 1) / 2);
+              }
+              if (hm > 0) {
+                  margins->set_top(hm / 2);
+                  margins->set_bottom((hm + 1) / 2);
+              }
+          }
           if (sdrConfig_.pixelAspectE4 > 0) vc->set_pixel_aspect_ratio_e4(sdrConfig_.pixelAspectE4);
           if (sdrConfig_.realDensity > 0) vc->set_real_density(sdrConfig_.realDensity);
+          if (sdrConfig_.viewingDistanceMm > 0) vc->set_viewing_distance(sdrConfig_.viewingDistanceMm);
+          if (sdrConfig_.decoderAdditionalDepth > 0) vc->set_decoder_additional_depth(sdrConfig_.decoderAdditionalDepth);
           applySafeArea(vc);
       };
 
+      auto computeDensity = [&](int tier) -> int {
+          if (sdrConfig_.targetLayoutWidthDp > 0) {
+              int dpi = (kDims[tier].w * 160) / sdrConfig_.targetLayoutWidthDp;
+              return std::max(dpi, 80);
+          }
+          return sdrConfig_.videoDpi;
+      };
+
       if (sdrConfig_.autoNegotiate) {
-          // Auto mode: H.265 at all tiers, VP9 at high tiers, then H.264 fallback
-          // Landscape tier pixel widths indexed by VRes enum (1-5)
-          static constexpr int tierWidths[] = {0, 800, 1280, 1920, 2560, 3840};
-          int tiers[] = {5, 4, 3, 2, 1};
-          for (int t : tiers) {
+          // Auto mode: advertise multiple resolution tiers for the user's
+          // chosen codec only. We do NOT mix H.264 + H.265 in the same SDR:
+          // the phone picks the first acceptable config, which historically
+          // meant H.265 always won and triggered the ~30-60s "green startup"
+          // from tiny seed IDRs. By advertising only one codec, the phone is
+          // forced into that family.
+          //
+          // Codec preference (videoCodec):
+          //   "h264" (default, recommended) → safe, instant clean startup, capped at 1080p
+          //   "h265"                        → up to 4K, but tolerates green-startup window
+          //   else → fall back to h264
+          //
+          // Mirrors GM's GALDisplayManager.getVideoConfigList() which only
+          // ever advertises H.264 BP at [1920x1080, 1280x720, 800x480].
+          bool useH265 = (sdrConfig_.videoCodec == "h265" ||
+                          sdrConfig_.videoCodec == "hevc");
+          bool portrait = (sdrConfig_.panelWidth > 0 &&
+                           sdrConfig_.panelHeight > 0 &&
+                           sdrConfig_.panelWidth < sdrConfig_.panelHeight);
+          // Tier order: largest-to-smallest. Phone iterates and picks the
+          // first it accepts. H.264 BP is reliable up to 1080p; H.265 is
+          // needed for 1440p / 4K.
+          int tiers[5];
+          int tierCount;
+          auto codecType = useH265
+              ? aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265
+              : aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP;
+          if (useH265) {
+              if (portrait) {
+                  tiers[0] = 9; tiers[1] = 8; tiers[2] = 7; tiers[3] = 6;
+                  tierCount = 4;
+              } else {
+                  tiers[0] = 5; tiers[1] = 4; tiers[2] = 3; tiers[3] = 2; tiers[4] = 1;
+                  tierCount = 5;
+              }
+          } else {
+              // H.264 BP: cap at 1080p. Match GM exactly for landscape.
+              if (portrait) {
+                  tiers[0] = 7; tiers[1] = 6;
+                  tierCount = 2;
+              } else {
+                  tiers[0] = 3; tiers[1] = 2; tiers[2] = 1;  // 1080p, 720p, 480p
+                  tierCount = 3;
+              }
+          }
+          LOGI("Auto SDR: codec=%s tiers=%d portrait=%d",
+               useH265 ? "H.265" : "H.264 BP", tierCount, portrait ? 1 : 0);
+          for (int i = 0; i < tierCount; ++i) {
+              int t = tiers[i];
               auto* vc = ms->add_video_configs();
               vc->set_codec_resolution(static_cast<VRes>(t));
               vc->set_frame_rate(fps);
-              if (sdrConfig_.targetLayoutWidthDp > 0) {
-                  // Per-tier DPI: scale so each tier produces the same dp width
-                  int dpi = (tierWidths[t] * 160) / sdrConfig_.targetLayoutWidthDp;
-                  vc->set_density(std::max(dpi, 80));
-              } else {
-                  vc->set_density(sdrConfig_.videoDpi);
-              }
-              vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265);
-              applyCommonVideoFields(vc);
+              vc->set_density(computeDensity(t));
+              vc->set_video_codec_type(codecType);
+              applyVideoConfig(vc, t);
           }
-          for (int t : {5, 4, 3}) {
-              auto* vc = ms->add_video_configs();
-              vc->set_codec_resolution(static_cast<VRes>(t));
-              vc->set_frame_rate(fps);
-              if (sdrConfig_.targetLayoutWidthDp > 0) {
-                  int dpi = (tierWidths[t] * 160) / sdrConfig_.targetLayoutWidthDp;
-                  vc->set_density(std::max(dpi, 80));
-              } else {
-                  vc->set_density(sdrConfig_.videoDpi);
-              }
-              vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_VP9);
-              applyCommonVideoFields(vc);
-          }
-          for (int t : {3, 2, 1}) {
-              auto* vc = ms->add_video_configs();
-              vc->set_codec_resolution(static_cast<VRes>(t));
-              vc->set_frame_rate(fps);
-              if (sdrConfig_.targetLayoutWidthDp > 0) {
-                  int dpi = (tierWidths[t] * 160) / sdrConfig_.targetLayoutWidthDp;
-                  vc->set_density(std::max(dpi, 80));
-              } else {
-                  vc->set_density(sdrConfig_.videoDpi);
-              }
-              vc->set_video_codec_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP);
-              applyCommonVideoFields(vc);
-          }
+          advertisedVideoConfigCount_.store(tierCount);
       } else {
-          // Manual mode: single config at the selected resolution and codec
-          auto codecType = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265;
-          if (sdrConfig_.videoCodec == "h264") {
-              codecType = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP;
-          } else if (sdrConfig_.videoCodec == "vp9") {
-              codecType = aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_VP9;
+          // Manual mode: single config at the selected resolution and codec.
+          // Pick tier by exact W×H match against kDims (supports all 9 enum
+          // values). Falls back to landscape 1080p if the requested combo
+          // isn't a known AA enum value.
+          int tier = 3;  // fallback VIDEO_1920x1080
+          for (int i = 1; i <= 9; ++i) {
+              if (kDims[i].w == sdrConfig_.videoWidth &&
+                  kDims[i].h == sdrConfig_.videoHeight) {
+                  tier = i;
+                  break;
+              }
           }
+          auto codecType = (sdrConfig_.videoCodec == "h264")
+              ? aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H264_BP
+              : aap_protobuf::service::media::shared::message::MEDIA_CODEC_VIDEO_H265;
           auto* vc = ms->add_video_configs();
-          vc->set_codec_resolution(res);
+          vc->set_codec_resolution(static_cast<VRes>(tier));
           vc->set_frame_rate(fps);
-          vc->set_density(sdrConfig_.videoDpi);
+          vc->set_density(computeDensity(tier));
           vc->set_video_codec_type(codecType);
-          applyCommonVideoFields(vc);
+          applyVideoConfig(vc, tier);
+          advertisedVideoConfigCount_.store(1);
       }
     }
 
@@ -1330,16 +1406,8 @@ void JniSession::buildServiceDiscoveryResponse(
       ac->set_sampling_rate(16000); ac->set_number_of_bits(16); ac->set_number_of_channels(1);
     }
 
-    // ---- Telephony audio (16kHz mono) — disabled: crashes AA without BT HFP ----
-    // { auto* svc = response.add_channels();
-    //   svc->set_id(static_cast<int32_t>(aasdk::messenger::ChannelId::MEDIA_SINK_TELEPHONY_AUDIO));
-    //   auto* ms = svc->mutable_media_sink_service();
-    //   ms->set_available_type(aap_protobuf::service::media::shared::message::MEDIA_CODEC_AUDIO_PCM);
-    //   ms->set_audio_type(aap_protobuf::service::media::sink::message::AUDIO_STREAM_TELEPHONY);
-    //   ms->set_available_while_in_call(true);
-    //   auto* ac = ms->add_audio_configs();
-    //   ac->set_sampling_rate(16000); ac->set_number_of_bits(16); ac->set_number_of_channels(1);
-    // }
+    // NOTE: MEDIA_SINK_TELEPHONY_AUDIO intentionally not advertised — it is
+    // dead infrastructure in phone-side AA. See docs/aa-undocumented-features.md.
 
     // ---- Mic input (16kHz mono) ----
     { auto* svc = response.add_channels();
@@ -1401,7 +1469,7 @@ void JniSession::buildServiceDiscoveryResponse(
     { auto* svc = response.add_channels();
       svc->set_id(static_cast<int32_t>(aasdk::messenger::ChannelId::INPUT_SOURCE));
       auto* is = svc->mutable_input_source_service();
-      for (int kc : {5, 6, 19, 20, 21, 22, 23, 84, 85, 86, 87, 88, 89, 90, 126, 127}) {
+      for (int kc : {84, 85, 86, 87, 88, 89, 90, 126, 127}) {
           is->add_keycodes_supported(kc);
       }
       auto* ts = is->add_touchscreen();
@@ -1626,14 +1694,11 @@ void JniSession::sendMicAudio(const uint8_t* data, size_t length)
 void JniSession::requestKeyframe()
 {
     if (!streaming_ || !videoChannel_) return;
-    const auto requestedAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    keyframeRequestedAtMs_.store(requestedAtMs);
     ioService_->post([this]() {
         LOGI("Requesting keyframe (VideoFocusIndication)");
         aap_protobuf::service::media::video::message::VideoFocusNotification focus;
         focus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
-        focus.set_unsolicited(true);
+        focus.set_unsolicited(false);
         auto promise = aasdk::channel::SendPromise::defer(*strand_);
         promise->then([]() {}, [](const auto&) {});
         videoChannel_->sendVideoFocusIndication(focus, std::move(promise));
@@ -1682,8 +1747,6 @@ void JniSession::restartVideoStream()
 
             aap_protobuf::service::media::video::message::VideoFocusNotification startFocus;
             startFocus.set_focus(aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
-            // Treat as an unsolicited focus change; some phones appear to ignore
-            // solicited=false here, leaving video in a low-FPS/native-focus state.
             startFocus.set_unsolicited(true);
             auto startPromise = aasdk::channel::SendPromise::defer(*self->strand_);
             startPromise->then([]() {}, [self](const auto& e) { self->onChannelError(e); });

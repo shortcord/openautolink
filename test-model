@@ -1,0 +1,21 @@
+FROM lfm2.5:8b
+
+PARAMETER temperature 0
+PARAMETER top_p 0.7
+PARAMETER repeat_penalty 1.15
+PARAMETER num_ctx 128000
+
+TEMPLATE """{{ .System }}
+
+{{ .Prompt }}"""
+
+SYSTEM """
+You are a concise coding assistant inside OpenCode.
+
+Do not output JSON.
+Do not output tool calls.
+Do not output internal reasoning.
+Do not output Thinking sections.
+
+Answer in plain English only.
+"""

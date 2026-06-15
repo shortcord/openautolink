@@ -1,0 +1,12 @@
+<api type="debug" assembly-name="OpenAutoLink.CarApp" mvid="13294f2aa65a4cd48c13748fdf798cfd">
+  <java-to-managed>
+    <entry java-name="crc644f562033b1739e14/MainActivity" managed-name="OpenAutoLink.CarApp.MainActivity, OpenAutoLink.CarApp" managed-type-token-id="33554434" />
+    <entry java-name="crc644f562033b1739e14/MainActivity_ClickListener" managed-name="OpenAutoLink.CarApp.MainActivity+ClickListener, OpenAutoLink.CarApp" managed-type-token-id="33554438" />
+    <entry java-name="crc644f562033b1739e14/OalApplication" managed-name="OpenAutoLink.CarApp.OalApplication, OpenAutoLink.CarApp" managed-type-token-id="33554435" />
+  </java-to-managed>
+  <managed-to-java>
+    <entry java-name="crc644f562033b1739e14/MainActivity" managed-name="OpenAutoLink.CarApp.MainActivity, OpenAutoLink.CarApp" managed-type-token-id="33554434" />
+    <entry java-name="crc644f562033b1739e14/MainActivity_ClickListener" managed-name="OpenAutoLink.CarApp.MainActivity+ClickListener, OpenAutoLink.CarApp" managed-type-token-id="33554438" />
+    <entry java-name="crc644f562033b1739e14/OalApplication" managed-name="OpenAutoLink.CarApp.OalApplication, OpenAutoLink.CarApp" managed-type-token-id="33554435" />
+  </managed-to-java>
+</api>

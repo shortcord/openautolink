@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>OpenAutoLink.CarApp</RootNamespace>
+    <ApplicationId>com.openautolink.carapp.dotnet</ApplicationId>
+    <ApplicationTitle>OpenAutoLink .NET</ApplicationTitle>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
+    <SupportedOSPlatformVersion>32</SupportedOSPlatformVersion>
+    <AndroidManifest>AndroidManifest.xml</AndroidManifest>
+    <RuntimeIdentifier>android-x64</RuntimeIdentifier>
+    <RuntimeIdentifiers>android-x64</RuntimeIdentifiers>
+    <AndroidPackageFormats>apk</AndroidPackageFormats>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenAutoLink.Core\OpenAutoLink.Core.csproj" />
+  </ItemGroup>
+</Project>

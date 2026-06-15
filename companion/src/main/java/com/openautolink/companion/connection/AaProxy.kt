@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * Local TCP proxy that relays Android Auto protocol data between the AA
  * app on this phone (connected via localhost) and the car (connected via
- * a pre-connected NearbySocket or remote TCP).
+ * a pre-existing TCP socket from [TcpAdvertiser]).
  *
  * Note: preConnectedSocket is used for exactly one bridge session.
  * If AA reconnects, the proxy must be recreated with a new socket.
@@ -45,13 +45,25 @@ class AaProxy(
 
     @Volatile
     private var activeCarSocket: Socket? = null
-    @Volatile
-    private var activeAaSocket: Socket? = null
     private val activeBridges = AtomicInteger(0)
     private var bridgeUsed = false
 
     /** Returns true if at least one AA bridge is active (AA connected and streaming). */
     fun hasActiveBridge(): Boolean = activeBridges.get() > 0
+
+    @Volatile private var pendingCarSocket: Socket? = null
+
+    /**
+     * Replace the car-side socket used for the next bridge session.
+     * Safe to call while waiting for AA to connect (no active bridge).
+     * If a bridge is already active this is a no-op — the active session
+     * owns its socket until it completes.
+     */
+    fun updateCarSocket(newCarSocket: Socket) {
+        if (activeBridges.get() > 0) return  // active bridge owns its socket
+        pendingCarSocket = newCarSocket
+        CompanionLog.d(TAG, "Car socket updated (pending AA connect)")
+    }
 
     /** Start the proxy server. Returns the localhost port AA should connect to. */
     fun start(): Int {
@@ -83,22 +95,25 @@ class AaProxy(
     private fun launchBridge(aaSocket: Socket) {
         scope.launch {
             var carSocket: Socket? = null
-            var bridgeStarted = false
+            var bridgeActive = false
             try {
-                if (bridgeUsed) {
-                    CompanionLog.w(TAG, "Rejecting extra AA connection for one-shot proxy")
-                    runCatching { aaSocket.close() }
-                    return@launch
-                }
-                bridgeUsed = true
-                activeBridges.incrementAndGet()
-                bridgeStarted = true
-                listener?.onConnected()
-
-                carSocket = preConnectedSocket
-                    ?: throw IllegalStateException("No pre-connected socket available")
+                // Use the most-recently-updated car socket (from a reconnect
+                // while waiting for AA), falling back to the original socket.
+                // Pre-warm path: if AA connected to the proxy BEFORE the car
+                // (i.e. we started the proxy proactively on BT-connect and AA
+                // came up before the car ignition's WiFi finished), no socket
+                // exists yet — wait briefly for one to arrive via
+                // updateCarSocket() rather than failing immediately.
+                carSocket = pendingCarSocket?.also { pendingCarSocket = null }
+                    ?: preConnectedSocket
+                    ?: awaitPendingCarSocket(PREWARM_CAR_WAIT_MS)
+                    ?: throw IllegalStateException(
+                        "No car socket within ${PREWARM_CAR_WAIT_MS}ms — AA connected but no car ready"
+                    )
                 activeCarSocket = carSocket
-                activeAaSocket = aaSocket
+                activeBridges.incrementAndGet()
+                bridgeActive = true
+                listener?.onConnected()
 
                 CompanionLog.i(TAG, "Bridge established: AA <-> Car")
 
@@ -107,28 +122,42 @@ class AaProxy(
                 val carIn = carSocket.getInputStream()
                 val carOut = carSocket.getOutputStream()
 
-                val closeBoth = {
-                    runCatching { aaSocket.close() }
-                    runCatching { carSocket.close() }
-                }
                 val job1 = launch { pump(aaIn, carOut, "AA->Car") }
                 val job2 = launch { pump(carIn, aaOut, "Car->AA") }
-                job1.invokeOnCompletion { closeBoth() }
-                job2.invokeOnCompletion { closeBoth() }
                 joinAll(job1, job2)
             } catch (e: Exception) {
                 CompanionLog.e(TAG, "Bridge error: ${e.message}")
             } finally {
                 CompanionLog.i(TAG, "Bridge closed")
                 activeCarSocket = null
-                activeAaSocket = null
                 runCatching { aaSocket.close() }
-                runCatching { carSocket?.close() }
-                if (bridgeStarted && activeBridges.decrementAndGet() <= 0) {
+                // Don't close carSocket here — let the TcpAdvertiser manage it via cleanup()
+                if (bridgeActive && activeBridges.decrementAndGet() <= 0) {
                     listener?.onDisconnected()
                 }
             }
         }
+    }
+
+    /**
+     * Pre-warm support: poll [pendingCarSocket] for up to [timeoutMs] in case
+     * AA has connected to the proxy before the car TCP arrived. Returns the
+     * car socket once it lands or null on timeout. Cheap polling at 50ms
+     * granularity — total cost over a full window is ~30 wakeups, negligible.
+     */
+    private suspend fun awaitPendingCarSocket(timeoutMs: Long): Socket? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        CompanionLog.i(TAG, "AA connected first (pre-warm) — waiting up to ${timeoutMs}ms for car")
+        while (System.currentTimeMillis() < deadline && isRunning) {
+            val s = pendingCarSocket
+            if (s != null) {
+                pendingCarSocket = null
+                CompanionLog.i(TAG, "Pre-warm: car socket arrived after AA")
+                return s
+            }
+            kotlinx.coroutines.delay(50)
+        }
+        return null
     }
 
     private suspend fun pump(input: InputStream, output: OutputStream, name: String) =
@@ -152,10 +181,6 @@ class AaProxy(
         if (wasRunning) {
             sendDisconnectSignal()
         }
-        runCatching { activeAaSocket?.close() }
-        activeAaSocket = null
-        runCatching { activeCarSocket?.close() }
-        activeCarSocket = null
         runCatching { serverSocket?.close() }
         serverSocket = null
         scope.cancel()
@@ -182,5 +207,10 @@ class AaProxy(
 
     companion object {
         private const val TAG = "OAL_Proxy"
+        /** Max time the bridge waits for a car socket when AA connected first
+         *  (pre-warm path). 30s comfortably covers car-side boot + WiFi join
+         *  on most vehicles; if no car arrives in that window we fail gracefully
+         *  and AA can retry. */
+        private const val PREWARM_CAR_WAIT_MS = 30_000L
     }
 }

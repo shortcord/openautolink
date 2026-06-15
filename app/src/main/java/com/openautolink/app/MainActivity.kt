@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ActivityInfo
-import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
@@ -37,7 +36,6 @@ class MainActivity : ComponentActivity() {
         Manifest.permission.POST_NOTIFICATIONS,
         Manifest.permission.BLUETOOTH_CONNECT,
         Manifest.permission.BLUETOOTH_SCAN,
-        Manifest.permission.NEARBY_WIFI_DEVICES,
     )
 
     private val permissionLauncher = registerForActivityResult(
@@ -69,6 +67,8 @@ class MainActivity : ComponentActivity() {
 
         // Observe display mode changes reactively — applies immediately when
         // the user changes the setting, no app restart needed.
+        // Re-sends app_hello so the bridge can recompute pixel_aspect for the
+        // new usable display area (system bars visible vs hidden).
         lifecycleScope.launch {
             prefs.displayMode.collectLatest { mode ->
                 applyDisplayMode(mode)
@@ -88,27 +88,141 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        handleUsbAttachIntent(intent)
+        // Seed SessionManager with the current AAOS day/night state even when
+        // no configuration change event has fired yet.
+        publishCurrentUiNightMode("onCreate")
+
+        // User tapped "Exit" in the AA app launcher on the phone. Background
+        // our app fully — both the MainActivity task and the hidden
+        // CarAppActivity task (templates host for cluster). User re-enters by
+        // tapping our icon in the AAOS launcher, which starts a fresh session.
+        lifecycleScope.launch {
+            com.openautolink.app.session.SessionManager.instanceOrNull()
+                ?.userExitEvents?.collect { handleUserExit() }
+        }
+    }
+
+    private fun handleUserExit() {
+        Log.i("MainActivity", "User exit from AA launcher — finishing all app tasks")
+
+        // First: tell Templates Host the cluster trip is over. This calls
+        // NavigationManager.navigationEnded() on the active cluster Session,
+        // causing Templates Host (a separate process) to dismiss its
+        // ClusterTurnCardActivity. Without this, the cluster display keeps
+        // its last frame visible after our process is gone.
+        try {
+            com.openautolink.app.cluster.ClusterMainSession.endActiveNavigation()
+        } catch (e: Exception) {
+            Log.w("MainActivity", "endActiveNavigation() failed: ${e.message}")
+        }
+
+        // Tear down the SessionManager. This calls ClusterManager.release()
+        // which disables the OalClusterService component — Templates Host
+        // then unbinds, our Session.onDestroy runs, and the cluster Activity
+        // is fully released.
+        try {
+            com.openautolink.app.session.SessionManager.instanceOrNull()?.stop()
+        } catch (e: Exception) {
+            Log.w("MainActivity", "SessionManager.stop() failed: ${e.message}")
+        }
+
+        val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        // Finish every task this app owns (MainActivity + CarAppActivity live
+        // in separate tasks because CarAppActivity has its own taskAffinity).
+        // finishAndRemoveTask drops them from recents, so the AAOS launcher
+        // reappears with no traces of our app.
+        try {
+            am.appTasks.forEach { task ->
+                try { task.finishAndRemoveTask() } catch (_: Exception) { }
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "appTasks enumeration failed: ${e.message}")
+        }
+        if (!isFinishing) finishAndRemoveTask()
     }
 
     override fun onResume() {
         super.onResume()
+        com.openautolink.app.diagnostics.DiagnosticLog.i("lifecycle", "MainActivity.onResume")
+        publishCurrentUiNightMode("onResume")
         // On AAOS, resume after car sleep leaves TCP sockets dead.
-        // Detect time gaps and force-reconnect stale connections.
-        com.openautolink.app.session.SessionManager.instanceOrNull()?.let { sessionManager ->
-            sessionManager.onSystemWake()
-            lifecycleScope.launch {
-                sessionManager.restartVideoStreamAfterAppFocusGain()
-            }
-        }
+        // SessionManager dedupes against the SCREEN_ON broadcast receiver
+        // (which empirically does not fire on this car) and emits a wake
+        // event observers can react to.
+        com.openautolink.app.session.SessionManager.instanceOrNull()?.onSystemWake()
     }
 
     override fun onPause() {
-        lifecycleScope.launch {
-            com.openautolink.app.session.SessionManager.instanceOrNull()
-                ?.closeVideoStreamForAppFocusLoss()
-        }
         super.onPause()
+        com.openautolink.app.diagnostics.DiagnosticLog.i("lifecycle", "MainActivity.onPause")
+        // Mirror onResume on the sleep side. Lets the next markWake compute
+        // gap from "going idle" rather than "last control message", which
+        // matters when streaming keeps lastActiveTimestamp fresh right up
+        // until the SoC suspends.
+        com.openautolink.app.session.SessionManager.instanceOrNull()?.onActivityPaused()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        com.openautolink.app.diagnostics.DiagnosticLog.i("lifecycle", "MainActivity.onStart")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        com.openautolink.app.diagnostics.DiagnosticLog.i("lifecycle", "MainActivity.onStop")
+    }
+
+    override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
+        super.onTopResumedActivityChanged(isTopResumedActivity)
+        com.openautolink.app.diagnostics.DiagnosticLog.i(
+            "lifecycle",
+            "MainActivity.onTopResumedActivityChanged: top=$isTopResumedActivity"
+        )
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        com.openautolink.app.diagnostics.DiagnosticLog.i(
+            "lifecycle",
+            "MainActivity.onWindowFocusChanged: focus=$hasFocus"
+        )
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val nightMask = newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        val nightStr = when (nightMask) {
+            android.content.res.Configuration.UI_MODE_NIGHT_YES -> "YES"
+            android.content.res.Configuration.UI_MODE_NIGHT_NO -> "NO"
+            android.content.res.Configuration.UI_MODE_NIGHT_UNDEFINED -> "UNDEFINED"
+            else -> "0x${Integer.toHexString(nightMask)}"
+        }
+        com.openautolink.app.diagnostics.DiagnosticLog.i(
+            "lifecycle",
+            "MainActivity.onConfigurationChanged: nightMode=$nightStr uiMode=0x${Integer.toHexString(newConfig.uiMode)} orient=${newConfig.orientation} ${newConfig.screenWidthDp}x${newConfig.screenHeightDp}dp"
+        )
+        if (nightMask == android.content.res.Configuration.UI_MODE_NIGHT_YES ||
+            nightMask == android.content.res.Configuration.UI_MODE_NIGHT_NO) {
+            val isNight = nightMask == android.content.res.Configuration.UI_MODE_NIGHT_YES
+            com.openautolink.app.session.SessionManager.instanceOrNull()?.onUiNightModeChanged(isNight)
+            com.openautolink.app.session.SessionManager.noteUiNightMode(isNight)
+        }
+    }
+
+    private fun publishCurrentUiNightMode(reason: String) {
+        val nightMask = resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        if (nightMask != android.content.res.Configuration.UI_MODE_NIGHT_YES &&
+            nightMask != android.content.res.Configuration.UI_MODE_NIGHT_NO
+        ) {
+            return
+        }
+        val isNight = nightMask == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        com.openautolink.app.session.SessionManager.noteUiNightMode(isNight)
+        com.openautolink.app.session.SessionManager.instanceOrNull()?.onUiNightModeChanged(isNight)
+        com.openautolink.app.diagnostics.DiagnosticLog.i(
+            "lifecycle",
+            "publishCurrentUiNightMode[$reason]: night=$isNight"
+        )
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -142,29 +256,6 @@ class MainActivity : ComponentActivity() {
             "input",
             "onNewIntent: action=${intent.action} extras=${intent.extras?.keySet()}"
         )
-        handleUsbAttachIntent(intent)
-    }
-
-    private fun handleUsbAttachIntent(intent: Intent?) {
-        if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
-
-        lifecycleScope.launch {
-            val prefs = AppPreferences.getInstance(this@MainActivity)
-            val transport = prefs.directTransport.first()
-            if (transport != "usb") {
-                com.openautolink.app.diagnostics.DiagnosticLog.i(
-                    "usb",
-                    "Ignoring USB attach intent because transport=$transport"
-                )
-                return@launch
-            }
-
-            com.openautolink.app.diagnostics.DiagnosticLog.i(
-                "usb",
-                "Handling USB attach intent for explicit USB transport"
-            )
-            ViewModelProvider(this@MainActivity)[ProjectionViewModel::class.java].connect()
-        }
     }
 
     private fun applyDisplayMode(mode: String) {

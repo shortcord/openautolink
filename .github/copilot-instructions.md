@@ -5,8 +5,8 @@
 Wireless Android Auto for AAOS head units. No external hardware required.
 
 ```
-Android Phone ──local WiFi/TCP────────▶ Car AAOS Head Unit
-                                          ├── Companion App (TCP proxy on :5277) → AA byte pipe
+Android Phone ──WiFi (car or phone hotspot)──▶ Car AAOS Head Unit
+                                          ├── Companion App (TCP :5277) → stream pipe
                                           ├── aasdk v1.6 (C++ JNI) → AA wire protocol
                                           ├── MediaCodec → video rendering
                                           ├── AudioTrack → 5-purpose audio
@@ -15,7 +15,7 @@ Android Phone ──local WiFi/TCP────────▶ Car AAOS Head Unit
 
 Two components:
 1. **App** (`app/`) — Kotlin/Compose AAOS app. Embeds aasdk C++ via JNI for AA protocol. Renders video/audio, forwards touch/GNSS/vehicle data
-2. **Companion** (`companion/`) — Phone-side app. Runs a foreground service with TCP discovery/listeners, launches Google AA locally, and proxies the AA byte stream to the car app
+2. **Companion** (`companion/`) — Phone-side app. Opens a TCP listener on port 5277 over the shared WiFi (Car Hotspot or Phone Hotspot) and pipes the AA session to the car app
 
 > **Historical**: Bridge mode (SBC hardware) is preserved on the `bridge-mode` branch. Bridge code in `bridge/` is reference only on this branch.
 
@@ -27,9 +27,9 @@ Two components:
 2. **Stable streaming**: Zero dropped audio, minimal dropped video frames, immediate touch response. The car experience must feel native, not remote
 3. **Seamless reconnection**: This is critical due to how cars work:
    - When the car "turns off", the AAOS head unit enters sleep/suspend — the app remains in memory at its last state
-   - When the car turns back on, the app wakes up having lost its WiFi/TCP connection
+   - When the car turns back on, the app wakes up having lost its WiFi/TCP connections
    - The app must retry patiently with a clean UI state (no error spam, no crash)
-   - Once the phone is reachable (phone hotspot reconnects), reconnect automatically with no user interaction
+   - Once the phone is reachable (car/phone hotspot reconnects), reconnect automatically with no user interaction
    - First frame after reconnect must be clean — no black frames, no decoder artifacts, no partial/grainy frames. Wait for IDR before rendering
    - Audio must resume without pops, clicks, or stale buffer playback
    - The user experience should be: car on → brief "Connecting..." → projection appears. Indistinguishable from a fresh start
@@ -46,19 +46,19 @@ When modifying **app Kotlin** code that interacts with the JNI layer, **read the
 
 | Island | Responsibility | Test Anchor |
 |--------|---------------|-------------|
-| `transport/aasdk/` | aasdk JNI session (C++ pipeline), TCP/Nearby/USB transport adapters, AA protocol | Integration: companion app + phone |
-| `transport/direct/` | TCP connector, Nearby manager, legacy Kotlin AA protocol scaffolding | Unit: transport mocks |
+| `transport/aasdk/` | aasdk JNI session (C++ pipeline), TCP transport, AA protocol | Integration: companion app + phone |
+| `transport/hotspot/` | TCP connector + phone discovery (mDNS / UDP sweep) over car or phone hotspot | Unit: discovery mocks |
 | `video/` | MediaCodec lifecycle, Surface rendering, codec detection | Unit: frame header parsing. Integration: decode test streams |
 | `audio/` | Multi-purpose AudioTrack (5 slots), mic capture, ring buffer | Unit: purpose routing, ring buffer. Integration: PCM playback |
 | `input/` | Touch forwarding, GNSS, vehicle data (VHAL), IMU sensors (accel/gyro/compass) | Unit: coordinate scaling, NMEA formatting. Integration: VHAL mock |
 | `ui/` | Compose screens — projection surface, settings, diagnostics | Unit: ViewModel state. Integration: Compose test rules |
 | `navigation/` | Nav state from aasdk, maneuver icons, cluster service | Unit: maneuver mapping. Integration: cluster IPC |
-| `session/` | Session orchestrator — connects islands, manages lifecycle | Integration: full session with mock transport/companion |
+| `session/` | Session orchestrator — connects islands, manages lifecycle | Integration: full session with mock bridge |
 
 - **Min SDK 32**, target SDK 36, Kotlin, Jetpack Compose, DataStore preferences
 - **MVVM** with `StateFlow` — ViewModels own UI state, repositories own data
 - Uses aasdk v1.6 AA protocol via JNI (C++ native library)
-- **Primary wireless path** — local WiFi + TCP companion on port 5277. Nearby code remains but is not the current companion workflow.
+- **No USB adapter support** — WiFi only (Car Hotspot or Phone Hotspot)
 
 ### C++ JNI Layer (`app/src/main/cpp/`)
 
@@ -67,7 +67,7 @@ When modifying **app Kotlin** code that interacts with the JNI layer, **read the
 | `aasdk_jni.cpp` | JNI entry point — native method registration |
 | `jni_session.{h,cpp}` | aasdk pipeline: SSLWrapper → Cryptor → Messenger → channels. Control + video handler |
 | `jni_channel_handlers.{h,cpp}` | Separate handler classes for audio, sensor, input, nav, mic, media, phone, BT |
-| `jni_transport.{h,cpp}` | ITransport backed by Kotlin stream pipes via JNI readBytes/writeBytes |
+| `jni_transport.{h,cpp}` | ITransport backed by TCP socket streams via JNI readBytes/writeBytes |
 | `stubs/` | libusb stub (USB not used on Android) |
 
 ### External Dependencies (`external/`)
@@ -164,10 +164,10 @@ See [bridge/sbc/BUILD.md](bridge/sbc/BUILD.md) for SBC setup. CI builds via `.gi
 | [docs/architecture.md](docs/architecture.md) | Component island architecture, milestone plan |
 | [docs/protocol.md](docs/protocol.md) | OAL wire protocol specification (bridge-mode only) |
 | [docs/embedded-knowledge.md](docs/embedded-knowledge.md) | Hardware lessons (MUST READ before touching video/audio/VHAL) |
-| [docs/networking.md](docs/networking.md) | Active app/companion TCP discovery and transport architecture |
+| [docs/networking.md](docs/networking.md) | Three-network architecture (bridge-mode only) |
 | [bridge/sbc/BUILD.md](bridge/sbc/BUILD.md) | SBC build and deployment guide (bridge-mode only) |
 | [docs/bridge-update.md](docs/bridge-update.md) | Bridge OTA update system — as-built design, flow, security |
-| [docs/testing.md](docs/testing.md) | Local testing with AAOS emulator, companion workflows, and remote diagnostics |
+| [docs/testing.md](docs/testing.md) | Local testing with AAOS emulator + SBC + remote diagnostics |
 ## Pitfalls
 
 - **CRLF**: Shell scripts must be LF (enforced via `.gitattributes eol=lf`). Windows `scp` from PowerShell injects CRLF. **`sed`, `tr`, and `perl` over SSH from PowerShell cannot fix this** — PowerShell re-injects `\r` into escape sequences. Use the Python binary-I/O method in [bridge/sbc/BUILD.md](bridge/sbc/BUILD.md#manually-copying-files-from-windows). The `deploy-bridge.ps1` script handles this automatically.

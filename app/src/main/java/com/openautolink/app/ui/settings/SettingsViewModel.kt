@@ -4,12 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.openautolink.app.data.AppPreferences
-import com.openautolink.app.session.SessionManager
 import com.openautolink.app.transport.NetworkInterfaceInfo
 import com.openautolink.app.transport.NetworkInterfaceScanner
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -27,22 +24,25 @@ data class SettingsUiState(
     val videoFps: Int = AppPreferences.DEFAULT_VIDEO_FPS,
     val displayMode: String = AppPreferences.DEFAULT_DISPLAY_MODE,
     val micSource: String = AppPreferences.DEFAULT_MIC_SOURCE,
+    val btMacOverride: String = AppPreferences.DEFAULT_BT_MAC_OVERRIDE,
     val videoScalingMode: String = AppPreferences.DEFAULT_VIDEO_SCALING_MODE,
     val aaResolution: String = AppPreferences.DEFAULT_AA_RESOLUTION,
     val aaDpi: Int = AppPreferences.DEFAULT_AA_DPI,
+    val aaAutoDpi: Boolean = AppPreferences.DEFAULT_AA_AUTO_DPI,
     val aaWidthMargin: Int = AppPreferences.DEFAULT_AA_WIDTH_MARGIN,
     val aaHeightMargin: Int = AppPreferences.DEFAULT_AA_HEIGHT_MARGIN,
+    val aaAutoMargins: Boolean = AppPreferences.DEFAULT_AA_AUTO_MARGINS,
     val aaPixelAspect: Int = AppPreferences.DEFAULT_AA_PIXEL_ASPECT,
     val aaTargetLayoutWidthDp: Int = AppPreferences.DEFAULT_AA_TARGET_LAYOUT_WIDTH_DP,
+    val aaViewingDistanceMm: Int = AppPreferences.DEFAULT_AA_VIEWING_DISTANCE_MM,
+    val aaDecoderAdditionalDepth: Int = AppPreferences.DEFAULT_AA_DECODER_ADDITIONAL_DEPTH,
     // App-side
     val driveSide: String = AppPreferences.DEFAULT_DRIVE_SIDE,
     val gpsForwarding: Boolean = AppPreferences.DEFAULT_GPS_FORWARDING,
     val clusterNavigation: Boolean = AppPreferences.DEFAULT_CLUSTER_NAVIGATION,
-    val overlaySettingsButton: Boolean = AppPreferences.DEFAULT_OVERLAY_SETTINGS_BUTTON,
-    val overlayRestartVideoButton: Boolean = AppPreferences.DEFAULT_OVERLAY_RESTART_VIDEO_BUTTON,
-    val overlaySwitchPhoneButton: Boolean = AppPreferences.DEFAULT_OVERLAY_SWITCH_PHONE_BUTTON,
     val overlayStatsButton: Boolean = AppPreferences.DEFAULT_OVERLAY_STATS_BUTTON,
     val fileLoggingEnabled: Boolean = AppPreferences.DEFAULT_FILE_LOGGING_ENABLED,
+    val fileLoggingAutoStartUsb: Boolean = AppPreferences.DEFAULT_FILE_LOGGING_AUTOSTART_USB,
     val logcatCaptureEnabled: Boolean = AppPreferences.DEFAULT_LOGCAT_CAPTURE_ENABLED,
     // UI customization
     val syncAaTheme: Boolean = AppPreferences.DEFAULT_SYNC_AA_THEME,
@@ -73,7 +73,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val preferences = AppPreferences.getInstance(application)
     private val interfaceScanner = NetworkInterfaceScanner(application)
-    private var videoRestartJob: Job? = null
 
     val networkInterfaces: StateFlow<List<NetworkInterfaceInfo>> = interfaceScanner.interfaces
 
@@ -86,18 +85,20 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         preferences.videoScalingMode,
         preferences.aaResolution,
         preferences.aaDpi,
+        preferences.aaAutoDpi,
         preferences.aaWidthMargin,
         preferences.aaHeightMargin,
+        preferences.aaAutoMargins,
         preferences.aaPixelAspect,
         preferences.aaTargetLayoutWidthDp,
+        preferences.aaViewingDistanceMm,
+        preferences.aaDecoderAdditionalDepth,
         preferences.driveSide,
         preferences.gpsForwarding,
         preferences.clusterNavigation,
-        preferences.overlaySettingsButton,
-        preferences.overlayRestartVideoButton,
-        preferences.overlaySwitchPhoneButton,
         preferences.overlayStatsButton,
         preferences.fileLoggingEnabled,
+        preferences.fileLoggingAutoStartUsb,
         preferences.logcatCaptureEnabled,
         preferences.syncAaTheme,
         preferences.hideAaClock,
@@ -116,6 +117,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         preferences.defaultPhoneName,
         preferences.manualIpEnabled,
         preferences.manualIpAddress,
+        preferences.btMacOverride,
     ) { values: Array<Any> ->
         SettingsUiState(
             videoAutoNegotiate = values[0] as Boolean,
@@ -126,36 +128,39 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             videoScalingMode = values[5] as String,
             aaResolution = values[6] as String,
             aaDpi = values[7] as Int,
-            aaWidthMargin = values[8] as Int,
-            aaHeightMargin = values[9] as Int,
-            aaPixelAspect = values[10] as Int,
-            aaTargetLayoutWidthDp = values[11] as Int,
-            driveSide = values[12] as String,
-            gpsForwarding = values[13] as Boolean,
-            clusterNavigation = values[14] as Boolean,
-            overlaySettingsButton = values[15] as Boolean,
-            overlayRestartVideoButton = values[16] as Boolean,
-            overlaySwitchPhoneButton = values[17] as Boolean,
-            overlayStatsButton = values[18] as Boolean,
-            fileLoggingEnabled = values[19] as Boolean,
-            logcatCaptureEnabled = values[20] as Boolean,
-            syncAaTheme = values[21] as Boolean,
-            hideAaClock = values[22] as Boolean,
-            hidePhoneSignal = values[23] as Boolean,
-            hideBatteryLevel = values[24] as Boolean,
-            sendImuSensors = values[25] as Boolean,
-            distanceUnits = values[26] as String,
-            safeAreaTop = values[27] as Int,
-            safeAreaBottom = values[28] as Int,
-            safeAreaLeft = values[29] as Int,
-            safeAreaRight = values[30] as Int,
-            keyRemap = values[31] as String,
-            volumeOffsetMedia = values[32] as Int,
-            volumeOffsetNavigation = values[33] as Int,
-            volumeOffsetAssistant = values[34] as Int,
-            defaultPhoneName = values[35] as String,
-            manualIpEnabled = values[36] as Boolean,
-            manualIpAddress = values[37] as String,
+            aaAutoDpi = values[8] as Boolean,
+            aaWidthMargin = values[9] as Int,
+            aaHeightMargin = values[10] as Int,
+            aaAutoMargins = values[11] as Boolean,
+            aaPixelAspect = values[12] as Int,
+            aaTargetLayoutWidthDp = values[13] as Int,
+            aaViewingDistanceMm = values[14] as Int,
+            aaDecoderAdditionalDepth = values[15] as Int,
+            driveSide = values[16] as String,
+            gpsForwarding = values[17] as Boolean,
+            clusterNavigation = values[18] as Boolean,
+            overlayStatsButton = values[19] as Boolean,
+            fileLoggingEnabled = values[20] as Boolean,
+            fileLoggingAutoStartUsb = values[21] as Boolean,
+            logcatCaptureEnabled = values[22] as Boolean,
+            syncAaTheme = values[23] as Boolean,
+            hideAaClock = values[24] as Boolean,
+            hidePhoneSignal = values[25] as Boolean,
+            hideBatteryLevel = values[26] as Boolean,
+            sendImuSensors = values[27] as Boolean,
+            distanceUnits = values[28] as String,
+            safeAreaTop = values[29] as Int,
+            safeAreaBottom = values[30] as Int,
+            safeAreaLeft = values[31] as Int,
+            safeAreaRight = values[32] as Int,
+            keyRemap = values[33] as String,
+            volumeOffsetMedia = values[34] as Int,
+            volumeOffsetNavigation = values[35] as Int,
+            volumeOffsetAssistant = values[36] as Int,
+            defaultPhoneName = values[37] as String,
+            manualIpEnabled = values[38] as Boolean,
+            manualIpAddress = values[39] as String,
+            btMacOverride = values[40] as String,
         )
     }.stateIn(
         viewModelScope,
@@ -228,24 +233,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { preferences.setConnectionMode(mode) }
     }
 
-    fun selectUsbTransport() {
-        viewModelScope.launch { preferences.setDirectTransport("usb") }
-    }
-
-    fun selectPhoneHotspotTransport() {
-        viewModelScope.launch {
-            preferences.setDirectTransport("hotspot")
-            preferences.setConnectionMode(AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT)
-        }
-    }
-
-    fun selectCarHotspotTransport() {
-        viewModelScope.launch {
-            preferences.setDirectTransport("hotspot")
-            preferences.setConnectionMode(AppPreferences.CONNECTION_MODE_CAR_HOTSPOT)
-        }
-    }
-
     fun setDefaultPhoneId(id: String) {
         viewModelScope.launch { preferences.setDefaultPhoneId(id) }
     }
@@ -303,79 +290,75 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { preferences.setHotspotPassword(password) }
     }
     fun updateVideoCodec(codec: String) {
-        viewModelScope.launch {
-            preferences.setVideoCodec(codec)
-        }
+        viewModelScope.launch { preferences.setVideoCodec(codec) }
     }
 
     fun updateVideoAutoNegotiate(enabled: Boolean) {
-        viewModelScope.launch {
-            preferences.setVideoAutoNegotiate(enabled)
-        }
+        viewModelScope.launch { preferences.setVideoAutoNegotiate(enabled) }
     }
 
     fun updateVideoFps(fps: Int) {
-        viewModelScope.launch {
-            preferences.setVideoFps(fps)
-        }
+        viewModelScope.launch { preferences.setVideoFps(fps) }
     }
 
     fun updateDisplayMode(mode: String) {
-        viewModelScope.launch {
-            preferences.setDisplayMode(mode)
-        }
+        viewModelScope.launch { preferences.setDisplayMode(mode) }
     }
 
     fun updateMicSource(source: String) {
         viewModelScope.launch { preferences.setMicSource(source) }
     }
 
+    fun updateBtMacOverride(mac: String) {
+        viewModelScope.launch { preferences.setBtMacOverride(mac) }
+    }
+
     fun updateVideoScalingMode(mode: String) {
-        viewModelScope.launch {
-            preferences.setVideoScalingMode(mode)
-        }
+        viewModelScope.launch { preferences.setVideoScalingMode(mode) }
     }
 
     fun updateAaResolution(resolution: String) {
-        viewModelScope.launch {
-            preferences.setAaResolution(resolution)
-        }
+        viewModelScope.launch { preferences.setAaResolution(resolution) }
     }
 
     fun updateAaDpi(dpi: Int) {
-        viewModelScope.launch {
-            preferences.setAaDpi(dpi)
-        }
+        viewModelScope.launch { preferences.setAaDpi(dpi) }
+    }
+
+    fun updateAaAutoDpi(value: Boolean) {
+        viewModelScope.launch { preferences.setAaAutoDpi(value) }
     }
 
     fun updateAaWidthMargin(margin: Int) {
-        viewModelScope.launch {
-            preferences.setAaWidthMargin(margin)
-        }
+        viewModelScope.launch { preferences.setAaWidthMargin(margin) }
     }
 
     fun updateAaHeightMargin(margin: Int) {
-        viewModelScope.launch {
-            preferences.setAaHeightMargin(margin)
-        }
+        viewModelScope.launch { preferences.setAaHeightMargin(margin) }
+    }
+
+    fun updateAaAutoMargins(value: Boolean) {
+        viewModelScope.launch { preferences.setAaAutoMargins(value) }
     }
 
     fun updateAaPixelAspect(value: Int) {
-        viewModelScope.launch {
-            preferences.setAaPixelAspect(value)
-        }
+        viewModelScope.launch { preferences.setAaPixelAspect(value) }
     }
 
     fun updateAaTargetLayoutWidthDp(value: Int) {
-        viewModelScope.launch {
-            preferences.setAaTargetLayoutWidthDp(value)
-        }
+        viewModelScope.launch { preferences.setAaTargetLayoutWidthDp(value) }
+    }
+
+    fun updateAaViewingDistanceMm(value: Int) {
+        viewModelScope.launch { preferences.setAaViewingDistanceMm(value) }
+    }
+
+    fun updateAaDecoderAdditionalDepth(value: Int) {
+        viewModelScope.launch { preferences.setAaDecoderAdditionalDepth(value) }
     }
 
     fun updateDriveSide(side: String) {
-        viewModelScope.launch {
-            preferences.setDriveSide(side)
-        }
+        viewModelScope.launch { preferences.setDriveSide(side) }
     }
 
     fun updateGpsForwarding(enabled: Boolean) {
@@ -386,18 +369,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { preferences.setClusterNavigation(enabled) }
     }
 
-    fun updateOverlaySettingsButton(visible: Boolean) {
-        viewModelScope.launch { preferences.setOverlaySettingsButton(visible) }
-    }
-
-    fun updateOverlayRestartVideoButton(visible: Boolean) {
-        viewModelScope.launch { preferences.setOverlayRestartVideoButton(visible) }
-    }
-
-    fun updateOverlaySwitchPhoneButton(visible: Boolean) {
-        viewModelScope.launch { preferences.setOverlaySwitchPhoneButton(visible) }
-    }
-
     fun updateOverlayStatsButton(visible: Boolean) {
         viewModelScope.launch { preferences.setOverlayStatsButton(visible) }
     }
@@ -406,32 +377,28 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { preferences.setFileLoggingEnabled(enabled) }
     }
 
+    fun updateFileLoggingAutoStartUsb(enabled: Boolean) {
+        viewModelScope.launch { preferences.setFileLoggingAutoStartUsb(enabled) }
+    }
+
     fun updateLogcatCaptureEnabled(enabled: Boolean) {
         viewModelScope.launch { preferences.setLogcatCaptureEnabled(enabled) }
     }
 
     fun updateSyncAaTheme(enabled: Boolean) {
-        viewModelScope.launch {
-            preferences.setSyncAaTheme(enabled)
-        }
+        viewModelScope.launch { preferences.setSyncAaTheme(enabled) }
     }
 
     fun updateHideAaClock(enabled: Boolean) {
-        viewModelScope.launch {
-            preferences.setHideAaClock(enabled)
-        }
+        viewModelScope.launch { preferences.setHideAaClock(enabled) }
     }
 
     fun updateHidePhoneSignal(enabled: Boolean) {
-        viewModelScope.launch {
-            preferences.setHidePhoneSignal(enabled)
-        }
+        viewModelScope.launch { preferences.setHidePhoneSignal(enabled) }
     }
 
     fun updateHideBatteryLevel(enabled: Boolean) {
-        viewModelScope.launch {
-            preferences.setHideBatteryLevel(enabled)
-        }
+        viewModelScope.launch { preferences.setHideBatteryLevel(enabled) }
     }
 
     fun updateSendImuSensors(enabled: Boolean) {
@@ -457,45 +424,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             preferences.setSafeAreaBottom(bottom)
             preferences.setSafeAreaLeft(left)
             preferences.setSafeAreaRight(right)
-        }
-    }
-
-    /** Restart only the video stream (audio stays active). Called from Settings "Save & Restart Video". */
-    fun saveAndRestartVideoStream() {
-        videoRestartJob?.cancel()
-        videoRestartJob = viewModelScope.launch {
-            val sm = SessionManager.instanceOrNull() ?: return@launch
-
-            // Give DataStore preference writes a moment to flush before restart.
-            delay(250)
-
-            // Some settings (e.g., AA Resolution/DPI/codec/fps) change the AA Service
-            // Discovery Response (SDR) and require a reconnect to renegotiate video.
-            val desiredKey = SessionManager.VideoNegotiationKey(
-                codecPreference = preferences.videoCodec.first(),
-                videoAutoNegotiate = preferences.videoAutoNegotiate.first(),
-                aaResolution = preferences.aaResolution.first(),
-                aaDpi = preferences.aaDpi.first(),
-                aaWidthMargin = preferences.aaWidthMargin.first(),
-                aaHeightMargin = preferences.aaHeightMargin.first(),
-                aaPixelAspect = preferences.aaPixelAspect.first(),
-                aaTargetLayoutWidthDp = preferences.aaTargetLayoutWidthDp.first(),
-                videoFps = preferences.videoFps.first(),
-                driveSide = preferences.driveSide.first(),
-                hideClock = preferences.hideAaClock.first(),
-                hideSignal = preferences.hidePhoneSignal.first(),
-                hideBattery = preferences.hideBatteryLevel.first(),
-                safeAreaTop = preferences.safeAreaTop.first(),
-                safeAreaBottom = preferences.safeAreaBottom.first(),
-                safeAreaLeft = preferences.safeAreaLeft.first(),
-                safeAreaRight = preferences.safeAreaRight.first(),
-            )
-
-            if (sm.requiresReconnectForVideoSettings(desiredKey)) {
-                saveAndReconnect()
-            } else {
-                sm.restartVideoStream()
-            }
         }
     }
 
@@ -547,10 +475,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             val videoAutoNeg = preferences.videoAutoNegotiate.first()
             val aaRes = preferences.aaResolution.first()
             val aaDpi = preferences.aaDpi.first()
+            val aaAutoDpi = preferences.aaAutoDpi.first()
             val aaWM = preferences.aaWidthMargin.first()
             val aaHM = preferences.aaHeightMargin.first()
             val aaPA = preferences.aaPixelAspect.first()
             val aaTargetLayoutDp = preferences.aaTargetLayoutWidthDp.first()
+            val aaViewDistMm = preferences.aaViewingDistanceMm.first()
+            val aaDecAddDepth = preferences.aaDecoderAdditionalDepth.first()
+            val aaAutoM = preferences.aaAutoMargins.first()
             val videoFps = preferences.videoFps.first()
             val driveSide = preferences.driveSide.first()
             val hideClock = preferences.hideAaClock.first()
@@ -575,10 +507,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 videoAutoNegotiate = videoAutoNeg,
                 aaResolution = aaRes,
                 aaDpi = aaDpi,
+                aaAutoDpi = aaAutoDpi,
                 aaWidthMargin = aaWM,
                 aaHeightMargin = aaHM,
                 aaPixelAspect = aaPA,
                 aaTargetLayoutWidthDp = aaTargetLayoutDp,
+                aaViewingDistanceMm = aaViewDistMm,
+                aaDecoderAdditionalDepth = aaDecAddDepth,
+                aaAutoMargins = aaAutoM,
                 videoFps = videoFps,
                 driveSide = driveSide,
                 hideClock = hideClock,

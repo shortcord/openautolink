@@ -7,9 +7,7 @@ import com.openautolink.app.diagnostics.OalLog
 import com.openautolink.app.transport.AudioPurpose
 import com.openautolink.app.transport.ConnectionState
 import com.openautolink.app.transport.ControlMessage
-import com.openautolink.app.transport.direct.AaNearbyManager
-import com.openautolink.app.transport.direct.TcpConnector
-import com.openautolink.app.transport.usb.UsbConnectionManager
+import com.openautolink.app.transport.hotspot.TcpConnector
 import com.openautolink.app.video.VideoFrame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,8 +18,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.InputStream
 import java.io.OutputStream
@@ -30,11 +26,15 @@ import java.net.Socket
 /**
  * AA session backed by native aasdk via JNI.
  *
- * Replaces DirectAaSession. The AA wire protocol is handled by the proven
- * aasdk C++ library instead of the old Kotlin port.
+ * The Kotlin layer owns transport (TCP socket to the phone-side companion app
+ * over the shared WiFi — Car Hotspot or Phone Hotspot) and exposes the
+ * resulting byte streams to the native aasdk C++ library, which speaks the
+ * full AA wire protocol. Decoded frames + control messages come back through
+ * JNI callbacks and are republished as Kotlin flows.
  *
  * Data flow:
- *   Phone transport (USB or WiFi) → AasdkTransportPipe → JNI → aasdk C++ → JNI callbacks
+ *   Phone ↔ TCP (companion app over shared WiFi) ↔ TcpConnector ↔ streams
+ *     → AasdkTransportPipe → JNI → aasdk C++ → JNI callbacks
  *     → AasdkSession flows → SessionManager → VideoDecoder/AudioPlayer
  */
 class AasdkSession(
@@ -44,13 +44,25 @@ class AasdkSession(
 
     companion object {
         private const val TAG = "AasdkSession"
-        private const val NATIVE_EVENT_SESSION_STARTED = 1
-        private const val NATIVE_EVENT_SESSION_STOPPED = 2
-        private const val NATIVE_EVENT_ERROR = 3
-        private const val NATIVE_EVENT_VIDEO_CODEC_CONFIGURED = 4
+
+        /** Process-wide native onError coalescer.
+         *
+         *  Lives in the companion object (not on instances) so it survives
+         *  AasdkSession instance churn — every startSession() in
+         *  SessionManager creates a new AasdkSession, and per-instance state
+         *  would reset the dedup window on each new instance. Production logs
+         *  showed 14+ identical "Native error: AASDK Error: 30" lines at the
+         *  same ms because the storm spans several rapid session recreations.
+         *
+         *  At most one log per second per (instance-agnostic) message text.
+         */
+        @Volatile private var lastOnErrorLogMs: Long = 0
+        @Volatile private var lastOnErrorMsg: String = ""
+        private var onErrorSuppressedCount = 0
+        private val onErrorLock = Any()
     }
 
-    // -- Output flows (same interface as DirectAaSession) --
+    // -- Output flows (consumed by SessionManager) --
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -58,7 +70,7 @@ class AasdkSession(
     private val _videoFrames = MutableSharedFlow<VideoFrame>(extraBufferCapacity = 30)
     val videoFrames: SharedFlow<VideoFrame> = _videoFrames.asSharedFlow()
 
-    /** Negotiated video codec type from phone. 3=H.264, 5=VP9, 6=AV1, 7=H.265 */
+    /** Negotiated video codec type from phone. 3=H.264, 5=H.264_BP, 7=H.265 */
     private val _negotiatedCodecType = MutableStateFlow(0)
     val negotiatedCodecType: StateFlow<Int> = _negotiatedCodecType.asStateFlow()
 
@@ -68,166 +80,102 @@ class AasdkSession(
     private val _controlMessages = MutableSharedFlow<ControlMessage>(extraBufferCapacity = 64)
     val controlMessages: Flow<ControlMessage> = _controlMessages.asSharedFlow()
 
-    // -- Config (set before start(), same as DirectAaSession) --
+    // -- Config (set before start()) --
 
     var sdrConfig = AasdkSdrConfig()
 
-    /** Default phone name for Nearby auto-connect */
-    var defaultPhoneName: String = ""
-
-    /** Callback when a phone connects via Nearby */
-    var onPhoneConnected: ((String) -> Unit)? = null
-
-    // Nearby manager — only used in "nearby" transport mode
-    private var _nearbyManager: AaNearbyManager? = null
-    val nearbyManager: AaNearbyManager? get() = _nearbyManager
-
-    // TCP connector — only used in "hotspot" transport mode
+    // TCP connector — used in "hotspot" transport mode (Car Hotspot / Phone Hotspot)
     private var _tcpConnector: TcpConnector? = null
 
-    // USB connection manager — only used in "usb" transport mode
-    private var _usbConnectionManager: UsbConnectionManager? = null
-
-    /** Current transport mode: "nearby", "hotspot", or "usb" */
+    /** Current transport mode. USB projection is temporarily disabled. */
     var transportMode: String = "hotspot"
 
     /** Manual IP address for testing (emulator). Overrides gateway/mDNS discovery. */
     var manualIpAddress: String? = null
 
-    /**
-     * Optional owner hook for reconnects that need context outside this transport
-     * class. Car Hotspot mode resolves a fresh phone IP through the projection
-     * discovery pipeline; retrying the old manual IP here can loop forever after
-     * the AP changes DHCP scope.
-     *
-     * Return true when the owner accepted responsibility for reconnecting.
-     */
-    var onReconnectRequested: ((reason: String, attempt: Int, protocolError: Boolean) -> Boolean)? = null
-
     /** True when stop() was called explicitly (user-initiated). False when session died on its own. */
     @Volatile
     private var explicitStop = false
 
-    /** Consecutive reconnect failures — drives exponential backoff. */
+    /** Consecutive reconnect failures — drives exponential backoff. Also
+     *  exposed as a StateFlow so the UI controller can escalate (e.g., open
+     *  the phone picker) after a threshold of repeated failures. */
     @Volatile
     private var consecutiveReconnectFailures = 0
+    private val _reconnectAttempt = MutableStateFlow(0)
+    val reconnectAttempt: StateFlow<Int> = _reconnectAttempt.asStateFlow()
 
     /** True when the last failure was an AA protocol/handshake error (Error 30). */
     @Volatile
     private var lastFailureWasProtocolError = false
 
     private var transportPipe: AasdkTransportPipe? = null
-    private var reconnectJob: Job? = null
-    private val sessionStartLock = Any()
-    @Volatile private var sessionStartInFlight = false
 
     // -- Lifecycle --
 
     fun start() {
-        cancelReconnectJob()
         explicitStop = false
         consecutiveReconnectFailures = 0
+        _reconnectAttempt.value = 0
         lastFailureWasProtocolError = false
         _connectionState.value = ConnectionState.DISCONNECTED
 
-        when (transportMode) {
-            "hotspot" -> startTcp()
-            "usb" -> startUsb()
-            else -> startNearby()
-        }
-    }
-
-    private fun startNearby() {
-        OalLog.i(TAG, "Starting aasdk session (Nearby transport)")
-        _nearbyManager?.stop()
-        _nearbyManager = AaNearbyManager(context, scope) { nearbySocket ->
-            scope.launch(Dispatchers.IO) {
-                OalLog.i(TAG, "Nearby socket ready — starting aasdk native session")
-                handleConnection(nearbySocket)
-            }
-        }
-        _nearbyManager?.defaultPhoneName = defaultPhoneName
-        _nearbyManager?.onPhoneConnected = onPhoneConnected
-        _nearbyManager?.start()
+        startTcp()
     }
 
     private fun startTcp() {
-        val hostSource = manualIpAddress?.takeIf { it.isNotBlank() }?.let { "manualIp=$it" } ?: "discovery"
-        OalLog.i(TAG, "Starting aasdk session (TCP/hotspot transport, hostSource=$hostSource)")
+        OalLog.i(TAG, "Starting aasdk session (TCP/hotspot transport)")
         _tcpConnector?.stop()
-        _tcpConnector = TcpConnector(context, scope) { tcpSocket ->
-            scope.launch(Dispatchers.IO) {
-                val remote = tcpSocket.inetAddress?.hostAddress ?: "unknown"
-                OalLog.i(TAG, "TCP socket ready from $remote — starting aasdk native session")
-                handleConnection(tcpSocket)
-            }
-        }
+        _tcpConnector = TcpConnector(
+            context,
+            scope,
+            onSocketReady = { tcpSocket ->
+                scope.launch(Dispatchers.IO) {
+                    OalLog.i(TAG, "TCP socket ready — starting aasdk native session")
+                    handleConnection(tcpSocket)
+                }
+            },
+            onConnectFailure = {
+                // Drive the same reconnectAttempt counter the session-stopped
+                // path uses, so picker escalation works even when we never
+                // got to handshake (companion not listening, phone off-net).
+                consecutiveReconnectFailures++
+                _reconnectAttempt.value = consecutiveReconnectFailures
+            },
+        )
         _tcpConnector?.manualIp = manualIpAddress
         _tcpConnector?.start()
     }
 
-    private fun startUsb() {
-        OalLog.i(TAG, "Starting aasdk session (USB transport)")
-        _usbConnectionManager?.stop()
-        _usbConnectionManager = UsbConnectionManager(context, scope) { usbTransportPipe ->
-            OalLog.i(TAG, "USB transport ready — starting aasdk native session")
-            handleUsbConnection(usbTransportPipe)
-        }
-        _usbConnectionManager?.start()
-    }
-
-    private fun handleUsbConnection(pipe: AasdkTransportPipe): Boolean {
-        if (!beginSessionStart("USB", pipe)) return false
-        _connectionState.value = ConnectionState.CONNECTING
-
-        OalLog.i(TAG, "Starting native aasdk session (USB): ${sdrConfig.videoWidth}x${sdrConfig.videoHeight}")
-
-        try {
-            AasdkNative.nativeCreateSession()
-            AasdkNative.nativeStartSession(pipe, this, sdrConfig)
-            return true
-        } catch (e: Exception) {
-            OalLog.e(TAG, "Native session start failed (USB): ${e.message}")
-            finishSessionStartFailure(pipe)
-            _connectionState.value = ConnectionState.DISCONNECTED
-            return false
-        }
-    }
-
     private fun handleConnection(socket: Socket) {
-        val candidatePipe = AasdkTransportPipe(socket.getInputStream(), socket.getOutputStream())
-        if (!beginSessionStart("transport", candidatePipe)) {
-            candidatePipe.close()
-            return
-        }
         _connectionState.value = ConnectionState.CONNECTING
+
+        val input = socket.getInputStream()
+        val output = socket.getOutputStream()
 
         OalLog.i(TAG, "Starting native aasdk session: ${sdrConfig.videoWidth}x${sdrConfig.videoHeight}")
 
+        transportPipe = AasdkTransportPipe(input, output)
+
         try {
             AasdkNative.nativeCreateSession()
-            AasdkNative.nativeStartSession(candidatePipe, this, sdrConfig)
+            AasdkNative.nativeStartSession(transportPipe!!, this, sdrConfig)
         } catch (e: Exception) {
             OalLog.e(TAG, "Native session start failed: ${e.message}")
-            finishSessionStartFailure(candidatePipe)
+            transportPipe?.close()
+            transportPipe = null
             _connectionState.value = ConnectionState.DISCONNECTED
         }
     }
 
     fun stop() {
         explicitStop = true
-        cancelReconnectJob()
         OalLog.i(TAG, "Stopping aasdk session")
-        _nearbyManager?.stop()
-        _nearbyManager = null
         _tcpConnector?.stop()
         _tcpConnector = null
-        _usbConnectionManager?.stop()
-        _usbConnectionManager = null
         AasdkNative.nativeStopSession()
         transportPipe?.close()
         transportPipe = null
-        sessionStartInFlight = false
         _connectionState.value = ConnectionState.DISCONNECTED
     }
 
@@ -239,32 +187,22 @@ class AasdkSession(
      */
     fun forceReconnect(reason: String) {
         OalLog.w(TAG, "Force reconnect: $reason")
-        cancelReconnectJob()
         // Treat the upcoming nativeStopSession() as an explicit stop so the
         // onSessionStopped handler doesn't schedule its own auto-reconnect 3s
         // later — we're doing the restart ourselves immediately. Without this
         // both reconnects race and one fails with "Native session start failed".
         explicitStop = true
-        _nearbyManager?.stop()
-        _nearbyManager = null
         _tcpConnector?.stop()
         _tcpConnector = null
-        _usbConnectionManager?.stop()
-        _usbConnectionManager = null
         AasdkNative.nativeStopSession()
         transportPipe?.close()
         transportPipe = null
-        sessionStartInFlight = false
         _connectionState.value = ConnectionState.DISCONNECTED
         // Now clear the explicitStop flag so the freshly-started session can
         // auto-reconnect normally if its connection later dies.
         explicitStop = false
         // Restart transport.
-        when (transportMode) {
-            "hotspot" -> startTcp()
-            "usb" -> startUsb()
-            else -> startNearby()
-        }
+        startTcp()
     }
 
     // -- Input forwarding (app → phone via native aasdk) --
@@ -277,8 +215,8 @@ class AasdkSession(
         AasdkNative.nativeSendMultiTouchEvent(action, actionIndex, ids, xs, ys)
     }
 
-    fun sendKeyEvent(keyCode: Int, isDown: Boolean, metastate: Int = 0, longpress: Boolean = false) {
-        AasdkNative.nativeSendKeyEvent(keyCode, isDown, metastate, longpress)
+    fun sendKeyEvent(keyCode: Int, isDown: Boolean) {
+        AasdkNative.nativeSendKeyEvent(keyCode, isDown, 0, false)
     }
 
     fun sendGpsLocation(lat: Double, lon: Double, alt: Double,
@@ -321,30 +259,16 @@ class AasdkSession(
         AasdkNative.nativeRequestKeyframe()
     }
 
-    fun closeVideoStream() {
-        AasdkNative.nativeCloseVideoStream()
-    }
-
-    fun restartVideoStream() {
-        AasdkNative.nativeRestartVideoStream()
-    }
-
     // -- AasdkSessionCallback (called from native thread → dispatch to flows) --
 
     override fun onSessionStarted() {
         OalLog.i(TAG, "AA session started (native)")
-        cancelReconnectJob()
         consecutiveReconnectFailures = 0
+        _reconnectAttempt.value = 0
         lastFailureWasProtocolError = false
-        sessionStartInFlight = false
         scope.launch {
             _connectionState.value = ConnectionState.CONNECTED
-            _controlMessages.emit(
-                ControlMessage.PhoneConnected(
-                    phoneName = "",
-                    phoneType = if (transportMode == "usb") "usb" else "wireless"
-                )
-            )
+            _controlMessages.emit(ControlMessage.PhoneConnected(phoneName = "", phoneType = "wireless"))
         }
     }
 
@@ -353,14 +277,41 @@ class AasdkSession(
         // Clean up dead transport
         transportPipe?.close()
         transportPipe = null
-        sessionStartInFlight = false
+
+        // Phone-initiated user exit (Exit button in AA app launcher) — treat
+        // as an explicit stop so the auto-reconnect path below is skipped.
+        // MainActivity will background the app in response to the
+        // PhoneDisconnected(reason) message; user re-launches our icon to come
+        // back, which starts a fresh session.
+        if (reason == "byebye_user_selection") {
+            explicitStop = true
+        }
 
         scope.launch {
             _connectionState.value = ConnectionState.DISCONNECTED
             _controlMessages.emit(ControlMessage.PhoneDisconnected(reason = reason))
 
+            // Auto-reconnect if this wasn't an explicit stop (e.g., car sleep/wake,
+            // phone disconnect). Restart the transport connector after a delay so it
+            // retries connecting once WiFi comes back.
             if (!explicitStop) {
-                scheduleReconnect(reason)
+                consecutiveReconnectFailures++
+                _reconnectAttempt.value = consecutiveReconnectFailures
+
+                // Exponential backoff: 3s base, longer if protocol error (phone
+                // needs time to tear down old SSL session). Cap at 30s.
+                val baseDelayMs = if (lastFailureWasProtocolError) 5000L else 3000L
+                val backoffMs = (baseDelayMs * (1L shl (consecutiveReconnectFailures - 1).coerceAtMost(3)))
+                    .coerceAtMost(30_000L)
+                OalLog.i(TAG, "Session died unexpectedly — retry #$consecutiveReconnectFailures in ${backoffMs}ms" +
+                    if (lastFailureWasProtocolError) " (protocol error, extended backoff)" else "")
+                lastFailureWasProtocolError = false
+
+                kotlinx.coroutines.delay(backoffMs)
+                if (!explicitStop) {
+                    OalLog.i(TAG, "Restarting transport connector")
+                    startTcp()
+                }
             }
         }
     }
@@ -475,8 +426,7 @@ class AasdkSession(
                 timeToArrivalSeconds = if (timeToArrivalSeconds > 0) timeToArrivalSeconds else null,
                 destDistanceMeters = if (destDistanceMeters > 0) destDistanceMeters else null,
                 destDistanceDisplay = destDistDisplay,
-                destDistanceUnit = destDistUnit,
-                replaceExisting = true
+                destDistanceUnit = destDistUnit
             ))
         }
     }
@@ -541,28 +491,16 @@ class AasdkSession(
     }
 
     override fun onAudioFocusRequest(focusType: Int) {
-        val label = when (focusType) {
-            1 -> "GAIN"
-            2 -> "GAIN_TRANSIENT"
-            3 -> "GAIN_TRANSIENT_MAY_DUCK"
-            4 -> "RELEASE"
-            else -> "UNKNOWN"
-        }
-        com.openautolink.app.diagnostics.DiagnosticLog.d(
-            "audio",
-            "AA audio focus request: $label ($focusType)"
-        )
+        // Audio focus is handled by the native layer — always grants
     }
 
-    /** Coalesce native onError log spam: at most one log per second per message. */
-    @Volatile private var lastOnErrorLogMs: Long = 0
-    @Volatile private var lastOnErrorMsg: String = ""
-    private var onErrorSuppressedCount = 0
-
+    /** Coalesce native onError log spam: at most one log per second per
+     *  message text, deduplicated across instance churn (the state lives in
+     *  the companion object, see [Companion.onErrorLock]). */
     override fun onError(message: String) {
         val now = android.os.SystemClock.elapsedRealtime()
         var shouldEmit = false
-        synchronized(this) {
+        synchronized(onErrorLock) {
             if (message == lastOnErrorMsg && (now - lastOnErrorLogMs) < 1000) {
                 onErrorSuppressedCount++
                 return
@@ -591,102 +529,6 @@ class AasdkSession(
     }
 
     override fun onNativeEvent(type: Int, payload: ByteArray, timestampNs: Long) {
-        val payloadText = payload.toString(Charsets.UTF_8)
-        val label = when (type) {
-            NATIVE_EVENT_SESSION_STARTED -> "session_started"
-            NATIVE_EVENT_SESSION_STOPPED -> "session_stopped"
-            NATIVE_EVENT_ERROR -> "error"
-            NATIVE_EVENT_VIDEO_CODEC_CONFIGURED -> "video_codec_configured"
-            else -> "type_$type"
-        }
-        com.openautolink.app.diagnostics.DiagnosticLog.d(
-            "native",
-            "event=$label ts=$timestampNs payload=$payloadText"
-        )
-    }
-
-    private fun beginSessionStart(label: String, pipe: AasdkTransportPipe): Boolean {
-        synchronized(sessionStartLock) {
-            if (explicitStop) {
-                OalLog.i(TAG, "Ignoring $label transport because session is stopping")
-                pipe.close()
-                return false
-            }
-            if (sessionStartInFlight || transportPipe != null || _connectionState.value != ConnectionState.DISCONNECTED) {
-                OalLog.w(TAG, "Ignoring duplicate $label transport while session startup is already in progress")
-                pipe.close()
-                return false
-            }
-            sessionStartInFlight = true
-            transportPipe = pipe
-            return true
-        }
-    }
-
-    private fun finishSessionStartFailure(pipe: AasdkTransportPipe) {
-        pipe.close()
-        if (transportPipe === pipe) {
-            transportPipe = null
-        }
-        sessionStartInFlight = false
-    }
-
-    private fun scheduleReconnect(stopReason: String) {
-        reconnectJob?.cancel()
-        consecutiveReconnectFailures++
-        val attempt = consecutiveReconnectFailures
-        val wasProtocolError = lastFailureWasProtocolError
-        lastFailureWasProtocolError = false
-        if (transportMode == "hotspot") {
-            val handledByOwner = try {
-                onReconnectRequested?.invoke(stopReason, attempt, wasProtocolError) == true
-            } catch (e: Exception) {
-                OalLog.w(TAG, "Owner reconnect hook failed: ${e.message}")
-                false
-            }
-            if (handledByOwner) {
-                val hostSource = manualIpAddress?.takeIf { it.isNotBlank() }?.let { "manualIp=$it" } ?: "discovery"
-                OalLog.i(
-                    TAG,
-                    "Reconnect delegated to owner: reason=$stopReason attempt=$attempt " +
-                        "hostSource=$hostSource protocolError=$wasProtocolError",
-                )
-                return
-            }
-        }
-        val decision = AasdkReconnectPolicy.decision(
-            transportMode = transportMode,
-            attempt = attempt,
-            protocolError = wasProtocolError,
-            jitterSeed = System.nanoTime(),
-        )
-        val hostSource = manualIpAddress?.takeIf { it.isNotBlank() }?.let { "manualIp=$it" } ?: "discovery"
-        OalLog.i(
-            TAG,
-            "Reconnect scheduled: reason=$stopReason transport=$transportMode delayMs=${decision.delayMs} " +
-                "attempt=$attempt hostSource=$hostSource policy=${decision.reason}",
-        )
-        reconnectJob = scope.launch {
-            delay(decision.delayMs)
-            if (explicitStop) return@launch
-            OalLog.i(
-                TAG,
-                "Reconnect starting: reason=$stopReason transport=$transportMode attempt=$attempt hostSource=$hostSource",
-            )
-            restartTransportConnector()
-        }
-    }
-
-    private fun restartTransportConnector() {
-        when (transportMode) {
-            "hotspot" -> startTcp()
-            "usb" -> startUsb()
-            else -> startNearby()
-        }
-    }
-
-    private fun cancelReconnectJob() {
-        reconnectJob?.cancel()
-        reconnectJob = null
+        OalLog.d(TAG, "Native event ignored: type=$type size=${payload.size} timestampNs=$timestampNs")
     }
 }

@@ -1,9 +1,12 @@
 package com.openautolink.app.diagnostics
 
+import android.os.Handler
+import android.os.HandlerThread
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * A single local log entry captured by [DiagnosticLog].
@@ -36,6 +39,24 @@ object DiagnosticLog {
     @Volatile private var remoteSyslogEnabled: Boolean = false
 
     /**
+     * StateFlow update coalescing window. Per-entry list rebuilds were a major
+     * source of GC pressure during long sessions (every JNI/Kotlin log line
+     * allocated a 500-element list). We now rebuild at most this often.
+     */
+    private const val SNAPSHOT_INTERVAL_MS = 250L
+
+    /**
+     * When false (default), DEBUG entries are dropped on the floor before
+     * touching the ring, file logger, or remote sinks. Flip via [setVerbose]
+     * when investigating an issue.
+     */
+    @Volatile
+    private var verbose: Boolean = false
+
+    fun setVerbose(enabled: Boolean) { verbose = enabled }
+    fun isVerbose(): Boolean = verbose
+
+    /**
      * Called from native C++ via JNI to route native log lines into the
      * Kotlin diagnostic pipeline (ring buffer, file logger, TCP server).
      * Registered in aasdk_jni.cpp JNI_OnLoad.
@@ -48,6 +69,7 @@ object DiagnosticLog {
             5 -> DiagnosticLevel.WARN    // ANDROID_LOG_WARN
             else -> DiagnosticLevel.ERROR // ANDROID_LOG_ERROR + anything else
         }
+        if (diagLevel == DiagnosticLevel.DEBUG && !verbose) return
         addLocal(diagLevel, tag, msg)
         instance?.log(diagLevel, tag, msg)
         if (remoteSyslogEnabled) syslogSink.enqueue(diagLevel, tag, msg)
@@ -71,6 +93,7 @@ object DiagnosticLog {
     fun stopLocalCapture() { /* don't clear */ }
 
     fun d(tag: String, msg: String) {
+        if (!verbose) return
         addLocal(DiagnosticLevel.DEBUG, tag, msg)
         instance?.log(DiagnosticLevel.DEBUG, tag, msg)
         if (remoteSyslogEnabled) syslogSink.enqueue(DiagnosticLevel.DEBUG, tag, msg)
@@ -104,9 +127,27 @@ object DiagnosticLog {
     fun clearLocal() {
         synchronized(ring) { ring.clear() }
         _localLogs.value = emptyList()
+        snapshotPending.set(false)
+        snapshotHandler.removeCallbacks(snapshotRunnable)
     }
 
-    private fun addLocal(level: DiagnosticLevel, tag: String, msg: String) {
+    // Coalesced StateFlow snapshot. We post a single delayed runnable on a
+     // background HandlerThread; only one snapshot is in flight at a time.
+     // This collapses bursts of log entries (common during connect/IDR/SDR)
+     // into one allocation per [SNAPSHOT_INTERVAL_MS].
+     private val snapshotThread = HandlerThread("OalLogSnap").apply {
+         isDaemon = true
+         start()
+     }
+     private val snapshotHandler = Handler(snapshotThread.looper)
+     private val snapshotPending = AtomicBoolean(false)
+     private val snapshotRunnable = Runnable {
+         snapshotPending.set(false)
+         val snapshot = synchronized(ring) { ring.toList() }
+         _localLogs.value = snapshot
+     }
+
+     private fun addLocal(level: DiagnosticLevel, tag: String, msg: String) {
         val entry = LocalLogEntry(
             timestamp = System.currentTimeMillis(),
             level = level,
@@ -116,7 +157,10 @@ object DiagnosticLog {
         synchronized(ring) {
             if (ring.size >= MAX_LOCAL_ENTRIES) ring.pollFirst()
             ring.addLast(entry)
-            _localLogs.value = ring.toList()
+        }
+        // Coalesce StateFlow rebuilds — at most one every SNAPSHOT_INTERVAL_MS.
+        if (snapshotPending.compareAndSet(false, true)) {
+            snapshotHandler.postDelayed(snapshotRunnable, SNAPSHOT_INTERVAL_MS)
         }
         // Stream entry to file log writer if active. The other historical
         // streaming targets (TCP log server, reverse ADB tunnel) were

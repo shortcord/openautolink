@@ -32,6 +32,7 @@ class FileLogWriter(private val context: Context) {
         private const val DIR_NAME = "openautolink/logs"
         private const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB per file
         private const val MIN_FREE_SPACE_BYTES = 10L * 1024 * 1024 // stop if < 10 MB free
+        private const val FLUSH_EVERY_LINES = 64
     }
 
     @Volatile
@@ -48,15 +49,31 @@ class FileLogWriter(private val context: Context) {
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private val fileNameFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US)
 
+    /** Bytes written since file open. Tracked locally so the hot path doesn't
+     *  do a `File.length()` syscall per log line. */
+    private var bytesWritten: Long = 0L
+
+    /** Lines since last flush — flushed in batches to avoid per-line fsync churn. */
+    private var linesSinceFlush: Int = 0
+
     /**
      * Start writing logs to a new file. Returns the file path or null on failure.
+     *
+     * When [requireRemovable] is true, only removable storage (USB stick) is used.
+     * If no removable volume is mounted, this returns null and does NOT fall back
+     * to internal shared storage — used by the auto-start-on-USB pref so we don't
+     * silently fill internal storage when no USB drive is present.
      */
-    fun start(): String? {
+    fun start(requireRemovable: Boolean = false): String? {
         synchronized(lock) {
             if (isActive) return currentFilePath
 
-            val dir = resolveLogDir() ?: run {
-                OalLog.w(TAG, "No writable storage found for file logging")
+            val dir = resolveLogDir(requireRemovable) ?: run {
+                if (requireRemovable) {
+                    OalLog.i(TAG, "USB-only file logging requested but no removable storage found")
+                } else {
+                    OalLog.w(TAG, "No writable storage found for file logging")
+                }
                 return null
             }
 
@@ -66,6 +83,8 @@ class FileLogWriter(private val context: Context) {
             return try {
                 val fos = FileOutputStream(file, true)
                 writer = BufferedWriter(OutputStreamWriter(fos, Charsets.UTF_8), 8192)
+                bytesWritten = file.length()
+                linesSinceFlush = 0
                 currentFilePath = file.absolutePath
                 isActive = true
                 OalLog.i(TAG, "File logging started: ${file.absolutePath}")
@@ -103,10 +122,9 @@ class FileLogWriter(private val context: Context) {
         synchronized(lock) {
             val w = writer ?: return
             try {
-                // Check file size limit
-                val path = currentFilePath ?: return
-                val fileSize = File(path).length()
-                if (fileSize >= MAX_FILE_SIZE_BYTES) {
+                // Bail when we hit the per-file cap. Tracked locally to avoid
+                // a stat() syscall on the hot path.
+                if (bytesWritten >= MAX_FILE_SIZE_BYTES) {
                     OalLog.w(TAG, "File log reached ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB limit, stopping")
                     stop()
                     return
@@ -119,15 +137,22 @@ class FileLogWriter(private val context: Context) {
                     DiagnosticLevel.ERROR -> 'E'
                 }
 
-                w.write(timeFormat.format(Date(entry.timestamp)))
-                w.write(" ")
-                w.write(levelChar.toString())
-                w.write("/")
-                w.write(entry.tag)
-                w.write(": ")
-                w.write(entry.message)
-                w.newLine()
-                w.flush()
+                val ts = timeFormat.format(Date(entry.timestamp))
+                // Build the line once so we can both write it and account for
+                // its bytes accurately without a second formatter pass.
+                val line = "$ts $levelChar/${entry.tag}: ${entry.message}\n"
+                w.write(line)
+                bytesWritten += line.length
+
+                // Flush in batches to avoid per-line fsync. WARN/ERROR flush
+                // immediately so we don't lose them on crash.
+                linesSinceFlush++
+                if (entry.level == DiagnosticLevel.WARN ||
+                    entry.level == DiagnosticLevel.ERROR ||
+                    linesSinceFlush >= FLUSH_EVERY_LINES) {
+                    w.flush()
+                    linesSinceFlush = 0
+                }
             } catch (e: Exception) {
                 // Don't recurse through OalLog — just stop silently
                 isActive = false
@@ -152,8 +177,9 @@ class FileLogWriter(private val context: Context) {
     /**
      * Find the best directory for log files.
      * Prefers removable storage (USB stick) over internal shared storage.
+     * When [removableOnly] is true, returns null if no removable volume is mounted.
      */
-    private fun resolveLogDir(): File? {
+    private fun resolveLogDir(removableOnly: Boolean = false): File? {
         // Try removable storage volumes first (USB sticks)
         val externalDirs = context.getExternalFilesDirs(null)
         for (dir in externalDirs) {
@@ -165,6 +191,8 @@ class FileLogWriter(private val context: Context) {
             }
         }
 
+        if (removableOnly) return null
+
         // Fallback: primary external storage (internal shared storage)
         val primary = context.getExternalFilesDir(null)
         if (primary != null) {
@@ -173,6 +201,25 @@ class FileLogWriter(private val context: Context) {
         }
 
         return null
+    }
+
+    /**
+     * Returns true if any removable storage volume is currently mounted and writable.
+     * Used by the USB-auto-start path to skip starting a writer when no stick is
+     * present.
+     */
+    fun hasRemovableStorage(): Boolean {
+        return try {
+            val externalDirs = context.getExternalFilesDirs(null)
+            externalDirs.any { dir ->
+                dir != null && Environment.isExternalStorageRemovable(dir) && run {
+                    val logDir = File(dir, DIR_NAME)
+                    ensureDir(logDir)
+                }
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun ensureDir(dir: File): Boolean {

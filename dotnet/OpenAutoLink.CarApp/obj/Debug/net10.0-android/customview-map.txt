@@ -1,0 +1,5 @@
+Button;obj/Debug/net10.0-android/res/layout/main.xml
+LinearLayout;obj/Debug/net10.0-android/res/layout/main.xml
+resources;obj/Debug/net10.0-android/res/values/strings.xml
+string;obj/Debug/net10.0-android/res/values/strings.xml
+TextView;obj/Debug/net10.0-android/res/layout/main.xml

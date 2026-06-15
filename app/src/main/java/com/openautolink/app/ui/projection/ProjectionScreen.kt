@@ -1,7 +1,6 @@
 package com.openautolink.app.ui.projection
 
 import android.annotation.SuppressLint
-import android.content.Context
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -12,9 +11,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,21 +23,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -53,33 +49,30 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.openautolink.app.BuildConfig
 import com.openautolink.app.R
 import com.openautolink.app.audio.AudioStats
 import com.openautolink.app.session.SessionState
+import com.openautolink.app.ui.components.DraggableOverlayButton
 import com.openautolink.app.video.VideoStats
-import kotlin.math.roundToInt
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun ProjectionScreen(
     viewModel: ProjectionViewModel = viewModel(),
@@ -88,10 +81,8 @@ fun ProjectionScreen(
     diagnosticsOverlay: @Composable (onBack: () -> Unit) -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val directTransport by viewModel.directTransport.collectAsStateWithLifecycle()
     val connectionMode by viewModel.connectionMode.collectAsStateWithLifecycle()
-    val isCarHotspotMode = directTransport == "hotspot" &&
-        connectionMode == com.openautolink.app.data.AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
+    val isCarHotspotMode = connectionMode == com.openautolink.app.data.AppPreferences.CONNECTION_MODE_CAR_HOTSPOT
     val carHotspotPhones by viewModel.carHotspotPhones.collectAsStateWithLifecycle()
     val carHotspotSweeping by viewModel.carHotspotSweepActive.collectAsStateWithLifecycle()
     val carHotspotSweepProgress by viewModel.carHotspotSweepProgress.collectAsStateWithLifecycle()
@@ -109,7 +100,6 @@ fun ProjectionScreen(
     // projection Surface stays alive underneath. Returning to projection avoids
     // a codec/Surface re-init and the black frames that come with it.
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
-    var showOverlayActions by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(showSettings) {
         viewModel.setSettingsOpen(showSettings)
@@ -143,6 +133,35 @@ fun ProjectionScreen(
     val cutLeft = cutoutInsets?.left ?: 0
     val cutRight = cutoutInsets?.right ?: 0
 
+    // Effective system inset = max(systemBars, displayCutout) per edge. This
+    // is what AA should treat as `content_insets` so dropdowns/dialogs avoid
+    // both the AAOS chrome (in system_ui_visible mode) and the panel's
+    // physical curves/cutouts (always). Push to SessionManager so any
+    // start()/reconnect() picks it up as fallback when user hasn't
+    // overridden the values in settings.
+    //
+    // We do NOT auto-push system bar / cutout insets to AA as
+    // `content_insets`. In `system_ui_visible` mode the outer Box already
+    // pads the SurfaceView away from the chrome, and auto-margin +
+    // auto-DPI use the padded render rect — so AA naturally only fills
+    // the chrome-free area. Pushing insets ALSO would double-count: AA
+    // would shrink ITS UI inside the codec frame, leaving us with a
+    // small island of UI inside an already-shrunk surface.
+    //
+    // In `fullscreen_immersive` we want AA to use the full panel; no
+    // insets needed.
+    //
+    // Curved-corner / cutout cars where AAOS doesn't model the curve in
+    // its insets API still need a way to tell AA "stay X pixels away
+    // from the right edge". That's the Settings → Display Insets editor
+    // (per-edge user override). Push those values verbatim — they're
+    // the ONLY auto/system contribution to AA's content_insets now;
+    // SessionManager merges them with any user-set safeAreaTop/Bottom/etc.
+    LaunchedEffect(uiState.safeAreaTop, uiState.safeAreaBottom,
+                   uiState.safeAreaLeft, uiState.safeAreaRight) {
+        viewModel.setSystemInsets(0, 0, 0, 0)
+    }
+
     val density = LocalDensity.current
     val displayModePadding = with(density) {
         when (uiState.displayMode) {
@@ -167,62 +186,255 @@ fun ProjectionScreen(
             .padding(displayModePadding)
             .testTag("projectionScreen")
     ) {
-        // Crop: fillMaxSize — video fills entire surface, pixel_aspect tells AA to
-        // pre-distort UI so stretched pixels render correctly on wide displays.
-        // Letterbox: constrain to 16:9, no stretching needed.
-        val surfaceModifier = if (uiState.videoScalingMode == "crop") {
-            Modifier
-                .fillMaxSize()
-                .testTag("projectionSurface")
-        } else {
-            Modifier
-                .align(Alignment.Center)
-                .aspectRatio(16f / 9f, matchHeightConstraintsFirst = true)
-                .testTag("projectionSurface")
+        // The Box's content area = the "render rect" — the region where the
+        // AA SurfaceView actually lands after displayMode padding. Push it
+        // (plus the panel's reported DPI) to SessionManager so auto-DPI can
+        // mirror GM's getScaledDensity formula:
+        //   density = panelDpi / (renderRectWidth / (codecW − widthMargin))
+        // The same formula is used for fullscreen and system_ui_visible
+        // modes; only the renderRect changes between them, which makes
+        // auto-DPI track displayMode automatically.
+        val panelDpi = androidx.compose.ui.platform.LocalConfiguration.current.densityDpi
+        androidx.compose.foundation.layout.BoxWithConstraints(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            val rrW = constraints.maxWidth
+            val rrH = constraints.maxHeight
+            LaunchedEffect(rrW, rrH, panelDpi, uiState.displayMode) {
+                viewModel.setRenderRect(rrW, rrH, panelDpi, uiState.displayMode)
+            }
+        }
+        // ── Video surface rendering ────────────────────────────────────────
+        // Two modes:
+        //
+        // "letterbox": SurfaceView constrained to 16:9, centered. Decoder
+        //   stretches codec frame to that surface (uniform when codec is 16:9).
+        //   No margin handling. Black bars visible on non-16:9 panels.
+        //
+        // "crop" (margin-zoom): SurfaceView is INFLATED beyond the parent
+        //   so the codec's *inner content rect* (codec_w − widthMargin) ×
+        //   (codec_h − heightMargin) lands at parent size. The codec's black
+        //   margin pixels extend past the parent's clipToBounds and disappear.
+        //   The decoder's non-uniform SCALE_TO_FIT is effectively uniform here
+        //   because the SurfaceView's aspect == codec frame aspect, so square
+        //   pixels survive intact. Touch coords map for free: the OnTouchListener
+        //   receives MotionEvents in the inflated SurfaceView's coord space
+        //   (only inside the parent's clipped region), and the existing linear
+        //   TouchScaler.scalePoint(eventX, eventY, viewW, viewH, codecW, codecH)
+        //   already produces the correct codec-space coordinate.
+        //
+        // Choose margins so inner aspect ≈ panel aspect for square pixels.
+        // Example: 2914×1134 panel + 1080p codec → heightMargin ≈ 358
+        // (inner 1920×722 ≈ 2.66:1 ≈ 2914:1134).
+        val codecW = uiState.videoStats.width
+        val codecH = uiState.videoStats.height
+        val userWm = uiState.aaWidthMargin.coerceAtLeast(0)
+        val userHm = uiState.aaHeightMargin.coerceAtLeast(0)
+        val autoMargins = uiState.aaAutoMargins
+        val isCropMode = uiState.videoScalingMode == "crop"
+
+        @SuppressLint("ClickableViewAccessibility")
+        val surfaceFactory: (android.content.Context) -> SurfaceView = { context ->
+            SurfaceView(context).apply {
+                holder.addCallback(object : SurfaceHolder.Callback {
+                    override fun surfaceCreated(holder: SurfaceHolder) {
+                        com.openautolink.app.diagnostics.DiagnosticLog.i(
+                            "video",
+                            "SurfaceView.surfaceCreated: ${holder.surfaceFrame.width()}x${holder.surfaceFrame.height()}"
+                        )
+                        viewModel.onSurfaceAvailable(
+                            holder.surface,
+                            holder.surfaceFrame.width(),
+                            holder.surfaceFrame.height()
+                        )
+                    }
+
+                    override fun surfaceChanged(
+                        holder: SurfaceHolder,
+                        format: Int,
+                        width: Int,
+                        height: Int
+                    ) {
+                        com.openautolink.app.diagnostics.DiagnosticLog.i(
+                            "video",
+                            "SurfaceView.surfaceChanged: ${width}x${height} format=0x${Integer.toHexString(format)}"
+                        )
+                        viewModel.onSurfaceAvailable(holder.surface, width, height)
+                    }
+
+                    override fun surfaceDestroyed(holder: SurfaceHolder) {
+                        com.openautolink.app.diagnostics.DiagnosticLog.i(
+                            "video",
+                            "SurfaceView.surfaceDestroyed"
+                        )
+                        viewModel.onSurfaceDestroyed()
+                    }
+                })
+                // No touch listener here — touches are captured by an
+                // overlay sitting over the parent's visible rect (see Crop
+                // and Letterbox branches below) which knows the panel and
+                // codec inner-rect dims explicitly. Attaching a touch
+                // listener to the inflated SurfaceView produced inconsistent
+                // edge-of-panel mappings depending on Android version /
+                // clip behaviour.
+            }
         }
 
-        // SurfaceView for video rendering — intercepts touch for forwarding to Android Auto
-        // Key on videoScalingMode so Compose recreates the SurfaceView when mode changes.
-        // Without this, the old SurfaceView keeps its dimensions after switching modes.
-        @SuppressLint("ClickableViewAccessibility")
-        key(uiState.videoScalingMode, uiState.displayMode) {
-        AndroidView(
-            factory = { context ->
-                SurfaceView(context).apply {
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(holder: SurfaceHolder) {
-                            viewModel.onSurfaceAvailable(
-                                holder.surface,
-                                holder.surfaceFrame.width(),
-                                holder.surfaceFrame.height()
+        // Key on mode + display mode + margins so the SurfaceView is recreated
+        // when any of those change (avoids stale dimensions and re-runs holder
+        // callbacks). NOTE: we MUST always emit exactly one AndroidView at
+        // the same position in this composition slot — switching between
+        // call sites (e.g. if/else with two AndroidViews) destroys and
+        // recreates the SurfaceView mid-decode, putting MediaCodec in a bad
+        // state. Render once, vary the Modifier instead.
+        key(uiState.videoScalingMode, uiState.displayMode, userWm, userHm, autoMargins) {
+            if (isCropMode) {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clipToBounds()
+                ) {
+                    val parentWPx = constraints.maxWidth
+                    val parentHPx = constraints.maxHeight
+
+                    // Default to filling the parent until codec dims arrive,
+                    // so the SurfaceView is created once and just resized
+                    // when the phone tells us its codec resolution.
+                    val surfaceModifier = if (
+                        codecW > 0 && codecH > 0 &&
+                        parentWPx > 0 && parentHPx > 0
+                    ) {
+                        // Auto vs manual margins (mirrors C++ SDR logic):
+                        //  - autoMargins=true: compute per-frame from panel
+                        //    AR so the codec inner rect fills the parent
+                        //    with square pixels.
+                        //  - autoMargins=false: use the user-set values
+                        //    literally; 0 = no margins → whole codec frame
+                        //    fills the parent (decoder may stretch).
+                        val (wm, hm) = if (autoMargins) {
+                            com.openautolink.app.video.MarginAutoCalc.compute(
+                                codecW, codecH, parentWPx, parentHPx
                             )
+                        } else {
+                            userWm to userHm
                         }
-
-                        override fun surfaceChanged(
-                            holder: SurfaceHolder,
-                            format: Int,
-                            width: Int,
-                            height: Int
-                        ) {
-                            viewModel.onSurfaceAvailable(holder.surface, width, height)
-                        }
-
-                        override fun surfaceDestroyed(holder: SurfaceHolder) {
-                            viewModel.onSurfaceDestroyed()
-                        }
-                    })
-
-                    setOnTouchListener { v, event ->
-                        // Don't forward touch to AA while settings overlay is open
-                        if (!showSettings) {
-                            viewModel.onTouchEvent(event, v.width, v.height)
-                        }
-                        true
+                        val innerW = (codecW - wm).coerceAtLeast(1)
+                        val innerH = (codecH - hm).coerceAtLeast(1)
+                        // Uniform scale chosen so the inner content rect at
+                        // minimum covers the parent (margin pixels overflow).
+                        val scale = maxOf(
+                            parentWPx.toFloat() / innerW.toFloat(),
+                            parentHPx.toFloat() / innerH.toFloat()
+                        )
+                        val viewWPx = (codecW * scale).toInt().coerceAtLeast(1)
+                        val viewHPx = (codecH * scale).toInt().coerceAtLeast(1)
+                        // Anchor the codec's TOP-LEFT to the parent's
+                        // top-left, not centred. The phone (observed on
+                        // both Pixel and Samsung Wireless AA) ignores
+                        // `UiConfig.margins` and top-aligns its UI inside
+                        // the codec frame when only `height_margin` is
+                        // sent (i.e. the inner content lives at codec
+                        // rows [0, codecH - hm], with the hm rows of
+                        // margin painted at the BOTTOM). Centering the
+                        // SurfaceView would crop the top of AA's UI and
+                        // reveal the bottom margin band on screen.
+                        // Same logic applies to width_margin → left-align.
+                        val offXPx = 0
+                        val offYPx = 0
+                        Modifier
+                            .offset { IntOffset(offXPx, offYPx) }
+                            .requiredSize(
+                                with(density) { viewWPx.toDp() },
+                                with(density) { viewHPx.toDp() }
+                            )
+                            .testTag("projectionSurface")
+                    } else {
+                        Modifier
+                            .fillMaxSize()
+                            .testTag("projectionSurface")
                     }
+
+                    AndroidView(
+                        factory = surfaceFactory,
+                        modifier = surfaceModifier,
+                    )
+
+                    // Touch overlay: covers the parent's visible rect (the
+                    // panel area). pointerInteropFilter delivers MotionEvents
+                    // with coords in this modifier's local space, which is
+                    // the panel rect — exactly what we want to map to the
+                    // codec inner rect (where AA's UI lives, top-left
+                    // anchored).
+                    val touchInnerW: Int
+                    val touchInnerH: Int
+                    if (codecW > 0 && codecH > 0 && parentWPx > 0 && parentHPx > 0) {
+                        val (wm, hm) = if (autoMargins) {
+                            com.openautolink.app.video.MarginAutoCalc.compute(
+                                codecW, codecH, parentWPx, parentHPx
+                            )
+                        } else {
+                            userWm to userHm
+                        }
+                        touchInnerW = (codecW - wm).coerceAtLeast(1)
+                        touchInnerH = (codecH - hm).coerceAtLeast(1)
+                    } else {
+                        touchInnerW = 0
+                        touchInnerH = 0
+                    }
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInteropFilter { ev ->
+                                if (!showSettings) {
+                                    viewModel.onTouchEvent(
+                                        ev,
+                                        parentWPx, parentHPx,
+                                        touchInnerW, touchInnerH,
+                                        parentWPx, parentHPx,
+                                    )
+                                }
+                                true
+                            }
+                            .testTag("projectionTouch")
+                    )
                 }
-            },
-            modifier = surfaceModifier
-        )
+            } else {
+                // Letterbox: 16:9 centered, with a touch overlay sitting
+                // exactly over the same rect (so its local space ↔ codec
+                // space is a uniform 1:1 ratio).
+                androidx.compose.foundation.layout.BoxWithConstraints(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .aspectRatio(16f / 9f, matchHeightConstraintsFirst = true)
+                ) {
+                    val ltrW = constraints.maxWidth
+                    val ltrH = constraints.maxHeight
+                    AndroidView(
+                        factory = surfaceFactory,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("projectionSurface")
+                    )
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInteropFilter { ev ->
+                                if (!showSettings) {
+                                    // No margin in letterbox — codec frame
+                                    // = full surface, so inner = codec.
+                                    viewModel.onTouchEvent(
+                                        ev,
+                                        ltrW, ltrH,
+                                        codecW, codecH,
+                                        ltrW, ltrH,
+                                    )
+                                }
+                                true
+                            }
+                            .testTag("projectionTouch")
+                    )
+                }
+            }
         }
 
         // Connection status HUD — centered overlay, visible when not streaming
@@ -257,22 +469,6 @@ fun ProjectionScreen(
         if (uiState.sessionState == SessionState.STREAMING && uiState.videoStats.waitingForKeyframe) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xAA000000))
-                    .padding(24.dp)
-                    .testTag("videoLoadingPlaceholder"),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(36.dp),
-                    color = Color.White,
-                    strokeWidth = 3.dp
-                )
-            }
-
-            Box(
-                modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 48.dp)
                     .clip(RoundedCornerShape(12.dp))
@@ -299,26 +495,111 @@ fun ProjectionScreen(
             }
         }
 
-        FloatingOverlayMenu(
-            expanded = showOverlayActions,
-            onExpandedChange = { showOverlayActions = it },
-            showSettingsButton = uiState.overlaySettingsButton,
-            showRestartVideoButton = uiState.overlayRestartVideoButton,
-            showSwitchPhoneButton = isCarHotspotMode && uiState.overlaySwitchPhoneButton,
-            showStatsButton = uiState.overlayStatsButton,
-            showFileLogButton = uiState.fileLoggingEnabled,
-            statsActive = uiState.showStats,
-            carHotspotSwitching = carHotspotSwitching,
-            fileLoggingActive = uiState.fileLoggingActive,
-            onSettings = { showSettings = true },
-            onRestartVideo = { viewModel.restartVideoStream() },
-            onSwitchPhone = { viewModel.showCarHotspotChooser() },
-            onStats = { viewModel.toggleStats() },
-            onFileLog = { viewModel.toggleFileLogging() },
+        // Floating overlay buttons — bottom-right, above nav bar. Draggable.
+        // Use BoxWithConstraints to get available bounds and pass them to
+        // buttons so they can clamp positions when display mode changes.
+        BoxWithConstraints(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = 16.dp),
-        )
+        ) {
+            // `maxWidth.value` returns DP, but the drag offset inside
+            // DraggableOverlayButton is in PIXELS. Passing the DP value
+            // was clamping the drag to ~screen_width/density pixels —
+            // i.e. an "invisible wall" roughly 1/3 of the way across the
+            // screen on common AAOS panel densities. Convert to pixels.
+            val density = LocalDensity.current
+            val maxBoundsX = with(density) { this@BoxWithConstraints.maxWidth.toPx() }
+            val maxBoundsY = with(density) { this@BoxWithConstraints.maxHeight.toPx() }
+
+            Column {
+                // Settings button — draggable
+                DraggableOverlayButton(
+                    icon = Icons.Default.Settings,
+                    contentDescription = "Settings",
+                    onClick = { showSettings = true },
+                    positionKey = "overlay_settings",
+                    modifier = Modifier.testTag("settingsButton"),
+                    maxBoundsX = maxBoundsX,
+                    maxBoundsY = maxBoundsY,
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Switch Phone button — Car Hotspot mode only. Tapping opens a
+                // centered chooser overlay; the underlying AA session keeps
+                // streaming until the user explicitly picks a different phone.
+                if (isCarHotspotMode) {
+                    DraggableOverlayButton(
+                        icon = Icons.Default.PhoneAndroid,
+                        contentDescription = "Switch Phone",
+                        onClick = { viewModel.showCarHotspotChooser() },
+                        positionKey = "overlay_switch_phone",
+                        containerColor = if (carHotspotSwitching) {
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                        },
+                        tint = if (carHotspotSwitching) {
+                            MaterialTheme.colorScheme.onTertiary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        modifier = Modifier.testTag("switchPhoneButton"),
+                        maxBoundsX = maxBoundsX,
+                        maxBoundsY = maxBoundsY,
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                // Stats button — draggable
+                DraggableOverlayButton(
+                    icon = Icons.Default.Info,
+                    contentDescription = "Stats for nerds",
+                    onClick = { viewModel.toggleStats() },
+                    positionKey = "overlay_stats",
+                    containerColor = if (uiState.showStats) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                    } else {
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    },
+                    tint = if (uiState.showStats) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    modifier = Modifier.testTag("statsButton"),
+                    maxBoundsX = maxBoundsX,
+                    maxBoundsY = maxBoundsY,
+                )
+
+                // File logging button — only shown when enabled in Settings → Diagnostics
+                if (uiState.fileLoggingEnabled) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                DraggableOverlayButton(
+                    icon = Icons.Default.FiberManualRecord,
+                    contentDescription = "File Logging",
+                    onClick = { viewModel.toggleFileLogging() },
+                    positionKey = "overlay_file_log",
+                    containerColor = if (uiState.fileLoggingActive) {
+                        Color.Red.copy(alpha = 0.7f)
+                    } else {
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    },
+                    tint = if (uiState.fileLoggingActive) {
+                        Color.White
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    modifier = Modifier.testTag("fileLogButton"),
+                    maxBoundsX = maxBoundsX,
+                    maxBoundsY = maxBoundsY,
+                )
+                } // end fileLoggingEnabled
+            }
+        }
 
         // Stats overlay panel — bottom-left
         if (uiState.showStats) {
@@ -330,6 +611,7 @@ fun ProjectionScreen(
                 phoneBatteryLevel = uiState.phoneBatteryLevel,
                 aaPixelAspect = uiState.aaPixelAspect,
                 aaDpi = uiState.aaDpi,
+                effectiveDpi = uiState.effectiveDpi,
                 wifiFrequencyMhz = uiState.wifiFrequencyMhz,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -378,8 +660,7 @@ fun ProjectionScreen(
         }
 
         // Phone chooser overlay — Car Hotspot mode uses the centered overlay
-        // backed by PhoneDiscovery (mDNS + sweep). Legacy Nearby mode falls
-        // through to the slide-in version.
+        // backed by PhoneDiscovery (mDNS + sweep).
         val showChooser by viewModel.showPhoneChooser.collectAsStateWithLifecycle()
         if (isCarHotspotMode) {
             // Fade-in centered modal — independent of the floating button's
@@ -413,19 +694,6 @@ fun ProjectionScreen(
                     onSetDefault = { viewModel.setDefaultPhoneId(it) },
                     onForget = { viewModel.forgetKnownPhone(it) },
                     onRescan = { viewModel.rescanCarHotspotPhones() },
-                    onDismiss = { viewModel.dismissPhoneChooser() },
-                )
-            }
-        } else {
-            val endpoints by viewModel.discoveredEndpoints.collectAsStateWithLifecycle()
-            AnimatedVisibility(
-                visible = showChooser,
-                enter = slideInHorizontally { it }, // slide in from right
-                exit = slideOutHorizontally { it },  // slide out to right
-            ) {
-                PhoneChooserOverlay(
-                    endpoints = endpoints,
-                    onSelect = { id, name -> viewModel.selectPhone(id, name) },
                     onDismiss = { viewModel.dismissPhoneChooser() },
                 )
             }
@@ -522,210 +790,6 @@ private fun CarHotspotStatusBanner(
     }
 }
 
-@Composable
-private fun FloatingOverlayMenu(
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
-    showSettingsButton: Boolean,
-    showRestartVideoButton: Boolean,
-    showSwitchPhoneButton: Boolean,
-    showStatsButton: Boolean,
-    showFileLogButton: Boolean,
-    statsActive: Boolean,
-    carHotspotSwitching: Boolean,
-    fileLoggingActive: Boolean,
-    onSettings: () -> Unit,
-    onRestartVideo: () -> Unit,
-    onSwitchPhone: () -> Unit,
-    onStats: () -> Unit,
-    onFileLog: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    val prefs = remember {
-        context.getSharedPreferences("overlay_positions", Context.MODE_PRIVATE)
-    }
-    var offset by remember {
-        mutableStateOf(
-            Offset(
-                prefs.getFloat("overlay_actions_x", 0f),
-                prefs.getFloat("overlay_actions_y", 0f),
-            )
-        )
-    }
-
-    Column(
-        modifier = modifier
-            .offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) }
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragEnd = {
-                        prefs.edit()
-                            .putFloat("overlay_actions_x", offset.x)
-                            .putFloat("overlay_actions_y", offset.y)
-                            .apply()
-                    },
-                ) { change, dragAmount ->
-                    change.consume()
-                    offset = Offset(
-                        x = offset.x + dragAmount.x,
-                        y = offset.y + dragAmount.y,
-                    )
-                }
-            },
-        horizontalAlignment = Alignment.End,
-    ) {
-        AnimatedVisibility(visible = expanded) {
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .background(
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
-                        shape = RoundedCornerShape(18.dp),
-                    )
-                    .padding(8.dp),
-            ) {
-                if (showSettingsButton) {
-                    OverlayActionButton(
-                        icon = Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        onClick = {
-                            onExpandedChange(false)
-                            onSettings()
-                        },
-                        modifier = Modifier.testTag("settingsButton"),
-                    )
-                }
-
-                if (showSwitchPhoneButton) {
-                    OverlayActionButton(
-                        icon = Icons.Default.PhoneAndroid,
-                        contentDescription = "Switch Phone",
-                        onClick = {
-                            onExpandedChange(false)
-                            onSwitchPhone()
-                        },
-                        containerColor = if (carHotspotSwitching) {
-                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.88f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
-                        },
-                        tint = if (carHotspotSwitching) {
-                            MaterialTheme.colorScheme.onTertiary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.testTag("switchPhoneButton"),
-                    )
-                }
-
-                if (showRestartVideoButton) {
-                    OverlayActionButton(
-                        icon = Icons.Default.Refresh,
-                        contentDescription = "Restart video stream",
-                        onClick = {
-                            onExpandedChange(false)
-                            onRestartVideo()
-                        },
-                        modifier = Modifier.testTag("restartVideoButton"),
-                    )
-                }
-
-                if (showStatsButton) {
-                    OverlayActionButton(
-                        icon = Icons.Default.Info,
-                        contentDescription = "Stats for nerds",
-                        onClick = {
-                            onExpandedChange(false)
-                            onStats()
-                        },
-                        containerColor = if (statsActive) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
-                        },
-                        tint = if (statsActive) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.testTag("statsButton"),
-                    )
-                }
-
-                if (showFileLogButton) {
-                    OverlayActionButton(
-                        icon = Icons.Default.FiberManualRecord,
-                        contentDescription = "File Logging",
-                        onClick = {
-                            onExpandedChange(false)
-                            onFileLog()
-                        },
-                        containerColor = if (fileLoggingActive) {
-                            Color.Red.copy(alpha = 0.7f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
-                        },
-                        tint = if (fileLoggingActive) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("fileLogButton"),
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(1.dp))
-            }
-        }
-
-        if (expanded) {
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-
-        Box(modifier = Modifier.padding(horizontal = 8.dp)) {
-            OverlayActionButton(
-                icon = Icons.Default.BugReport,
-                contentDescription = "Projection controls",
-                onClick = { onExpandedChange(!expanded) },
-                containerColor = if (expanded) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
-                } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                },
-                tint = if (expanded) {
-                    MaterialTheme.colorScheme.onPrimary
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                modifier = Modifier.testTag("overlayMenuButton"),
-            )
-        }
-    }
-}
-
-@Composable
-private fun OverlayActionButton(
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    containerColor: Color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
-) {
-    FilledTonalIconButton(
-        onClick = onClick,
-        modifier = modifier.size(56.dp),
-        colors = IconButtonDefaults.filledTonalIconButtonColors(
-            containerColor = containerColor,
-            contentColor = tint,
-        ),
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            modifier = Modifier.size(24.dp),
-        )
-    }
-}
-
 /**
  * Tiny 4-tuple helper used by [CarHotspotStatusBanner] to pack its derived
  * display state. Kotlin's stdlib only goes to Triple.
@@ -736,90 +800,6 @@ private data class Quad(
     val isError: Boolean,
     val isAwaitingPick: Boolean,
 )
-
-@Composable
-private fun PhoneChooserOverlay(
-    endpoints: List<com.openautolink.app.transport.direct.AaNearbyManager.DiscoveredEndpoint>,
-    onSelect: (id: String, name: String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.85f))
-            .clickable(onClick = onDismiss),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .padding(24.dp)
-                .clickable(enabled = false) {} // prevent click-through
-                .width(360.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                "Select Phone",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (endpoints.isEmpty()) {
-                Spacer(modifier = Modifier.height(24.dp))
-                CircularProgressIndicator(
-                    modifier = Modifier.size(32.dp),
-                    strokeWidth = 3.dp,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    "Searching for phones...",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Make sure the companion app is running on your phone",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-            } else {
-                Spacer(modifier = Modifier.height(12.dp))
-                endpoints.forEach { endpoint ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onSelect(endpoint.id, endpoint.name) }
-                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f))
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Default.PhoneAndroid,
-                            contentDescription = null,
-                            modifier = Modifier.size(24.dp),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            endpoint.name,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-            androidx.compose.material3.TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    }
-}
 
 /**
  * Centered, modal phone chooser for Car Hotspot mode.
@@ -1196,12 +1176,12 @@ private fun VideoStatsOverlay(
     phoneBatteryLevel: Int?,
     aaPixelAspect: Int,
     aaDpi: Int,
+    effectiveDpi: Int,
     wifiFrequencyMhz: Int = 0,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
-            .widthIn(min = 360.dp, max = 520.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(Color.Black.copy(alpha = 0.72f))
             .padding(14.dp)
@@ -1243,6 +1223,10 @@ private fun VideoStatsOverlay(
                     StatLine("Resolution", "${stats.width}x${stats.height}")
                 }
                 StatLine("DPI", "$aaDpi (real)")
+                if (effectiveDpi > 0 && effectiveDpi != aaDpi) {
+                    StatLine("DPI sent", "$effectiveDpi (auto)",
+                        valueColor = Color(0xFF64B5F6))
+                }
                 if (aaPixelAspect > 0) {
                     StatLine("Pixel Aspect", "${"%.4f".format(aaPixelAspect / 10000f)} (${aaPixelAspect}e⁻⁴)")
                 } else {
@@ -1255,9 +1239,6 @@ private fun VideoStatsOverlay(
                         else -> Color.Red
                     })
                 StatLine("Frames", "Rx:${stats.framesReceived}  Dec:${stats.framesDecoded}")
-                if (stats.timeSinceLastKeyframeMs >= 0) {
-                    StatLine("Last Keyframe", formatDurationMs(stats.timeSinceLastKeyframeMs))
-                }
                 if (stats.bitrateKbps > 0) {
                     val bitrateStr = if (stats.bitrateKbps >= 1000) {
                         "${"%.1f".format(stats.bitrateKbps / 1000)} Mbps"
@@ -1303,9 +1284,6 @@ private fun VideoStatsOverlay(
             } else {
                 StatLine("Audio", "not active")
             }
-
-            Spacer(modifier = Modifier.height(6.dp))
-            StatLine("Version", BuildConfig.VERSION_NAME)
         }
     }
 }
@@ -1326,8 +1304,6 @@ private fun StatLine(
             fontFamily = FontFamily.Monospace,
             lineHeight = if (header) 20.sp else 16.sp,
             modifier = Modifier.width(if (header) 200.dp else 100.dp),
-            maxLines = 1,
-            overflow = TextOverflow.Clip,
         )
         if (value.isNotEmpty()) {
             Spacer(modifier = Modifier.width(6.dp))
@@ -1337,39 +1313,8 @@ private fun StatLine(
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
                 lineHeight = 16.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Clip,
             )
         }
-    }
-}
-
-@Composable
-private fun StatActionLine(
-    label: String,
-    value: String,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .widthIn(min = 240.dp)
-            .clickable(onClick = onClick),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text = label,
-            color = Color.Gray,
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-            lineHeight = 16.sp,
-        )
-        Text(
-            text = value,
-            color = Color.Cyan,
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-            lineHeight = 16.sp,
-        )
     }
 }
 
@@ -1378,14 +1323,6 @@ private fun formatUptime(seconds: Long): String {
     val m = (seconds % 3600) / 60
     val s = seconds % 60
     return if (h > 0) "${h}h ${m}m ${s}s" else if (m > 0) "${m}m ${s}s" else "${s}s"
-}
-
-private fun formatDurationMs(milliseconds: Long): String {
-    return if (milliseconds < 1000) {
-        "${milliseconds}ms"
-    } else {
-        formatUptime(milliseconds / 1000)
-    }
 }
 
 @Composable
@@ -1416,19 +1353,6 @@ private fun ConnectionHud(
                 color = Color.White
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = when (uiState.directTransport) {
-                    "usb" -> "USB"
-                    "hotspot" -> "WiFi Hotspot"
-                    "nearby" -> "Nearby"
-                    else -> uiState.directTransport
-                },
-                style = MaterialTheme.typography.labelLarge,
-                color = Color(0xFFB0B0B0)
-            )
-
             Spacer(modifier = Modifier.height(16.dp))
 
             when (uiState.sessionState) {
@@ -1438,15 +1362,6 @@ private fun ConnectionHud(
                         style = MaterialTheme.typography.bodyLarge,
                         color = Color(0xFFB0B0B0)
                     )
-                    if (uiState.directTransport == "usb" && uiState.usbDeviceDescription != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = uiState.usbDeviceDescription,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF808080),
-                            textAlign = TextAlign.Center,
-                        )
-                    }
                 }
                 SessionState.CONNECTING -> {
                     CircularProgressIndicator(
@@ -1460,15 +1375,6 @@ private fun ConnectionHud(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    if (uiState.directTransport == "usb" && uiState.usbDeviceDescription != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = uiState.usbDeviceDescription,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFB0B0B0),
-                            textAlign = TextAlign.Center,
-                        )
-                    }
                 }
                 SessionState.CONNECTED -> {
                     Text(
@@ -1486,15 +1392,6 @@ private fun ConnectionHud(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.error
                     )
-                    if (uiState.directTransport == "usb" && uiState.usbDeviceDescription != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = uiState.usbDeviceDescription,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFB0B0B0),
-                            textAlign = TextAlign.Center,
-                        )
-                    }
                 }
             }
         }

@@ -15,7 +15,6 @@ import com.openautolink.companion.MainActivity
 import com.openautolink.companion.R
 import com.openautolink.companion.diagnostics.CompanionFileLogger
 import com.openautolink.companion.diagnostics.CompanionLog
-import com.openautolink.companion.diagnostics.TcpSyslogSink
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,21 +24,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Foreground service that manages the Nearby advertising lifecycle.
- * Keeps the phone discoverable by the car's OAL app and relays AA
- * traffic through a Nearby stream tunnel.
+ * Foreground service that manages the TCP advertising lifecycle.
+ * Listens on port 5277 for the car app over the shared WiFi (Car Hotspot
+ * or Phone Hotspot), registers an mDNS service for discovery, and bridges
+ * incoming connections through AaProxy to the local Android Auto service.
  */
-class CompanionService : Service(), NearbyAdvertiser.StateListener {
+class CompanionService : Service(), TcpAdvertiser.StateListener {
 
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
-    private var nearbyAdvertiser: NearbyAdvertiser? = null
     private var tcpAdvertiser: TcpAdvertiser? = null
     private var carWifiManager: com.openautolink.companion.wifi.CarWifiManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
     private var fileLogger: CompanionFileLogger? = null
-    private var remoteSyslogSink: TcpSyslogSink? = null
     private var fileLogIdleTimeoutJob: kotlinx.coroutines.Job? = null
     /** True once a connection has been observed during the current logging session. */
     @Volatile private var loggingSessionEverConnected: Boolean = false
@@ -67,7 +65,6 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         when (intent?.action) {
             ACTION_STOP -> {
                 CompanionLog.i(TAG, "Stop requested")
-                setDesiredRunning(false)
                 _isRunning.value = false
                 _isConnected.value = false
                 _statusText.value = "Stopped"
@@ -75,79 +72,62 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
             }
 
             ACTION_START -> {
+                // If already connected (AA bridge active), ignore duplicate starts
+                // (e.g. BT auto-start firing a few hundred ms after the car already
+                // TCP-connected and we fired the AA trigger). Restarting here would
+                // tear down the proxy mid-connection.
+                if (_isConnected.value) {
+                    CompanionLog.i(TAG, "Start requested but already connected — ignoring")
+                    return START_STICKY
+                }
                 CompanionLog.i(TAG, "Start requested")
-                setDesiredRunning(true)
                 _isRunning.value = true
                 _isConnected.value = false
                 _statusText.value = "Advertising..."
-                startNearby()
-                val remoteEnabled = getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
-                    .getBoolean(CompanionPrefs.REMOTE_SYSLOG_ENABLED, false)
-                setRemoteSyslogEnabled(remoteEnabled)
+                startTcp()
                 if (intent.getBooleanExtra(EXTRA_START_LOGGING, false)) {
                     startFileLogging()
                 }
             }
 
-            else -> {
-                // System restart
-                if (isDesiredRunning()) {
-                    CompanionLog.i(TAG, "Service restarted by system, resuming")
+            ACTION_PREWARM -> {
+                // Pre-warm path: car-presence signal (BT, scripted, etc.) tells
+                // us a car connection is imminent. Start the AA pipeline now so
+                // by the time the car's TCP arrives ~3–10s later, AA is warm
+                // and the bridge lights up instantly. If the service wasn't
+                // running yet, start it first.
+                if (!_isRunning.value) {
+                    CompanionLog.i(TAG, "Pre-warm requested but service not running — starting first")
                     _isRunning.value = true
                     _isConnected.value = false
-                    _statusText.value = "Advertising..."
-                    startNearby()
-                    val remoteEnabled = getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
-                        .getBoolean(CompanionPrefs.REMOTE_SYSLOG_ENABLED, false)
-                    setRemoteSyslogEnabled(remoteEnabled)
+                    _statusText.value = "Pre-warming..."
+                    startTcp()
                 } else {
-                    CompanionLog.i(TAG, "Service restarted by system with no desired running state")
-                    stopSelf()
+                    CompanionLog.i(TAG, "Pre-warm requested while running")
+                }
+                tcpAdvertiser?.preWarmAaPipeline()
+            }
+
+            else -> {
+                // System restart
+                if (_isRunning.value) {
+                    CompanionLog.i(TAG, "Service restarted by system, resuming")
+                    startTcp()
                 }
             }
         }
         return START_STICKY
     }
 
-    private fun isDesiredRunning(): Boolean =
-        getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
-            .getBoolean(CompanionPrefs.SERVICE_DESIRED_RUNNING, false)
-
-    private fun setDesiredRunning(value: Boolean) {
-        getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
-            .edit()
-            .putBoolean(CompanionPrefs.SERVICE_DESIRED_RUNNING, value)
-            .apply()
-    }
-
-    private fun startNearby() {
+    private fun startTcp() {
         acquireWakeLock()
-        nearbyAdvertiser?.stop()
         tcpAdvertiser?.stop()
 
-        val prefs = getSharedPreferences(CompanionPrefs.NAME, MODE_PRIVATE)
-        // Nearby mode is disabled in the UI for now (see MainScreen) because
-        // the car-side app can't get the system permissions needed for the
-        // BT→WiFi handoff on GM AAOS. Force TCP regardless of any stale pref.
-        val rawMode = prefs.getString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.DEFAULT_TRANSPORT)
-        val mode = if (rawMode == CompanionPrefs.TRANSPORT_NEARBY) CompanionPrefs.TRANSPORT_TCP else rawMode
-
-        when (mode) {
-            CompanionPrefs.TRANSPORT_TCP -> {
-                CompanionLog.i(TAG, "Transport mode: TCP (hotspot)")
-                tcpAdvertiser = TcpAdvertiser(this, this)
-                tcpAdvertiser?.start()
-                updateNotification("TCP: waiting for car on port ${TcpAdvertiser.PORT}...")
-                startCarWifiIfConfigured()
-            }
-            else -> {
-                // Unreachable while Nearby is disabled; fall back to TCP for safety.
-                CompanionLog.w(TAG, "Unknown transport mode '$mode', falling back to TCP")
-                tcpAdvertiser = TcpAdvertiser(this, this)
-                tcpAdvertiser?.start()
-                updateNotification("TCP: waiting for car on port ${TcpAdvertiser.PORT}...")
-            }
-        }
+        CompanionLog.i(TAG, "Transport: TCP on port ${TcpAdvertiser.PORT}")
+        tcpAdvertiser = TcpAdvertiser(this, this)
+        tcpAdvertiser?.start()
+        updateNotification("TCP: waiting for car on port ${TcpAdvertiser.PORT}...")
+        startCarWifiIfConfigured()
     }
 
     /**
@@ -176,7 +156,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         startCarWifiIfConfigured()
     }
 
-    // ── NearbyAdvertiser.StateListener ─────────────────────────────────
+    // ── TcpAdvertiser.StateListener ────────────────────────────────────
 
     override fun onConnecting() {
         _statusText.value = "Connecting..."
@@ -199,13 +179,11 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
 
     override fun onProxyDisconnected() {
         _isConnected.value = false
-        val stillDesired = isDesiredRunning()
-        _statusText.value = if (stillDesired) "Waiting for car..." else "Disconnected"
-        CompanionLog.i(TAG, "AA local proxy disconnected; TCP listener remains available=${stillDesired && _isRunning.value}")
-        updateNotification(
-            if (stillDesired) "TCP: waiting for car on port ${TcpAdvertiser.PORT}..."
-            else "Disconnected",
-        )
+        _statusText.value = "Disconnected"
+        CompanionLog.i(TAG, "AA proxy disconnected")
+        updateNotification("Disconnected — tap Start to retry")
+        // Auto-reconnect disabled during development to avoid interfering
+        // with the phone's AA session lifecycle.
     }
 
     override fun onLaunchTimeout() {
@@ -275,11 +253,9 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         _isRunning.value = false
         _isConnected.value = false
         _statusText.value = "Stopped"
-        nearbyAdvertiser?.stop()
         tcpAdvertiser?.stop()
         carWifiManager?.stop()
         stopFileLogging()
-        setRemoteSyslogEnabled(false)
         releaseWakeLock()
         if (multicastLock?.isHeld == true) {
             multicastLock?.release()
@@ -333,23 +309,6 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
         _fileLoggingPath.value = null
     }
 
-    fun setRemoteSyslogEnabled(enabled: Boolean) {
-        if (enabled) {
-            if (remoteSyslogSink == null) {
-                remoteSyslogSink = TcpSyslogSink("openautolink-companion")
-            }
-            remoteSyslogSink?.start()
-            CompanionLog.remoteSyslogSink = remoteSyslogSink
-            _remoteSyslogEnabled.value = true
-        } else {
-            CompanionLog.remoteSyslogSink = null
-            remoteSyslogSink?.stop()
-            remoteSyslogSink = null
-            _remoteSyslogEnabled.value = false
-        }
-        _remoteSyslogStatus.value = CompanionLog.remoteSyslogSink?.status() ?: "disabled"
-    }
-
     companion object {
         private const val TAG = "OAL_Service"
         private const val CHANNEL_ID = "oal_companion_channel"
@@ -359,6 +318,7 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
 
         const val ACTION_START = "com.openautolink.companion.ACTION_START"
         const val ACTION_STOP = "com.openautolink.companion.ACTION_STOP"
+        const val ACTION_PREWARM = "com.openautolink.companion.ACTION_PREWARM"
         /** Optional extra on ACTION_START: also start file logging once the service is up. */
         const val EXTRA_START_LOGGING = "com.openautolink.companion.EXTRA_START_LOGGING"
 
@@ -377,12 +337,6 @@ class CompanionService : Service(), NearbyAdvertiser.StateListener {
 
         private val _fileLoggingPath = MutableStateFlow<String?>(null)
         val fileLoggingPath: kotlinx.coroutines.flow.StateFlow<String?> = _fileLoggingPath
-
-        private val _remoteSyslogEnabled = MutableStateFlow(false)
-        val remoteSyslogEnabled: kotlinx.coroutines.flow.StateFlow<Boolean> = _remoteSyslogEnabled
-
-        private val _remoteSyslogStatus = MutableStateFlow("disabled")
-        val remoteSyslogStatus: kotlinx.coroutines.flow.StateFlow<String> = _remoteSyslogStatus
 
         @Volatile
         private var _instance: CompanionService? = null

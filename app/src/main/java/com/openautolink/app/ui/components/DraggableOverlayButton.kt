@@ -32,6 +32,9 @@ import kotlin.math.roundToInt
  * Tap triggers [onClick]. Drag moves the button. Drag vs tap is distinguished
  * by tracking cumulative drag distance — only taps with < threshold movement fire onClick.
  * Position is persisted across restarts via SharedPreferences.
+ * Positions are clamped to ±[maxBoundsX] / ±[maxBoundsY] so the button can be
+ * dragged anywhere within the screen bounds (including left/top of the default
+ * bottom-right placement) while still staying visible across display mode changes.
  */
 @Composable
 fun DraggableOverlayButton(
@@ -44,6 +47,8 @@ fun DraggableOverlayButton(
     tint: Color = MaterialTheme.colorScheme.onSurface,
     containerColor: Color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
     onGlobalPosition: ((LayoutCoordinates) -> Unit)? = null,
+    maxBoundsX: Float = Float.POSITIVE_INFINITY,
+    maxBoundsY: Float = Float.POSITIVE_INFINITY,
 ) {
     val density = LocalDensity.current
     val context = LocalContext.current
@@ -51,9 +56,19 @@ fun DraggableOverlayButton(
         context.getSharedPreferences("overlay_positions", Context.MODE_PRIVATE)
     }
 
+    // Helper to clamp offset to bounds.
+    // Minimum is negative to allow dragging left/up from the default bottom-right position.
+    fun clampOffset(offset: Offset): Offset {
+        return Offset(
+            x = offset.x.coerceIn(-maxBoundsX, maxBoundsX),
+            y = offset.y.coerceIn(-maxBoundsY, maxBoundsY)
+        )
+    }
+
     val initialPx = with(density) {
         if (positionKey != null && prefs.contains("${positionKey}_x")) {
-            Offset(prefs.getFloat("${positionKey}_x", 0f), prefs.getFloat("${positionKey}_y", 0f))
+            val savedOffset = Offset(prefs.getFloat("${positionKey}_x", 0f), prefs.getFloat("${positionKey}_y", 0f))
+            clampOffset(savedOffset)
         } else {
             Offset(initialOffsetDp.x * this.density, initialOffsetDp.y * this.density)
         }
@@ -96,10 +111,10 @@ fun DraggableOverlayButton(
                 ) { change, dragAmount ->
                     change.consume()
                     wasDragged = true
-                    offset = Offset(
+                    offset = clampOffset(Offset(
                         x = offset.x + dragAmount.x,
                         y = offset.y + dragAmount.y,
-                    )
+                    ))
                 }
             },
         colors = ButtonDefaults.filledTonalButtonColors(

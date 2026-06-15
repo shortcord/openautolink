@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "I/7U4ZM+O6M=",
+  "success": true,
+  "projectFilePath": "/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.CarApp/OpenAutoLink.CarApp.csproj",
+  "expectedPackageFiles": [
+    "/home/short/.nuget/packages/microsoft.net.illink.tasks/10.0.8/microsoft.net.illink.tasks.10.0.8.nupkg.sha512",
+    "/home/short/.nuget/packages/microsoft.netcore.app.ref/10.0.9/microsoft.netcore.app.ref.10.0.9.nupkg.sha512"
+  ],
+  "logs": []
+}

@@ -1,0 +1,12 @@
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/bin/Debug/net10.0/OpenAutoLink.Core.deps.json
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/bin/Debug/net10.0/OpenAutoLink.Core.dll
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/bin/Debug/net10.0/OpenAutoLink.Core.pdb
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/obj/Debug/net10.0/OpenAutoLink.Core.GeneratedMSBuildEditorConfig.editorconfig
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/obj/Debug/net10.0/OpenAutoLink.Core.AssemblyInfoInputs.cache
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/obj/Debug/net10.0/OpenAutoLink.Core.AssemblyInfo.cs
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/obj/Debug/net10.0/OpenAutoLink.Core.csproj.CoreCompileInputs.cache
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/obj/Debug/net10.0/OpenAutoLink.Core.sourcelink.json
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/obj/Debug/net10.0/OpenAutoLink.Core.dll
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/obj/Debug/net10.0/refint/OpenAutoLink.Core.dll
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/obj/Debug/net10.0/OpenAutoLink.Core.pdb
+/home/short/Projects/Personal/openautolink/dotnet/OpenAutoLink.Core/obj/Debug/net10.0/ref/OpenAutoLink.Core.dll

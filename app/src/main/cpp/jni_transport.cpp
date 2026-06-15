@@ -1,8 +1,9 @@
 /*
  * jni_transport.cpp — aasdk ITransport backed by JNI byte pipe.
  *
- * Bridges Nearby Connections streams (Kotlin InputStream/OutputStream)
- * to aasdk's async Promise-based transport interface.
+ * Bridges TCP socket streams (Kotlin InputStream/OutputStream from the
+ * shared-WiFi connection to the companion app) to aasdk's async
+ * Promise-based transport interface.
  */
 #include "jni_transport.h"
 
@@ -73,7 +74,6 @@ JniTransport::~JniTransport()
 void JniTransport::receive(size_t size, ReceivePromise::Pointer promise)
 {
     strand_.dispatch([this, size, promise = std::move(promise)]() mutable {
-        LOGI("receive() requested %zu bytes, buffer has %zu", size, receiveBuffer_.size());
         if (stopped_) {
             promise->reject(aasdk::error::Error(aasdk::error::ErrorCode::OPERATION_ABORTED));
             return;
@@ -228,8 +228,9 @@ void JniTransport::readThreadFunc()
         env->GetByteArrayRegion(jdata, 0, len, reinterpret_cast<jbyte*>(localBuf.data()));
         env->DeleteLocalRef(jdata);
 
-        // Feed into receive buffer
-        LOGI("Read: %d bytes from Java", (int)len);
+        // Feed into receive buffer (per-buffer log dropped — fires hundreds of
+        // times/second on the AA hot path. Re-enable behind a verbose flag if
+        // you need it.)
         onDataReceived(localBuf.data(), static_cast<size_t>(len));
     }
 

@@ -13,7 +13,6 @@ import com.openautolink.app.data.AppPreferences
 import com.openautolink.app.session.SessionManager
 import com.openautolink.app.session.SessionState
 import com.openautolink.app.transport.ControlMessage
-import com.openautolink.app.transport.usb.UsbConnectionManager
 import com.openautolink.app.video.CodecSelector
 import com.openautolink.app.video.VideoStats
 import com.openautolink.app.audio.AudioStats
@@ -111,6 +110,12 @@ data class CarInfo(
     val evRegenBrakingLevel: Int? = null,
     val evStoppingMode: Int? = null,
     val distanceDisplayUnits: Int? = null,
+    // Round-6 additions
+    val tirePressuresKpa: List<Float>? = null,
+    val absActive: Boolean? = null,
+    val tractionControlActive: Boolean? = null,
+    val evMotorPowerW: Float? = null,
+    val evMotorTorqueNm: Float? = null,
     // Property access status — key = field name, value = "subscribed"|"not_exposed"|etc
     val propertyStatus: Map<String, String> = emptyMap(),
 )
@@ -127,6 +132,13 @@ data class DebugProbeState(
     val usbDevices: List<com.openautolink.app.diagnostics.DeviceDebugProbe.UsbDeviceInfo> = emptyList(),
     val sysfsDevices: List<Map<String, String>> = emptyList(),
     val usbScanDone: Boolean = false,
+    // GM AAOS recon probes — see recon_dump/gm-aaos-recon.md §10 (local-only; gitignored)
+    val gmRecon: com.openautolink.app.diagnostics.GmReconProbe.Result? = null,
+    val gmReconRunning: Boolean = false,
+    val gmAdbEnableResult: String? = null,
+    // Car-property enumeration: what VHAL properties are visible to our UID
+    val carPropEnum: com.openautolink.app.diagnostics.CarPropertyEnumerator.Result? = null,
+    val carPropEnumRunning: Boolean = false,
 )
 
 data class DiagnosticsUiState(
@@ -180,7 +192,9 @@ data class NetworkProbeState(
     val localHotspotSsid: String? = null,
     val localHotspotPassword: String? = null,
     val localHotspotStatus: String = "",
-    // WiFi Direct / P2P probe (does this device support Nearby's preferred medium?)
+    // WiFi Direct / P2P probe — does this device support acting as a P2P
+    // Group Owner? Useful as a sanity check for future peer-to-peer features;
+    // not on the current TCP-over-shared-hotspot path.
     val p2pActive: Boolean = false,
     val p2pSupported: Boolean? = null,
     val p2pSsid: String? = null,
@@ -296,14 +310,10 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             combine(
                 sessionManager.sessionState,
                 preferences.directTransport,
-                UsbConnectionManager.status,
-                UsbConnectionManager.deviceDescription,
-            ) { state, transport, usbStatus, usbDeviceDescription ->
+            ) { state, transport ->
                 NetworkInfo(
                     sessionState = state,
                     transport = transport,
-                    usbStatus = usbStatus,
-                    usbDeviceDescription = usbDeviceDescription,
                 )
             }.collect { info ->
                 _network.value = info
@@ -375,6 +385,11 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
                     evRegenBrakingLevel = vd.evRegenBrakingLevel,
                     evStoppingMode = vd.evStoppingMode,
                     distanceDisplayUnits = vd.distanceDisplayUnits,
+                    tirePressuresKpa = vd.tirePressuresKpa,
+                    absActive = vd.absActive,
+                    tractionControlActive = vd.tractionControlActive,
+                    evMotorPowerW = vd.evMotorPowerW,
+                    evMotorTorqueNm = vd.evMotorTorqueNm,
                     propertyStatus = forwarder.propertyStatus,
                 )
             }
@@ -741,6 +756,57 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    // ── GM AAOS Recon Probes ────────────────────────────────────────
+    // Pen-test the four enable paths documented in recon_dump/gm-aaos-recon.md §10 (local-only; gitignored).
+
+    fun runGmReconProbes() {
+        if (_debugProbe.value.gmReconRunning) return
+        _debugProbe.value = _debugProbe.value.copy(gmReconRunning = true)
+        viewModelScope.launch {
+            val result = com.openautolink.app.diagnostics.GmReconProbe.run(getApplication())
+            _debugProbe.value = _debugProbe.value.copy(
+                gmRecon = result,
+                gmReconRunning = false,
+            )
+        }
+    }
+
+    fun callRdmsAdbEnable(enable: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val (ok, detail) = com.openautolink.app.diagnostics.GmReconProbe.callRdmsAdbEnable(enable)
+            val label = if (ok) "✓" else "✗"
+            _debugProbe.value = _debugProbe.value.copy(
+                gmAdbEnableResult = "$label RDMSADBEnable(${if (enable) "true" else "false"}) — $detail",
+            )
+        }
+    }
+
+    fun clearGmAdbEnableResult() {
+        _debugProbe.value = _debugProbe.value.copy(gmAdbEnableResult = null)
+    }
+
+    fun execAdboverBcs(arg: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val (ok, detail) = com.openautolink.app.diagnostics.GmReconProbe.execAdboverBcs(arg)
+            val label = if (ok) "✓" else "✗"
+            _debugProbe.value = _debugProbe.value.copy(
+                gmAdbEnableResult = "$label /system/bin/ADBoverBCS.sh $arg — $detail",
+            )
+        }
+    }
+
+    fun enumerateCarProperties() {
+        if (_debugProbe.value.carPropEnumRunning) return
+        _debugProbe.value = _debugProbe.value.copy(carPropEnumRunning = true)
+        viewModelScope.launch {
+            val result = com.openautolink.app.diagnostics.CarPropertyEnumerator.enumerate(getApplication())
+            _debugProbe.value = _debugProbe.value.copy(
+                carPropEnum = result,
+                carPropEnumRunning = false,
+            )
+        }
+    }
+
     // ── Local-Only Hotspot Probe ────────────────────────────────────
     // Tests whether AAOS allows a normal app to start a SoftAP. If this works
     // and the SSID is stable across sessions, the "phones-as-clients-of-car-AP"
@@ -851,8 +917,8 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
 
     // ── WiFi Direct (P2P) Probe ─────────────────────────────────────
     // Tests whether the head unit can act as a WiFi Direct Group Owner.
-    // Nearby Connections prefers this medium when available; if it fails
-    // here, that's why "Nearby mode" never created its own network.
+    // Not used by the current TCP-over-shared-hotspot path; kept as a
+    // capability probe for future peer-to-peer features.
 
     private var p2pManager: android.net.wifi.p2p.WifiP2pManager? = null
     private var p2pChannel: android.net.wifi.p2p.WifiP2pManager.Channel? = null

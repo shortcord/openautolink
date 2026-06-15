@@ -8,7 +8,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.openautolink.app.video.AaVideoCodec.normalizedPreference
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -36,6 +35,16 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val VIDEO_FPS = intPreferencesKey("video_fps")
         val DISPLAY_MODE = stringPreferencesKey("display_mode")
         val MIC_SOURCE = stringPreferencesKey("mic_source")
+        // Manual override for the head unit's Bluetooth MAC, advertised in
+        // the AA ServiceDiscoveryResponse's bluetooth_service.car_address.
+        // Some AAOS builds return empty / 02:00:00:00:00:00 / "None" from
+        // both Settings.Secure["bluetooth_address"] and BluetoothAdapter
+        // .getAddress(), and a few phones won't enter wireless AA pairing
+        // without a valid car MAC. Users can read the real MAC from
+        // AAOS Settings → About → Bluetooth address and paste it here.
+        // Does NOT affect call audio routing — calls always follow the
+        // phone's BT pairing settings, regardless of what's in the SDR.
+        val BT_MAC_OVERRIDE = stringPreferencesKey("bt_mac_override")
         val SYNC_AA_THEME = booleanPreferencesKey("sync_aa_theme")
         val HIDE_AA_CLOCK = booleanPreferencesKey("hide_aa_clock")
         val HIDE_PHONE_SIGNAL = booleanPreferencesKey("hide_phone_signal")
@@ -50,20 +59,31 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         val MANUAL_IP_ADDRESS = stringPreferencesKey("manual_ip_address")
         val AA_RESOLUTION = stringPreferencesKey("aa_resolution")
         val AA_DPI = intPreferencesKey("aa_dpi")
+        // When true (default), ignore AA_DPI and compute density at
+        // session start from the live render rect so AA UI ends up at the
+        // same physical size as native AAOS apps on the same panel.
+        // Formula mirrors GM's getScaledDensity:
+        //   fWidth = renderRectWidthPx / (codecW - widthMargin)
+        //   density = round(panelDpi / fWidth)
+        // The render rect is full panel in fullscreen_immersive mode and
+        // the inset-shrunk rect in system_ui_visible mode — so this
+        // automatically tracks the user's display-mode choice.
+        val AA_AUTO_DPI = booleanPreferencesKey("aa_auto_dpi")
         val AA_WIDTH_MARGIN = intPreferencesKey("aa_width_margin")
         val AA_HEIGHT_MARGIN = intPreferencesKey("aa_height_margin")
+        val AA_AUTO_MARGINS = booleanPreferencesKey("aa_auto_margins")
         val AA_PIXEL_ASPECT = intPreferencesKey("aa_pixel_aspect")
         val AA_TARGET_LAYOUT_WIDTH_DP = intPreferencesKey("aa_target_layout_width_dp")
+        val AA_VIEWING_DISTANCE_MM = intPreferencesKey("aa_viewing_distance_mm")
+        val AA_DECODER_ADDITIONAL_DEPTH = intPreferencesKey("aa_decoder_additional_depth")
 
         // App-side settings
         val DRIVE_SIDE = stringPreferencesKey("drive_side")
         val GPS_FORWARDING = booleanPreferencesKey("gps_forwarding")
         val CLUSTER_NAVIGATION = booleanPreferencesKey("cluster_navigation")
-        val OVERLAY_SETTINGS_BUTTON = booleanPreferencesKey("overlay_settings_button")
-        val OVERLAY_RESTART_VIDEO_BUTTON = booleanPreferencesKey("overlay_restart_video_button")
-        val OVERLAY_SWITCH_PHONE_BUTTON = booleanPreferencesKey("overlay_switch_phone_button")
         val OVERLAY_STATS_BUTTON = booleanPreferencesKey("overlay_stats_button")
         val FILE_LOGGING_ENABLED = booleanPreferencesKey("file_logging_enabled")
+        val FILE_LOGGING_AUTOSTART_USB = booleanPreferencesKey("file_logging_autostart_usb")
         val LOGCAT_CAPTURE_ENABLED = booleanPreferencesKey("logcat_capture_enabled")
         val REMOTE_SYSLOG_ENABLED = booleanPreferencesKey("remote_syslog_enabled")
 
@@ -150,6 +170,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_VIDEO_FPS = 60
         const val DEFAULT_DISPLAY_MODE = "fullscreen_immersive"
         const val DEFAULT_MIC_SOURCE = "car"
+        const val DEFAULT_BT_MAC_OVERRIDE = ""
         const val DEFAULT_SYNC_AA_THEME = true
         const val DEFAULT_HIDE_AA_CLOCK = false
         const val DEFAULT_HIDE_PHONE_SIGNAL = false
@@ -159,23 +180,39 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_VIDEO_SCALING_MODE = "crop" // "letterbox" or "crop"
         const val DEFAULT_HOTSPOT_SSID = ""
         const val DEFAULT_HOTSPOT_PASSWORD = ""
-        const val DEFAULT_DIRECT_TRANSPORT = "hotspot" // "nearby", "hotspot", "usb"
+        const val DEFAULT_DIRECT_TRANSPORT = "hotspot" // TCP over shared WiFi
         const val DEFAULT_MANUAL_IP_ENABLED = false
         const val DEFAULT_MANUAL_IP_ADDRESS = ""
         const val DEFAULT_AA_RESOLUTION = "1080p" // "480p", "720p", "1080p", "1440p", "4k"
         const val DEFAULT_AA_DPI = 160
+        const val DEFAULT_AA_AUTO_DPI = true
         const val DEFAULT_AA_WIDTH_MARGIN = 0
         const val DEFAULT_AA_HEIGHT_MARGIN = 0
+        // When true, ignore the WIDTH/HEIGHT_MARGIN values and compute
+        // per-tier margins so the codec's inner rect matches panel AR.
+        // The renderer (Crop mode) uses the same formula on the decoded
+        // frame so square pixels arrive on the panel. Disable to send
+        // exactly the user-set width/height margin values (or 0 for no
+        // margins, letting the panel stretch the full codec frame).
+        const val DEFAULT_AA_AUTO_MARGINS = true
         const val DEFAULT_AA_PIXEL_ASPECT = -1  // -1 = auto-compute from display/video AR in crop mode
         const val DEFAULT_AA_TARGET_LAYOUT_WIDTH_DP = 0  // 0 = disabled (use DPI slider directly)
+        // Viewing distance from driver eye to display, in millimetres. GM
+        // sends this in their VideoConfiguration so the phone can pick text
+        // sizes that look correct at the actual seating distance. 700mm is
+        // the typical mid-IP-screen distance GM uses; tune per vehicle from
+        // a tape measure or VHAL prop if available. 0 = omit field.
+        const val DEFAULT_AA_VIEWING_DISTANCE_MM = 700
+        // Number of additional decoded frames the car can buffer beyond the
+        // codec's reorder requirement. GM hard-codes 1; matching this is
+        // safest cross-phone. 0 = omit field.
+        const val DEFAULT_AA_DECODER_ADDITIONAL_DEPTH = 1
         const val DEFAULT_DRIVE_SIDE = "left"
         const val DEFAULT_GPS_FORWARDING = true
         const val DEFAULT_CLUSTER_NAVIGATION = true
-        const val DEFAULT_OVERLAY_SETTINGS_BUTTON = true
-        const val DEFAULT_OVERLAY_RESTART_VIDEO_BUTTON = true
-        const val DEFAULT_OVERLAY_SWITCH_PHONE_BUTTON = true
         const val DEFAULT_OVERLAY_STATS_BUTTON = true
         const val DEFAULT_FILE_LOGGING_ENABLED = false
+        const val DEFAULT_FILE_LOGGING_AUTOSTART_USB = false
         const val DEFAULT_LOGCAT_CAPTURE_ENABLED = false
         const val DEFAULT_REMOTE_SYSLOG_ENABLED = false
         const val DEFAULT_SAFE_AREA_TOP = 0
@@ -223,7 +260,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         const val DEFAULT_EV_USE_EPA_BASELINE = false
         const val DEFAULT_EV_PROFILES_LAST_UPDATE_MS = 0L
         const val DEFAULT_EV_PROFILES_UPDATE_URL =
-            "https://raw.githubusercontent.com/shortcord/openautolink/main/app/src/main/assets/ev_profiles.json"
+            "https://raw.githubusercontent.com/mossyhub/openautolink/main/app/src/main/assets/ev_profiles.json"
 
         const val DEFAULT_EV_LEARNED_RATES_JSON = "{}"
     }
@@ -233,7 +270,7 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
     }
 
     val videoCodec: Flow<String> = dataStore.data.map { prefs ->
-        (prefs[VIDEO_CODEC] ?: DEFAULT_VIDEO_CODEC).normalizedPreference()
+        prefs[VIDEO_CODEC] ?: DEFAULT_VIDEO_CODEC
     }
 
     val videoFps: Flow<Int> = dataStore.data.map { prefs ->
@@ -246,6 +283,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     val micSource: Flow<String> = dataStore.data.map { prefs ->
         prefs[MIC_SOURCE] ?: DEFAULT_MIC_SOURCE
+    }
+
+    val btMacOverride: Flow<String> = dataStore.data.map { prefs ->
+        prefs[BT_MAC_OVERRIDE] ?: DEFAULT_BT_MAC_OVERRIDE
     }
 
     val syncAaTheme: Flow<Boolean> = dataStore.data.map { prefs ->
@@ -285,12 +326,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
     }
 
     val directTransport: Flow<String> = dataStore.data.map { prefs ->
-        // Migrate any saved "nearby" preference to "hotspot" — Nearby mode is
-        // disabled in the UI for now (see SettingsScreen) because the system
-        // permissions needed for the BT→WiFi handoff aren't grantable on GM
-        // AAOS.
+        // Migrate disabled transports to "hotspot". Nearby was removed, and USB
+        // projection is temporarily disabled after recent car firmware updates.
         val raw = prefs[DIRECT_TRANSPORT] ?: DEFAULT_DIRECT_TRANSPORT
-        if (raw == "nearby") "hotspot" else raw
+        if (raw == "nearby" || raw == "usb") "hotspot" else raw
     }
 
     val manualIpEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
@@ -309,6 +348,10 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[AA_DPI] ?: DEFAULT_AA_DPI
     }
 
+    val aaAutoDpi: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[AA_AUTO_DPI] ?: DEFAULT_AA_AUTO_DPI
+    }
+
     val aaWidthMargin: Flow<Int> = dataStore.data.map { prefs ->
         prefs[AA_WIDTH_MARGIN] ?: DEFAULT_AA_WIDTH_MARGIN
     }
@@ -317,12 +360,24 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[AA_HEIGHT_MARGIN] ?: DEFAULT_AA_HEIGHT_MARGIN
     }
 
+    val aaAutoMargins: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[AA_AUTO_MARGINS] ?: DEFAULT_AA_AUTO_MARGINS
+    }
+
     val aaPixelAspect: Flow<Int> = dataStore.data.map { prefs ->
         prefs[AA_PIXEL_ASPECT] ?: DEFAULT_AA_PIXEL_ASPECT
     }
 
     val aaTargetLayoutWidthDp: Flow<Int> = dataStore.data.map { prefs ->
         prefs[AA_TARGET_LAYOUT_WIDTH_DP] ?: DEFAULT_AA_TARGET_LAYOUT_WIDTH_DP
+    }
+
+    val aaViewingDistanceMm: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[AA_VIEWING_DISTANCE_MM] ?: DEFAULT_AA_VIEWING_DISTANCE_MM
+    }
+
+    val aaDecoderAdditionalDepth: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[AA_DECODER_ADDITIONAL_DEPTH] ?: DEFAULT_AA_DECODER_ADDITIONAL_DEPTH
     }
 
     val driveSide: Flow<String> = dataStore.data.map { prefs ->
@@ -337,24 +392,16 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         prefs[CLUSTER_NAVIGATION] ?: DEFAULT_CLUSTER_NAVIGATION
     }
 
-    val overlaySettingsButton: Flow<Boolean> = dataStore.data.map { prefs ->
-        prefs[OVERLAY_SETTINGS_BUTTON] ?: DEFAULT_OVERLAY_SETTINGS_BUTTON
-    }
-
-    val overlayRestartVideoButton: Flow<Boolean> = dataStore.data.map { prefs ->
-        prefs[OVERLAY_RESTART_VIDEO_BUTTON] ?: DEFAULT_OVERLAY_RESTART_VIDEO_BUTTON
-    }
-
-    val overlaySwitchPhoneButton: Flow<Boolean> = dataStore.data.map { prefs ->
-        prefs[OVERLAY_SWITCH_PHONE_BUTTON] ?: DEFAULT_OVERLAY_SWITCH_PHONE_BUTTON
-    }
-
     val overlayStatsButton: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[OVERLAY_STATS_BUTTON] ?: DEFAULT_OVERLAY_STATS_BUTTON
     }
 
     val fileLoggingEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[FILE_LOGGING_ENABLED] ?: DEFAULT_FILE_LOGGING_ENABLED
+    }
+
+    val fileLoggingAutoStartUsb: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[FILE_LOGGING_AUTOSTART_USB] ?: DEFAULT_FILE_LOGGING_AUTOSTART_USB
     }
 
     val logcatCaptureEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
@@ -421,12 +468,20 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         dataStore.edit { it[AA_DPI] = dpi }
     }
 
+    suspend fun setAaAutoDpi(value: Boolean) {
+        dataStore.edit { it[AA_AUTO_DPI] = value }
+    }
+
     suspend fun setAaWidthMargin(margin: Int) {
         dataStore.edit { it[AA_WIDTH_MARGIN] = margin }
     }
 
     suspend fun setAaHeightMargin(margin: Int) {
         dataStore.edit { it[AA_HEIGHT_MARGIN] = margin }
+    }
+
+    suspend fun setAaAutoMargins(value: Boolean) {
+        dataStore.edit { it[AA_AUTO_MARGINS] = value }
     }
 
     suspend fun setAaPixelAspect(value: Int) {
@@ -437,12 +492,20 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         dataStore.edit { it[AA_TARGET_LAYOUT_WIDTH_DP] = value }
     }
 
+    suspend fun setAaViewingDistanceMm(value: Int) {
+        dataStore.edit { it[AA_VIEWING_DISTANCE_MM] = value }
+    }
+
+    suspend fun setAaDecoderAdditionalDepth(value: Int) {
+        dataStore.edit { it[AA_DECODER_ADDITIONAL_DEPTH] = value }
+    }
+
     suspend fun setVideoAutoNegotiate(enabled: Boolean) {
         dataStore.edit { it[VIDEO_AUTO_NEGOTIATE] = enabled }
     }
 
     suspend fun setVideoCodec(codec: String) {
-        dataStore.edit { it[VIDEO_CODEC] = codec.normalizedPreference() }
+        dataStore.edit { it[VIDEO_CODEC] = codec }
     }
 
     suspend fun setVideoFps(fps: Int) {
@@ -455,6 +518,12 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
 
     suspend fun setMicSource(source: String) {
         dataStore.edit { it[MIC_SOURCE] = source }
+    }
+
+    /** Normalise a user-entered MAC: strip whitespace, uppercase, accept blank to clear. */
+    suspend fun setBtMacOverride(mac: String) {
+        val cleaned = mac.trim().uppercase().replace('-', ':')
+        dataStore.edit { it[BT_MAC_OVERRIDE] = cleaned }
     }
 
     suspend fun setSyncAaTheme(enabled: Boolean) {
@@ -497,24 +566,16 @@ class AppPreferences private constructor(private val dataStore: DataStore<Prefer
         dataStore.edit { it[CLUSTER_NAVIGATION] = enabled }
     }
 
-    suspend fun setOverlaySettingsButton(visible: Boolean) {
-        dataStore.edit { it[OVERLAY_SETTINGS_BUTTON] = visible }
-    }
-
-    suspend fun setOverlayRestartVideoButton(visible: Boolean) {
-        dataStore.edit { it[OVERLAY_RESTART_VIDEO_BUTTON] = visible }
-    }
-
-    suspend fun setOverlaySwitchPhoneButton(visible: Boolean) {
-        dataStore.edit { it[OVERLAY_SWITCH_PHONE_BUTTON] = visible }
-    }
-
     suspend fun setOverlayStatsButton(visible: Boolean) {
         dataStore.edit { it[OVERLAY_STATS_BUTTON] = visible }
     }
 
     suspend fun setFileLoggingEnabled(enabled: Boolean) {
         dataStore.edit { it[FILE_LOGGING_ENABLED] = enabled }
+    }
+
+    suspend fun setFileLoggingAutoStartUsb(enabled: Boolean) {
+        dataStore.edit { it[FILE_LOGGING_AUTOSTART_USB] = enabled }
     }
 
     suspend fun setLogcatCaptureEnabled(enabled: Boolean) {

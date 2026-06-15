@@ -374,18 +374,6 @@ fun MainScreen(
             HorizontalDivider()
             Spacer(Modifier.height(20.dp))
 
-            // Migrate any legacy "nearby" transport pref to TCP. The Nearby
-            // path is broken on GM AAOS (the car-side app can't get the
-            // permissions needed for the BT→WiFi handoff), so TCP is the
-            // only working transport. Done silently — the user has no
-            // choice to make here.
-            run {
-                val current = prefs.getString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.DEFAULT_TRANSPORT)
-                if (current != CompanionPrefs.TRANSPORT_TCP) {
-                    prefs.edit().putString(CompanionPrefs.TRANSPORT_MODE, CompanionPrefs.TRANSPORT_TCP).apply()
-                }
-            }
-
             // ── Auto-Start Section ─────────────────────────────────
             Text(
                 text = "Auto-Start",
@@ -513,9 +501,6 @@ fun MainScreen(
 
             // ── File Logging ───────────────────────────────────────
             FileLoggingSection()
-
-            Spacer(Modifier.height(16.dp))
-            RemoteSyslogSection()
 
             Spacer(Modifier.height(28.dp))
             HorizontalDivider()
@@ -1386,65 +1371,6 @@ private fun FileLoggingSection() {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
-}
-
-@Composable
-private fun RemoteSyslogSection() {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences(CompanionPrefs.NAME, Context.MODE_PRIVATE) }
-    val isServiceRunning by CompanionService.isRunning.collectAsState()
-    val remoteEnabled by CompanionService.remoteSyslogEnabled.collectAsState()
-    val remoteStatus by CompanionService.remoteSyslogStatus.collectAsState()
-
-    Text(
-        text = "Remote Syslog",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Spacer(Modifier.height(8.dp))
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Send to ns2.owo.systems", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "TCP only, async FIFO ring buffer (5MB, overwrites oldest).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        remoteStatus,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(
-                    checked = remoteEnabled,
-                    onCheckedChange = { enabled ->
-                        prefs.edit().putBoolean(CompanionPrefs.REMOTE_SYSLOG_ENABLED, enabled).apply()
-                        val service = getCompanionService(context)
-                        if (service != null) {
-                            service.setRemoteSyslogEnabled(enabled)
-                        } else if (enabled && !isServiceRunning) {
-                            val intent = android.content.Intent(context, CompanionService::class.java).apply {
-                                action = CompanionService.ACTION_START
-                            }
-                            androidx.core.content.ContextCompat.startForegroundService(context, intent)
-                        }
-                    },
-                )
-            }
         }
     }
 }

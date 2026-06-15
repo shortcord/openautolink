@@ -1,9 +1,9 @@
 ﻿package com.openautolink.app.session
 
+import android.content.res.Configuration
 import android.content.Context
 import android.media.AudioManager
 import android.os.SystemClock
-import android.view.KeyEvent
 import com.openautolink.app.diagnostics.OalLog
 import com.openautolink.app.audio.AudioPlayer
 import com.openautolink.app.audio.AudioPlayerImpl
@@ -34,8 +34,6 @@ import com.openautolink.app.transport.ConnectionState
 import com.openautolink.app.transport.ControlMessage
 import com.openautolink.app.transport.aasdk.AasdkSession
 import com.openautolink.app.transport.aasdk.AasdkSdrConfig
-import com.openautolink.app.transport.direct.AaNearbyManager
-import com.openautolink.app.transport.usb.UsbConnectionManager
 import com.openautolink.app.video.DecoderState
 import com.openautolink.app.video.MediaCodecDecoder
 import com.openautolink.app.video.VideoDecoder
@@ -45,18 +43,19 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
  * Session orchestrator -- connects component islands, manages lifecycle.
- * aasdk JNI mode -- native aasdk C++ handles AA protocol over the selected
- * USB or WiFi transport.
+ * aasdk JNI mode -- native aasdk C++ handles AA protocol over TCP transport.
  */
 class SessionManager(
     externalScope: CoroutineScope,
@@ -66,9 +65,11 @@ class SessionManager(
 
     companion object {
         private const val TAG = "SessionManager"
-        private const val KEYFRAME_FAST_RETRY_MS = 250L
-        private const val KEYFRAME_FAST_RETRY_ATTEMPTS = 12
-        private const val KEYFRAME_SLOW_RETRY_MS = 1000L
+
+        // Activity-sourced UI-mode snapshot that can be published before
+        // SessionManager exists (ViewModel lazy creation path).
+        @Volatile
+        private var bootUiNightModeSnapshot: Boolean? = null
 
         @Volatile
         private var instance: SessionManager? = null
@@ -80,6 +81,11 @@ class SessionManager(
         }
 
         fun instanceOrNull(): SessionManager? = instance
+
+        fun noteUiNightMode(night: Boolean) {
+            bootUiNightModeSnapshot = night
+            instance?.lastKnownUiNightMode = night
+        }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
@@ -106,13 +112,22 @@ class SessionManager(
     private val _statusMessage = MutableStateFlow("Ready")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
+    /**
+     * Mirror of [AasdkSession.reconnectAttempt] hoisted to SessionManager so
+     * observers (UI controller, status banner) don't have to track which
+     * AasdkSession instance is current. Updated by the per-session collector
+     * in [startSession] and reset to 0 whenever a new session is wired up.
+     * 0 = no failures yet (or a session is healthy); N > 0 = currently in
+     * the Nth consecutive reconnect attempt.
+     */
+    private val _reconnectAttempt = MutableStateFlow(0)
+    val reconnectAttempt: StateFlow<Int> = _reconnectAttempt.asStateFlow()
+
     // Video decoder
     private var _videoDecoder: VideoDecoder? = null
     val videoDecoder: VideoDecoder? get() = _videoDecoder
     val videoStats: StateFlow<VideoStats>? get() = _videoDecoder?.stats
     val decoderState: StateFlow<DecoderState>? get() = _videoDecoder?.decoderState
-    private val _videoDecoderRevision = MutableStateFlow(0)
-    val videoDecoderRevision: StateFlow<Int> = _videoDecoderRevision.asStateFlow()
 
     // Touch coordinate space — matches the SDR input channel touchscreen dimensions.
     // NOT the video codec output dimensions (which may differ due to phone auto-negotiation).
@@ -120,6 +135,47 @@ class SessionManager(
     private val _touchHeight = MutableStateFlow(1080)
     val touchWidth: StateFlow<Int> = _touchWidth.asStateFlow()
     val touchHeight: StateFlow<Int> = _touchHeight.asStateFlow()
+
+    // Last density we sent in the SDR. Diagnostic-only — surfaced in the
+    // Stats-for-nerds overlay so the user can see what auto-DPI picked vs.
+    // their manual slider. 0 until the first session has built its SDR.
+    private val _effectiveDpi = MutableStateFlow(0)
+    val effectiveDpi: StateFlow<Int> = _effectiveDpi.asStateFlow()
+
+    // Last-known OS-reported safe area (system bars + display cutouts) in
+    // pixels. Fed by ProjectionScreen via [setSystemInsets] whenever the
+    // composition picks up new WindowInsets. Used as fallback for AA
+    // content_insets when the user hasn't manually overridden them in
+    // settings — so a vehicle with a curved screen reports its rounded
+    // corners to AA out of the box, and the user only has to tweak if
+    // they want extra margin beyond what AAOS reports.
+    @Volatile private var sysInsetTop: Int = 0
+    @Volatile private var sysInsetBottom: Int = 0
+    @Volatile private var sysInsetLeft: Int = 0
+    @Volatile private var sysInsetRight: Int = 0
+    fun setSystemInsets(top: Int, bottom: Int, left: Int, right: Int) {
+        sysInsetTop = top.coerceAtLeast(0)
+        sysInsetBottom = bottom.coerceAtLeast(0)
+        sysInsetLeft = left.coerceAtLeast(0)
+        sysInsetRight = right.coerceAtLeast(0)
+    }
+
+    // Last-known live render-rect dimensions in pixels — the actual size
+    // of the projection Box AFTER displayMode padding. In
+    // fullscreen_immersive this is the full panel; in system_ui_visible
+    // it's the panel minus AAOS chrome. Fed by ProjectionScreen via
+    // [setRenderRect]. Used by auto-DPI to compute density that produces
+    // the same physical size as native AAOS apps regardless of mode.
+    @Volatile private var renderRectWPx: Int = 0
+    @Volatile private var renderRectHPx: Int = 0
+    @Volatile private var panelDensityDpi: Int = 0
+    @Volatile private var lastDisplayMode: String = AppPreferences.DEFAULT_DISPLAY_MODE
+    fun setRenderRect(widthPx: Int, heightPx: Int, panelDpi: Int, displayMode: String? = null) {
+        renderRectWPx = widthPx.coerceAtLeast(0)
+        renderRectHPx = heightPx.coerceAtLeast(0)
+        panelDensityDpi = panelDpi.coerceAtLeast(0)
+        if (!displayMode.isNullOrBlank()) lastDisplayMode = displayMode
+    }
 
     // Audio player
     private var _audioPlayer: AudioPlayer? = null
@@ -129,6 +185,13 @@ class SessionManager(
     // Mic capture
     private var _micCaptureManager: MicCaptureManager? = null
     private var micSource: String = "car"
+
+    // HFP RFCOMM "presence" advertiser — mirrors headunit-revived's trick of
+    // listening on the Hands-Free Profile UUID so the phone sees an
+    // HFP-advertising device during BT scan. We never speak HFP AT commands
+    // and never accept SCO; this is purely for discovery/handshake. See
+    // [com.openautolink.app.transport.bluetooth.HfpPresenceServer].
+    private var _hfpPresence: com.openautolink.app.transport.bluetooth.HfpPresenceServer? = null
 
     val callState: StateFlow<CallState>? get() = _audioPlayer?.callState
 
@@ -222,18 +285,28 @@ class SessionManager(
     private val _phoneSignalStrength = MutableStateFlow<Int?>(null)
     val phoneSignalStrength: StateFlow<Int?> = _phoneSignalStrength.asStateFlow()
 
-    // WiFi frequency (from Nearby's underlying WiFi Direct)
-    val wifiFrequencyMhz: StateFlow<Int> = AaNearbyManager.wifiFrequencyMhz
+    // WiFi frequency. Reserved for future use — the TCP hotspot path doesn't
+    // currently report this. Kept as a flow so the stats overlay can keep its
+    // existing wiring; reports 0 (unknown) until a producer is added.
+    private val _wifiFrequencyMhz = MutableStateFlow(0)
+    val wifiFrequencyMhz: StateFlow<Int> = _wifiFrequencyMhz.asStateFlow()
 
-    // Current transport mode — UI uses this to show/hide Nearby-specific features
+    // Current transport mode. USB projection is temporarily disabled.
     private val _transportMode = MutableStateFlow("hotspot")
     val transportMode: StateFlow<String> = _transportMode.asStateFlow()
 
-    // Multi-phone (only active in Nearby mode)
-    private val _phoneName = MutableStateFlow<String?>(null)
-    val phoneName: StateFlow<String?> = _phoneName.asStateFlow()
-    val connectedPhoneName: StateFlow<String?> = AaNearbyManager.connectedPhoneName
+    // Multi-phone default. The currently-connected phone's friendly name is
+    // resolved by ProjectionViewModel from PhoneDiscovery + knownPhonesStore.
     @Volatile private var _defaultPhoneName: String = ""
+
+    /**
+     * Last manualIpAddress used by start()/reconnect() for the current/most
+     * recent session. Cached so that "Save & Reconnect" — which doesn't know
+     * the resolved Car Hotspot IP — can keep dialing the same phone instead
+     * of dropping to mDNS-only resolution (which times out without an IP).
+     * Cleared by clearDefaultPhone().
+     */
+    @Volatile private var _lastManualIpAddress: String? = null
 
     /** Set the default phone name from preferences (called at session start). */
     fun setDefaultPhoneName(name: String) { _defaultPhoneName = name }
@@ -244,6 +317,7 @@ class SessionManager(
     /** Clear the default phone — next connection will pick any phone. */
     fun clearDefaultPhone() {
         _defaultPhoneName = ""
+        _lastManualIpAddress = null
         scope.launch {
             context?.let { AppPreferences.getInstance(it).setDefaultPhoneName("") }
         }
@@ -254,121 +328,108 @@ class SessionManager(
         stop()
     }
 
-    /** Connect to a specific discovered Nearby endpoint by ID. */
-    fun connectToNearbyEndpoint(endpointId: String) {
-        aasdkSession?.nearbyManager?.connectToEndpoint(endpointId)
-    }
-
     // Media session
     private var _mediaSessionManager: OalMediaSessionManager? = null
+    /** Cache of the most recently observed [ControlMessage.MediaMetadata] so
+     *  we can replay it to the cluster on reconnect. The phone sends metadata
+     *  only on track change, so after an unrelated reconnect (sleep/wake,
+     *  Error 30, etc.) the cluster would otherwise see no update and could
+     *  stay stuck on stale data. */
+    @Volatile private var lastMediaMetadata: ControlMessage.MediaMetadata? = null
+    @Volatile private var lastMediaPlaybackState: ControlMessage.MediaPlaybackState? = null
+
+    // Edge-trigger memory for low-cadence VHAL booleans + gear. The VHAL
+    // forwarder sends a full bundle every ~100ms while connected, but the
+    // phone only cares when these actually transition. Spamming them every
+    // tick is wasted IPC at best, and at worst it might cause the phone to
+    // re-render UI (e.g. NIGHT_MODE → AA theme change) too frequently. We
+    // only forward to native when the value differs from the last sent.
+    // Reset to null on every new phone session so the very first tick always fires.
+    @Volatile private var lastKnownUiNightMode: Boolean? = bootUiNightModeSnapshot
+    @Volatile private var lastSentNightMode: Boolean? = null
+    @Volatile private var lastSentParkingBrake: Boolean? = null
+    @Volatile private var lastSentDriving: Boolean? = null
+    @Volatile private var lastSentGearRaw: Int? = null
 
     // Cluster manager
     private var _clusterManager: com.openautolink.app.cluster.ClusterManager? = null
-    @Volatile private var clusterNavigationEnabled: Boolean = AppPreferences.DEFAULT_CLUSTER_NAVIGATION
 
     private var observeJob: Job? = null
     private var decoderWatchJob: Job? = null
     private var keyframeWatchJob: Job? = null
     private var callStateJob: Job? = null
-    private var clusterPreferenceJob: Job? = null
-    private var remoteSyslogPreferenceJob: Job? = null
 
-    // Track last known active time for sleep/wake detection
+    // Track last known active time for sleep/wake detection.
+    // Single source of truth, updated on:
+    //   - every incoming control message (proves we're running)
+    //   - Activity.onPause / SCREEN_OFF via markGoingIdle ("freeze" the timestamp before suspend)
+    //   - markWake itself (so a second wake signal within a few seconds doesn't recompute the same gap)
     private var lastActiveTimestamp = SystemClock.elapsedRealtime()
+
+    /**
+     * Wake-event flow. Emits whenever the system or activity transitions back
+     * to running after a (possibly long) idle period. Fed from two redundant
+     * sources — Activity.onResume and the SCREEN_ON broadcast — with dedupe in
+     * [markWake] so observers see exactly one event per real wake.
+     */
+    data class WakeEvent(val reason: String, val gapMs: Long)
+    private val _wakeEvents = MutableSharedFlow<WakeEvent>(extraBufferCapacity = 4)
+    val wakeEvents: SharedFlow<WakeEvent> = _wakeEvents.asSharedFlow()
+
+    /**
+     * Emitted when the user taps the Exit button in the AA app launcher on
+     * the phone (ByeByeReason.USER_SELECTION). MainActivity observes this and
+     * backgrounds the entire app — user re-enters by tapping our icon in the
+     * AAOS launcher, which starts a fresh session.
+     */
+    private val _userExitEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val userExitEvents: SharedFlow<Unit> = _userExitEvents.asSharedFlow()
+
+    /** Dedupe window for wake signals from multiple sources firing in quick succession. */
+    private val WAKE_DEDUPE_MS = 2_000L
+    /** Wake gap beyond which the current TCP socket is presumed dead and we force a reconnect. */
+    private val LONG_WAKE_FORCE_RECONNECT_MS = 30_000L
+    /** Last elapsedRealtime we ran the full wake handler for. Used for dedupe. */
+    @Volatile private var lastWakeHandledAtMs = 0L
 
     /** Reentrancy guard for reconnect() so rapid Save&Reconnect taps coalesce. */
     @Volatile private var reconnectInProgress = false
 
-    /**
-     * Optional projection-level reconnect hook for hotspot sessions whose host
-     * was selected outside [AasdkSession]. Car Hotspot mode uses this to
-     * re-run phone discovery instead of reusing a stale resolved IP.
-     */
-    @Volatile
-    var hotspotReconnectHandler: ((reason: String, attempt: Int, protocolError: Boolean) -> Boolean)? = null
+    /** SCREEN_OFF/_ON receiver registration tracker. */
+    private var screenReceiver: android.content.BroadcastReceiver? = null
 
-    /**
-     * Snapshot of settings that affect the AA Service Discovery Response (SDR) / video
-     * negotiation. These cannot be applied with a video-only restart; they require a
-     * session reconnect so the phone re-requests SDR and re-selects a video config.
-     */
-    data class VideoNegotiationKey(
-        val codecPreference: String,
-        val videoAutoNegotiate: Boolean,
-        val aaResolution: String,
-        val aaDpi: Int,
-        val aaWidthMargin: Int,
-        val aaHeightMargin: Int,
-        val aaPixelAspect: Int,
-        val aaTargetLayoutWidthDp: Int,
-        val videoFps: Int,
-        val driveSide: String,
-        val hideClock: Boolean,
-        val hideSignal: Boolean,
-        val hideBattery: Boolean,
-        val safeAreaTop: Int,
-        val safeAreaBottom: Int,
-        val safeAreaLeft: Int,
-        val safeAreaRight: Int,
-    )
-
-    @Volatile private var lastNegotiationKey: VideoNegotiationKey? = null
-
-    fun requiresReconnectForVideoSettings(desired: VideoNegotiationKey): Boolean {
-        if (_audioPlayer == null || aasdkSession == null) return true
-        val current = lastNegotiationKey ?: return true
-        return current != desired
+    private fun currentUiNightMode(): Boolean? {
+        val nightMask = context?.resources?.configuration?.uiMode?.and(Configuration.UI_MODE_NIGHT_MASK)
+            ?: return null
+        return when (nightMask) {
+            Configuration.UI_MODE_NIGHT_YES -> true
+            Configuration.UI_MODE_NIGHT_NO -> false
+            else -> null
+        }
     }
 
-    private fun buildVideoNegotiationKey(
-        codecPreference: String,
-        videoAutoNegotiate: Boolean,
-        aaResolution: String,
-        aaDpi: Int,
-        aaWidthMargin: Int,
-        aaHeightMargin: Int,
-        aaPixelAspect: Int,
-        aaTargetLayoutWidthDp: Int,
-        videoFps: Int,
-        driveSide: String,
-        hideClock: Boolean,
-        hideSignal: Boolean,
-        hideBattery: Boolean,
-        safeAreaTop: Int,
-        safeAreaBottom: Int,
-        safeAreaLeft: Int,
-        safeAreaRight: Int,
-    ) = VideoNegotiationKey(
-        codecPreference = codecPreference,
-        videoAutoNegotiate = videoAutoNegotiate,
-        aaResolution = aaResolution,
-        aaDpi = aaDpi,
-        aaWidthMargin = aaWidthMargin,
-        aaHeightMargin = aaHeightMargin,
-        aaPixelAspect = aaPixelAspect,
-        aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
-        videoFps = videoFps,
-        driveSide = driveSide,
-        hideClock = hideClock,
-        hideSignal = hideSignal,
-        hideBattery = hideBattery,
-        safeAreaTop = safeAreaTop,
-        safeAreaBottom = safeAreaBottom,
-        safeAreaLeft = safeAreaLeft,
-        safeAreaRight = safeAreaRight,
-    )
+    private fun resetLatchedVehicleSensorState(reason: String) {
+        lastSentNightMode = null
+        lastSentParkingBrake = null
+        lastSentDriving = null
+        lastSentGearRaw = null
+        OalLog.d(TAG, "Reset latched vehicle sensor state: $reason")
+    }
 
-    /** Screen-off receiver registration tracker. */
-    private var screenReceiver: android.content.BroadcastReceiver? = null
-    /** True when we proactively stopped the session for sleep; restart on wake. */
-    @Volatile private var pausedForSleep = false
-    @Volatile private var pausedForSleepStopJob: Job? = null
-    @Volatile private var videoClosedForAppFocusLoss = false
-    /** Timestamp of the most recent SCREEN_ON / USER_PRESENT — used to suppress
-     *  SCREEN_OFF that AAOS sometimes delivers seconds AFTER wake (queued during
-     *  input dispatch). Without this, a queued SCREEN_OFF tears down a freshly
-     *  woken session right after we restored it. */
-    @Volatile private var lastWakeTimestamp = 0L
+    private fun seedCurrentUiNightMode(reason: String) {
+        // Prefer Activity-reported state. Application-context config can be
+        // stale on AAOS and default to day mode until a config callback fires.
+        val night = lastKnownUiNightMode ?: currentUiNightMode()
+        if (night == null) {
+            OalLog.d(TAG, "UI night mode unknown — skipping seed ($reason)")
+            return
+        }
+        lastKnownUiNightMode = night
+        val session = aasdkSession ?: return
+        lastSentNightMode = night
+        OalLog.i(TAG, "UI night mode → $night (reason=$reason)")
+        session.sendNightMode(night)
+    }
 
     fun start(
         codecPreference: String = "h264",
@@ -380,10 +441,14 @@ class SessionManager(
         videoAutoNegotiate: Boolean = true,
         aaResolution: String = "1080p",
         aaDpi: Int = 160,
+        aaAutoDpi: Boolean = true,
         aaWidthMargin: Int = 0,
         aaHeightMargin: Int = 0,
         aaPixelAspect: Int = -1,
         aaTargetLayoutWidthDp: Int = 0,
+        aaViewingDistanceMm: Int = 0,
+        aaDecoderAdditionalDepth: Int = 0,
+        aaAutoMargins: Boolean = true,
         videoFps: Int = 60,
         driveSide: String = "left",
         hideClock: Boolean = false,
@@ -398,32 +463,15 @@ class SessionManager(
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
     ) {
-        lastNegotiationKey = buildVideoNegotiationKey(
-            codecPreference = codecPreference,
-            videoAutoNegotiate = videoAutoNegotiate,
-            aaResolution = aaResolution,
-            aaDpi = aaDpi,
-            aaWidthMargin = aaWidthMargin,
-            aaHeightMargin = aaHeightMargin,
-            aaPixelAspect = aaPixelAspect,
-            aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
-            videoFps = videoFps,
-            driveSide = driveSide,
-            hideClock = hideClock,
-            hideSignal = hideSignal,
-            hideBattery = hideBattery,
-            safeAreaTop = safeAreaTop,
-            safeAreaBottom = safeAreaBottom,
-            safeAreaLeft = safeAreaLeft,
-            safeAreaRight = safeAreaRight,
-        )
+        // Cache for later reconnects that don't know the resolved IP (e.g.
+        // Settings "Save & Reconnect" in Car Hotspot mode).
+        if (!manualIpAddress.isNullOrBlank()) _lastManualIpAddress = manualIpAddress
         micSource = micSourcePreference
         observeJob?.cancel()
 
         // Create video decoder
         _videoDecoder?.release()
         _videoDecoder = MediaCodecDecoder(codecPreference, scalingMode)
-        _videoDecoderRevision.value++
 
         // Create audio player
         _audioPlayer?.release()
@@ -444,6 +492,15 @@ class SessionManager(
             }
         }
 
+        // Start HFP RFCOMM presence advertiser (no-op call audio path, just a
+        // discovery hint for the phone). Recreated per-start so it survives
+        // BT adapter cycles across sleep/wake.
+        _hfpPresence?.stop()
+        _hfpPresence = context?.let { ctx ->
+            com.openautolink.app.transport.bluetooth.HfpPresenceServer(ctx, scope)
+                .also { it.start() }
+        }
+
         // Create GNSS forwarder (NMEA not used in direct mode -- LocationListener used instead)
         _gnssForwarder?.stop()
         _directLocationListener = null
@@ -453,16 +510,34 @@ class SessionManager(
 
         // Create vehicle data forwarder -- sends via AasdkSession
         _vehicleDataForwarder?.stop()
+        // Reset edge-trigger memory so the first tick of the new session
+        // unconditionally publishes nightMode / parking / driving / gear to
+        // the phone — the phone has no prior state from us.
+        resetLatchedVehicleSensorState("start_session")
         _vehicleDataForwarder = context?.let { ctx ->
             VehicleDataForwarderImpl(
                 ctx,
                 sendMessage = { vd ->
                     val session = aasdkSession ?: return@VehicleDataForwarderImpl
                     vd.speedKmh?.let { session.sendSpeed((it / 3.6f * 1000).toInt()) }
-                    vd.gearRaw?.let { session.sendGear(it) }
-                    vd.parkingBrake?.let { session.sendParkingBrake(it) }
-                    vd.nightMode?.let { session.sendNightMode(it) }
-                    vd.driving?.let { session.sendDrivingStatus(it) }
+                    // Edge-trigger the low-cadence properties so each
+                    // transition fires the phone exactly once. Spamming
+                    // nightMode 10×/s while it's steady-state may have
+                    // contributed to issue #6 (day/night theme transition →
+                    // black video). Same defense for the others — cheap and
+                    // strictly correct.
+                    vd.gearRaw?.let {
+                        if (lastSentGearRaw != it) { lastSentGearRaw = it; session.sendGear(it) }
+                    }
+                    vd.parkingBrake?.let {
+                        if (lastSentParkingBrake != it) { lastSentParkingBrake = it; session.sendParkingBrake(it) }
+                    }
+                    vd.nightMode?.let {
+                        if (lastSentNightMode != it) { lastSentNightMode = it; session.sendNightMode(it) }
+                    }
+                    vd.driving?.let {
+                        if (lastSentDriving != it) { lastSentDriving = it; session.sendDrivingStatus(it) }
+                    }
                     if (vd.fuelLevelPct != null || vd.rangeKm != null) {
                         session.sendFuel(
                             vd.fuelLevelPct ?: 0,
@@ -526,25 +601,67 @@ class SessionManager(
             }
         }
 
-        // Create media session for AAOS system UI integration
-        _mediaSessionManager?.release()
-        _mediaSessionManager = context?.let { OalMediaSessionManager(it) }
-        _mediaSessionManager?.initialize()
-        _mediaSessionManager?.mediaControlCallback = object : OalMediaSessionManager.MediaControlCallback {
-            override fun onPlay() = sendMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
-            override fun onPause() = sendMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
-            override fun onSkipToNext() = sendMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
-            override fun onSkipToPrevious() = sendMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
-        }
-        _mediaSessionManager?.getSessionToken()?.let { token ->
-            OalMediaBrowserService.updateSessionToken(token)
+        // Create media session for AAOS system UI integration.
+        // Only construct once per SessionManager lifetime: recreating the
+        // MediaSession invalidates the cluster widget's MediaController
+        // binding (GM cluster doesn't rebind cleanly), which is why the
+        // user previously saw stale album art after a Save & Reconnect or
+        // post-wake reconnect cycle. The session lives until SessionManager
+        // is fully torn down in stop().
+        if (_mediaSessionManager == null) {
+            _mediaSessionManager = context?.let { OalMediaSessionManager(it) }
+            _mediaSessionManager?.initialize()
+            _mediaSessionManager?.getSessionToken()?.let { token ->
+                OalMediaBrowserService.updateSessionToken(token)
+            }
+        } else {
+            // Replay the most-recent metadata + playback state in case the
+            // cluster widget needs nudging after a reconnect. Cheap; setMetadata
+            // is a binder call but the data is identical to what's already set
+            // so the cluster either updates from this or no-ops.
+            lastMediaMetadata?.let { m ->
+                _mediaSessionManager?.updateMetadata(
+                    title = m.title, artist = m.artist, album = m.album,
+                    durationMs = m.durationMs, albumArtBase64 = m.albumArtBase64,
+                )
+            }
+            lastMediaPlaybackState?.let { p ->
+                _mediaSessionManager?.updatePlaybackState(p.playing, p.positionMs)
+            }
         }
 
-        // Cluster service is controlled by the Cluster Navigation preference.
+        // Cluster service is gated by user preference (default ON). When disabled,
+        // the CarAppService component is disabled so Templates Host won't bind it.
         _clusterManager?.release()
-        _clusterManager = context?.let { com.openautolink.app.cluster.ClusterManager(it) }
-        observeClusterNavigationPreference()
-        OalLog.i(TAG, "Cluster manager initialized")
+        _clusterManager = null
+        val clusterEnabled = context?.let { ctx ->
+            try {
+                kotlinx.coroutines.runBlocking {
+                    AppPreferences.getInstance(ctx).clusterNavigation.first()
+                }
+            } catch (e: Exception) {
+                OalLog.w(TAG, "Failed to read clusterNavigation pref: ${e.message}")
+                AppPreferences.DEFAULT_CLUSTER_NAVIGATION
+            }
+        } ?: false
+        if (clusterEnabled) {
+            _clusterManager = context?.let { com.openautolink.app.cluster.ClusterManager(it) }
+            _clusterManager?.setClusterEnabled(true)
+            // Proactively launch cluster binding — Templates Host on GM doesn't auto-discover
+            // the service via intent filter; it requires CarAppActivity to be launched first.
+            _clusterManager?.launchClusterBinding()
+            OalLog.i(TAG, "Cluster manager initialized and binding launched")
+        } else {
+            // Disable the component so Templates Host won't try to bind it on next boot.
+            context?.let { ctx ->
+                try {
+                    com.openautolink.app.cluster.ClusterManager(ctx).setClusterEnabled(false)
+                } catch (e: Exception) {
+                    OalLog.w(TAG, "Failed to disable cluster component: ${e.message}")
+                }
+            }
+            OalLog.i(TAG, "Cluster service disabled by user preference")
+        }
 
         // Create diagnostics (local-only)
         _telemetryCollector?.stop()
@@ -554,14 +671,6 @@ class SessionManager(
         _telemetryCollector?.videoDecoder = _videoDecoder
         _telemetryCollector?.audioPlayer = _audioPlayer
         _telemetryCollector?.start()
-
-        remoteSyslogPreferenceJob?.cancel()
-        val ctx = context ?: return
-        remoteSyslogPreferenceJob = scope.launch {
-            AppPreferences.getInstance(ctx).remoteSyslogEnabled.collectLatest { enabled ->
-                DiagnosticLog.setRemoteSyslogEnabled(enabled)
-            }
-        }
 
         observeJob = scope.launch {
             // Watch for decoder errors
@@ -578,8 +687,10 @@ class SessionManager(
 
             // Start direct mode session
             startSession(directTransport, hotspotSsid, hotspotPassword,
-                videoAutoNegotiate, codecPreference, aaResolution, aaDpi,
-                aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp, videoFps,
+                videoAutoNegotiate, codecPreference, aaResolution, aaDpi, aaAutoDpi,
+                aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
+                aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins,
+                videoFps,
                 driveSide, hideClock, hideSignal, hideBattery, scalingMode,
                 manualIpAddress,
                 safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight)
@@ -588,14 +699,18 @@ class SessionManager(
         // Listen for system sleep so we can gracefully tear down before the
         // socket goes stale. Wake is handled in MainActivity.onResume().
         registerScreenReceiver()
+        registerDebugReceiver()
     }
 
     private fun startSession(
         directTransport: String, hotspotSsid: String, hotspotPassword: String,
         videoAutoNegotiate: Boolean = true, codec: String = "h264",
-        aaResolution: String = "1080p", aaDpi: Int = 160,
+        aaResolution: String = "1080p", aaDpi: Int = 160, aaAutoDpi: Boolean = true,
         aaWidthMargin: Int = 0, aaHeightMargin: Int = 0, aaPixelAspect: Int = -1,
-        aaTargetLayoutWidthDp: Int = 0, videoFps: Int = 60,
+        aaTargetLayoutWidthDp: Int = 0,
+        aaViewingDistanceMm: Int = 0, aaDecoderAdditionalDepth: Int = 0,
+        aaAutoMargins: Boolean = true,
+        videoFps: Int = 60,
         driveSide: String = "left",
         hideClock: Boolean = false, hideSignal: Boolean = false, hideBattery: Boolean = false,
         scalingMode: String = "letterbox",
@@ -606,23 +721,45 @@ class SessionManager(
         _transportMode.value = directTransport
         val ctx = context ?: return
 
-        // Map resolution string to pixel dimensions
+        // Map resolution string to pixel dimensions. Strings are the AA
+        // VideoCodecResolutionType enum values; portrait variants use the
+        // `_p` suffix to distinguish from the same-pixel-count landscape
+        // tier (e.g. 1080p = 1920×1080 vs 1080p_p = 1080×1920).
         val (resW, resH) = when (aaResolution) {
             "480p" -> 800 to 480
             "720p" -> 1280 to 720
             "1440p" -> 2560 to 1440
             "4k" -> 3840 to 2160
+            "720p_p" -> 720 to 1280
+            "1080p_p" -> 1080 to 1920
+            "1440p_p" -> 1440 to 2560
+            "4k_p" -> 2160 to 3840
             else -> 1920 to 1080 // "1080p" default
         }
 
         // Get BT MAC — BluetoothAdapter.getAddress() returns 02:00:00:00:00:00
         // on Android 8+ due to privacy. Try Settings.Secure first, then adapter.
-        // GM AAOS returns literal "None" for missing properties.
+        // GM AAOS returns literal "None" for missing properties. Some builds
+        // refuse both: in that case the user can paste a real MAC into the
+        // BT MAC override setting, which takes precedence over auto-detect.
         var btMac = ""
         try {
-            btMac = android.provider.Settings.Secure.getString(
-                ctx.contentResolver, "bluetooth_address") ?: ""
+            val override = kotlinx.coroutines.runBlocking {
+                AppPreferences.getInstance(ctx).btMacOverride.first().trim()
+            }
+            if (override.isNotEmpty()
+                && override != "02:00:00:00:00:00"
+                && !override.equals("none", ignoreCase = true)) {
+                btMac = override.uppercase().replace('-', ':')
+                OalLog.i(TAG, "BT MAC override in use: $btMac")
+            }
         } catch (_: Exception) {}
+        if (btMac.isEmpty()) {
+            try {
+                btMac = android.provider.Settings.Secure.getString(
+                    ctx.contentResolver, "bluetooth_address") ?: ""
+            } catch (_: Exception) {}
+        }
         if (btMac.isEmpty() || btMac == "02:00:00:00:00:00"
             || btMac.equals("none", ignoreCase = true)) {
             btMac = ""
@@ -648,57 +785,30 @@ class SessionManager(
 
         // Auto-compute pixel_aspect_ratio for non-16:9 displays (crop mode).
         //
-        // pixel_aspect tells the phone "each pixel on the display is X/10000
-        // times wider than tall". AA pre-shrinks its UI horizontally so that
-        // when the decoder stretches the 16:9 video to fill the wider display,
-        // the pre-shrunk circles expand back to round.
+        // HISTORICAL NOTE: We used to compute pixel_aspect from display vs
+        // video AR, hoping the phone would pre-shrink its UI horizontally so
+        // a downstream non-uniform stretch would round circles back out. This
+        // does not work — the phone ignores pixel_aspect_ratio_e4. GM's own
+        // implementation hardcodes 10000 (= 1.0) on every config and instead
+        // reserves UI chrome via width_margin/height_margin and lets the
+        // car compositor scale the codec frame uniformly into the panel rect.
         //
-        // Formula: pixel_aspect = (displayAR / videoAR) × 10000
-        //   e.g. Blazer EV 2914×1134 at 1440p: (2.57 / 1.78) × 10000 = 14454
+        // We now mirror GM:
+        //   - Default pixel_aspect = 10000 (1.0, square pixels).
+        //   - User can manually override via the Pixel Aspect setting if a
+        //     specific phone version actually responds to non-1.0 values.
+        //   - The actual aspect-ratio fix is the Crop-mode margin-zoom render
+        //     in ProjectionScreen: SurfaceView is inflated past the parent
+        //     so codec margin pixels clip off-screen and the inner content
+        //     rect lands on the panel with uniform square-pixel scaling.
         //
-        // Manual overrides for margins and pixel_aspect are respected if set.
-        val computedWidthMargin: Int
-        val computedHeightMargin: Int
-        val computedPixelAspect: Int
-        if (aaWidthMargin > 0 || aaHeightMargin > 0) {
-            // Manual margin override
-            computedWidthMargin = aaWidthMargin
-            computedHeightMargin = aaHeightMargin
-            computedPixelAspect = if (aaPixelAspect > 0) aaPixelAspect else 0
-        } else if (aaPixelAspect > 0) {
-            // Manual pixel_aspect override
-            computedWidthMargin = 0
-            computedHeightMargin = 0
-            computedPixelAspect = aaPixelAspect
-            OalLog.i(TAG, "Manual pixel_aspect=$aaPixelAspect")
-        } else if (scalingMode == "crop") {
-            // Auto-compute pixel_aspect from display geometry (like bridge-mode)
-            val wm = ctx.getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
-            val bounds = wm.currentWindowMetrics.bounds
-            val displayW = bounds.width().toFloat()
-            val displayH = bounds.height().toFloat()
-            val displayAr = displayW / displayH
-            val videoAr = resW.toFloat() / resH.toFloat()
-            if (kotlin.math.abs(displayAr - videoAr) / videoAr > 0.02f) {
-                // Display AR differs from video AR — compensation needed
-                val pa = ((displayAr / videoAr) * 10000).toInt()
-                OalLog.i(TAG, "Auto pixel_aspect: display=${displayW.toInt()}x${displayH.toInt()} " +
-                        "(${String.format("%.2f", displayAr)}:1) video=${resW}x${resH} " +
-                        "(${String.format("%.2f", videoAr)}:1) → pixel_aspect=$pa")
-                computedWidthMargin = 0
-                computedHeightMargin = 0
-                computedPixelAspect = pa
-            } else {
-                OalLog.i(TAG, "Auto pixel_aspect: display matches video AR, no compensation needed")
-                computedWidthMargin = 0
-                computedHeightMargin = 0
-                computedPixelAspect = 0
-            }
-        } else {
-            // Letterbox mode — no compensation needed
-            computedWidthMargin = 0
-            computedHeightMargin = 0
-            computedPixelAspect = if (aaPixelAspect > 0) aaPixelAspect else 0
+        // Manual margin and pixel_aspect overrides are still respected.
+        val computedWidthMargin: Int = aaWidthMargin
+        val computedHeightMargin: Int = aaHeightMargin
+        val computedPixelAspect: Int = when {
+            aaPixelAspect > 0 -> aaPixelAspect    // explicit manual override
+            aaPixelAspect == 0 -> 0               // explicit "off" (omit field)
+            else -> 10000                         // -1 (auto) → GM-default 1.0
         }
 
         // Per-tier DPI: in manual mode (single tier), compute DPI from target dp width
@@ -710,21 +820,97 @@ class SessionManager(
             effectiveDpi = maxOf((resW * 160) / aaTargetLayoutWidthDp, 80)
             computedTargetLayoutWidthDp = 0 // C++ doesn't need it — single tier
             OalLog.i(TAG, "Per-tier DPI (manual): ${resW}px / ${aaTargetLayoutWidthDp}dp → DPI $effectiveDpi")
+        } else if (aaAutoDpi) {
+            // Mirror GM's GALDisplayManager.getScaledDensity:
+            //   fWidth = renderRectWidthPx / (codecW - widthMargin)
+            //   density = round(panelDpi / fWidth)
+            // This makes AA UI elements come out the same physical size as
+            // native AAOS apps on the same panel, regardless of:
+            //   - panel aspect ratio (margins absorb the AR difference),
+            //   - displayMode (renderRect shrinks for system_ui_visible),
+            //   - chosen codec resolution (math uses the live codec dims).
+            // Falls back to user's [aaDpi] when the renderer hasn't yet
+            // reported a render rect (first connect before composition).
+            val rrW = renderRectWPx
+            val rrH = renderRectHPx
+            val pDpi = if (panelDensityDpi > 0) panelDensityDpi else
+                ctx.resources.displayMetrics.densityDpi
+            // Use the inner rect at the picked codec tier so margins are
+            // accounted for. Same formula as MarginAutoCalc / C++ side.
+            val (autoWm, autoHm) = if (rrW > 0 && rrH > 0) {
+                // Use the actual render rect, not the panel rect, so
+                // system_ui_visible mode (where the rect is smaller) gives
+                // a different DPI than fullscreen.
+                com.openautolink.app.video.MarginAutoCalc.compute(resW, resH, rrW, rrH)
+            } else 0 to 0
+            val innerW = (resW - (if (computedWidthMargin > 0) computedWidthMargin else autoWm)).coerceAtLeast(1)
+            val auto = if (rrW > 0 && innerW > 0 && pDpi > 0) {
+                val fWidth = rrW.toFloat() / innerW.toFloat()
+                if (fWidth > 0f) (pDpi / fWidth).toInt().coerceAtLeast(96) else aaDpi
+            } else aaDpi
+            effectiveDpi = auto
+            computedTargetLayoutWidthDp = aaTargetLayoutWidthDp
+            OalLog.i(TAG, "Auto-DPI: renderRect=${rrW}x${rrH} panelDpi=$pDpi " +
+                    "innerW=$innerW → DPI $effectiveDpi (user manual=$aaDpi ignored)")
         } else {
+            // Manual: user picked the DPI; honour exactly.
             effectiveDpi = aaDpi
             computedTargetLayoutWidthDp = aaTargetLayoutWidthDp
+            OalLog.i(TAG, "Manual DPI: $effectiveDpi")
         }
 
         OalLog.i(TAG, "SDR AR config: scalingMode=$scalingMode marginW=$computedWidthMargin marginH=$computedHeightMargin pixelAspectE4=$computedPixelAspect")
 
+        // Panel dims sent to C++ — these drive (a) landscape-vs-portrait
+        // codec tier selection in auto-negotiate, and (b) per-tier
+        // auto-margin calc.
+        //
+        // We send the LIVE RENDER RECT here, not the full panel. The
+        // renderer (ProjectionScreen Crop mode) uses the same render rect
+        // to compute its zoom factor; so by feeding both ends the same
+        // rectangle, the codec margin AA bakes in matches what the
+        // renderer crops away. In `system_ui_visible` mode this means the
+        // C++ side computes margins for the chrome-free rect (e.g.
+        // 2914×919), giving AA the right amount of unusable area at the
+        // bottom of the codec frame so its dock/status stays visible. In
+        // `fullscreen_immersive` mode renderRect equals the panel.
+        //
+        // Falls back to WindowManager when the renderer hasn't reported
+        // yet (first connect before composition); mostly harmless because
+        // a reconnect happens on first user action and the render rect is
+        // populated by then.
+        val (panelW, panelH) = if (renderRectWPx > 0 && renderRectHPx > 0) {
+            renderRectWPx to renderRectHPx
+        } else try {
+            val wm = ctx.getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
+            val b = wm.currentWindowMetrics.bounds
+            b.width() to b.height()
+        } catch (_: Exception) {
+            0 to 0
+        }
+        OalLog.i(TAG, "Panel dims: ${panelW}x${panelH} (mode=$lastDisplayMode)")
+
         val session = AasdkSession(scope, ctx)
         session.transportMode = directTransport
+        // Effective AA content_insets:
+        //  - In `system_ui_visible` mode, the SurfaceView is already inside
+        //    the chrome-free area (Compose padding handles it), so AA's
+        //    content_insets must be 0 — pushing values would double-shrink
+        //    the UI inside an already-shrunk surface. The user's safe-area
+        //    pref is preserved in DataStore but ignored in this mode.
+        //  - In `fullscreen_immersive` mode the user's pref applies (this
+        //    is where curved-corner padding lives, since AAOS doesn't
+        //    surface curves through WindowInsets).
+        val applyUserSafeArea = lastDisplayMode != "system_ui_visible"
+        val effSafeTop = if (applyUserSafeArea) safeAreaTop else 0
+        val effSafeBottom = if (applyUserSafeArea) safeAreaBottom else 0
+        val effSafeLeft = if (applyUserSafeArea) safeAreaLeft else 0
+        val effSafeRight = if (applyUserSafeArea) safeAreaRight else 0
+        OalLog.i(TAG, "Effective AA content_insets: top=$effSafeTop bottom=$effSafeBottom " +
+                "left=$effSafeLeft right=$effSafeRight (mode=$lastDisplayMode, " +
+                "userPref=$safeAreaTop/$safeAreaBottom/$safeAreaLeft/$safeAreaRight)")
+
         session.manualIpAddress = manualIpAddress
-        if (directTransport == "hotspot") {
-            session.onReconnectRequested = { reason, attempt, protocolError ->
-                hotspotReconnectHandler?.invoke(reason, attempt, protocolError) == true
-            }
-        }
         session.sdrConfig = AasdkSdrConfig(
             videoWidth = resW,
             videoHeight = resH,
@@ -744,55 +930,66 @@ class SessionManager(
             autoNegotiate = videoAutoNegotiate,
             videoCodec = codec,
             // realDensity removed — interferes with pixel_aspect_ratio_e4 on some AA versions
-            safeAreaTop = safeAreaTop,
-            safeAreaBottom = safeAreaBottom,
-            safeAreaLeft = safeAreaLeft,
-            safeAreaRight = safeAreaRight,
+            safeAreaTop = effSafeTop,
+            safeAreaBottom = effSafeBottom,
+            safeAreaLeft = effSafeLeft,
+            safeAreaRight = effSafeRight,
             targetLayoutWidthDp = computedTargetLayoutWidthDp,
             fuelTypes = fuelTypes.map { it }.toIntArray(),
             evConnectorTypes = evConnectorTypes.map { it }.toIntArray(),
+            viewingDistanceMm = aaViewingDistanceMm,
+            decoderAdditionalDepth = aaDecoderAdditionalDepth,
+            panelWidth = panelW,
+            panelHeight = panelH,
+            autoMargins = aaAutoMargins,
         )
         _touchWidth.value = resW
         _touchHeight.value = resH
-
-        // Multi-phone: only relevant in nearby mode
-        if (directTransport == "nearby") {
-            session.defaultPhoneName = _defaultPhoneName
-            session.onPhoneConnected = { phoneName ->
-                _phoneName.value = phoneName
-                if (_defaultPhoneName.isEmpty()) {
-                    _defaultPhoneName = phoneName
-                    scope.launch {
-                        val c = context ?: return@launch
-                        AppPreferences.getInstance(c).setDefaultPhoneName(phoneName)
-                        OalLog.i(TAG, "Default phone saved: $phoneName")
-                    }
-                }
-            }
-        }
+        _effectiveDpi.value = effectiveDpi
 
         aasdkSession = session
+        // Reset the mirrored reconnect counter at session boundary. The
+        // per-session collector below will republish updates as they fire.
+        _reconnectAttempt.value = 0
 
         // Observe session state
         scope.launch {
             session.connectionState.collect { connState ->
                 val newState = connState.toSessionState()
                 _sessionState.value = newState
+                val attempt = _reconnectAttempt.value
                 _statusMessage.value = when (newState) {
-                    SessionState.IDLE -> when (directTransport) {
-                        "nearby" -> "Nearby: ${AaNearbyManager.status.value}"
-                        "usb" -> "USB: ${UsbConnectionManager.status.value}"
-                        else -> "Searching for phone…"
-                    }
-                    SessionState.CONNECTING -> "Phone connecting..."
+                    SessionState.IDLE ->
+                        if (attempt > 0) "Reconnecting (attempt $attempt)…"
+                        else "Searching for phone…"
+                    SessionState.CONNECTING ->
+                        if (attempt > 0) "Reconnecting (attempt $attempt)…"
+                        else "Phone connecting..."
                     SessionState.CONNECTED -> "Handshake..."
                     SessionState.STREAMING -> "Streaming"
-                    SessionState.ERROR -> "Error"
+                    SessionState.ERROR ->
+                        if (attempt > 0) "Reconnecting (attempt $attempt)…"
+                        else "Error"
                 }
                 if (newState == SessionState.STREAMING) {
                     startLocationForwarding(session)
                     _vehicleDataForwarder?.start()
                     _imuForwarder?.start()
+                }
+            }
+        }
+
+        // Mirror per-session reconnect-attempt counter so observers (UI banner,
+        // 3-failure picker escalation) don't have to track AasdkSession identity.
+        scope.launch {
+            session.reconnectAttempt.collect { attempt ->
+                _reconnectAttempt.value = attempt
+                // Also refresh the status message so the banner updates when
+                // the attempt counter advances without an accompanying state
+                // change (the connection-state collector above only fires on
+                // state transitions).
+                if (attempt > 0 && _sessionState.value != SessionState.STREAMING) {
+                    _statusMessage.value = "Reconnecting (attempt $attempt)…"
                 }
             }
         }
@@ -826,28 +1023,6 @@ class SessionManager(
         scope.launch(audioDispatcher) {
             session.audioFrames.collect { frame ->
                 _audioPlayer?.onAudioFrame(frame)
-            }
-        }
-
-        // Observe Nearby status (only in nearby mode)
-        if (directTransport == "nearby") {
-            scope.launch {
-                AaNearbyManager.status.collect { nearbyStatus ->
-                    if (_sessionState.value == SessionState.IDLE) {
-                        _statusMessage.value = "Nearby: $nearbyStatus"
-                    }
-                }
-            }
-        }
-
-        // Observe USB status (only in usb mode)
-        if (directTransport == "usb") {
-            scope.launch {
-                UsbConnectionManager.status.collect { usbStatus ->
-                    if (_sessionState.value == SessionState.IDLE) {
-                        _statusMessage.value = "USB: $usbStatus"
-                    }
-                }
             }
         }
 
@@ -894,6 +1069,7 @@ class SessionManager(
 
     fun stop() {
         unregisterScreenReceiver()
+        unregisterDebugReceiver()
         observeJob?.cancel()
         observeJob = null
         decoderWatchJob?.cancel()
@@ -907,11 +1083,12 @@ class SessionManager(
         stopDirectLocationForwarding()
         _videoDecoder?.release()
         _videoDecoder = null
-        _videoDecoderRevision.value++
         _audioPlayer?.release()
         _audioPlayer = null
         _micCaptureManager?.release()
         _micCaptureManager = null
+        _hfpPresence?.stop()
+        _hfpPresence = null
         _gnssForwarder?.stop()
         _gnssForwarder = null
         _vehicleDataForwarder?.stop()
@@ -922,11 +1099,8 @@ class SessionManager(
         ClusterNavigationState.clear()
         _mediaSessionManager?.release()
         _mediaSessionManager = null
-        clusterPreferenceJob?.cancel()
-        clusterPreferenceJob = null
-        remoteSyslogPreferenceJob?.cancel()
-        remoteSyslogPreferenceJob = null
-        DiagnosticLog.setRemoteSyslogEnabled(false)
+        lastMediaMetadata = null
+        lastMediaPlaybackState = null
         _clusterManager?.release()
         _clusterManager = null
         _telemetryCollector?.stop()
@@ -935,7 +1109,6 @@ class SessionManager(
         _remoteDiagnostics = null
         _sessionState.value = SessionState.IDLE
         _statusMessage.value = "Disconnected"
-        lastNegotiationKey = null
         _phoneBatteryLevel.value = null
         _phoneBatteryCritical.value = false
         _voiceSessionActive.value = false
@@ -962,10 +1135,14 @@ class SessionManager(
         videoAutoNegotiate: Boolean = true,
         aaResolution: String = "1080p",
         aaDpi: Int = 160,
+        aaAutoDpi: Boolean = true,
         aaWidthMargin: Int = 0,
         aaHeightMargin: Int = 0,
         aaPixelAspect: Int = -1,
         aaTargetLayoutWidthDp: Int = 0,
+        aaViewingDistanceMm: Int = 0,
+        aaDecoderAdditionalDepth: Int = 0,
+        aaAutoMargins: Boolean = true,
         videoFps: Int = 60,
         driveSide: String = "left",
         hideClock: Boolean = false,
@@ -980,15 +1157,23 @@ class SessionManager(
         safeAreaLeft: Int = 0,
         safeAreaRight: Int = 0,
     ) {
+        // "Save & Reconnect" from Settings doesn't know the resolved Car
+        // Hotspot IP — fall back to the last value we successfully used so
+        // TcpConnector doesn't drop to mDNS-only mode and stall.
+        val effectiveManualIp = manualIpAddress?.takeIf { it.isNotBlank() }
+            ?: _lastManualIpAddress
+        if (!effectiveManualIp.isNullOrBlank()) _lastManualIpAddress = effectiveManualIp
+
         // If islands were never initialized, do a full start
         if (_audioPlayer == null) {
             start(
                 codecPreference, micSourcePreference, scalingMode, directTransport,
                 hotspotSsid, hotspotPassword, videoAutoNegotiate, aaResolution,
-                aaDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp, videoFps,
+                aaDpi, aaAutoDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
+                aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins, videoFps,
                 driveSide, hideClock, hideSignal, hideBattery,
                 volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
-                manualIpAddress, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
+                effectiveManualIp, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
             )
             return
         }
@@ -1019,10 +1204,11 @@ class SessionManager(
                 doReconnectAfterCancel(
                     codecPreference, micSourcePreference, scalingMode, directTransport,
                     hotspotSsid, hotspotPassword, videoAutoNegotiate, aaResolution,
-                    aaDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
+                    aaDpi, aaAutoDpi, aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
+                    aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins,
                     videoFps, driveSide, hideClock, hideSignal, hideBattery,
                     volumeOffsetMedia, volumeOffsetNavigation, volumeOffsetAssistant,
-                    manualIpAddress, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
+                    effectiveManualIp, safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight,
                 )
             } catch (e: Exception) {
                 OalLog.e(TAG, "reconnect() failed: ${e.message}")
@@ -1037,8 +1223,12 @@ class SessionManager(
         codecPreference: String, micSourcePreference: String, scalingMode: String,
         directTransport: String, hotspotSsid: String, hotspotPassword: String,
         videoAutoNegotiate: Boolean, aaResolution: String, aaDpi: Int,
+        aaAutoDpi: Boolean,
         aaWidthMargin: Int, aaHeightMargin: Int, aaPixelAspect: Int,
-        aaTargetLayoutWidthDp: Int, videoFps: Int, driveSide: String,
+        aaTargetLayoutWidthDp: Int,
+        aaViewingDistanceMm: Int, aaDecoderAdditionalDepth: Int,
+        aaAutoMargins: Boolean,
+        videoFps: Int, driveSide: String,
         hideClock: Boolean, hideSignal: Boolean, hideBattery: Boolean,
         volumeOffsetMedia: Int, volumeOffsetNavigation: Int, volumeOffsetAssistant: Int,
         manualIpAddress: String?,
@@ -1057,7 +1247,6 @@ class SessionManager(
         // 3. Flush video decoder (codec/scaling may have changed)
         _videoDecoder?.release()
         _videoDecoder = MediaCodecDecoder(codecPreference, scalingMode)
-        _videoDecoderRevision.value++
         _telemetryCollector?.videoDecoder = _videoDecoder
 
         // 4. Update audio volume offsets in-place (no release/recreate)
@@ -1071,40 +1260,28 @@ class SessionManager(
         _vehicleDataForwarder?.stop()
         _imuForwarder?.stop()
 
-        // 6. Clear stale projection state
-        clearTransientSessionState(mediaStatus = "Reconnecting", suspendVideo = false)
+        // 6. Clear stale navigation state
+        _navigationDisplay.clear()
+        ClusterNavigationState.clear()
 
         // 7. Update status — don't go to IDLE, just show reconnecting
         _statusMessage.value = "Reconnecting..."
+        _phoneBatteryLevel.value = null
+        _phoneBatteryCritical.value = false
+        _voiceSessionActive.value = false
+        _phoneSignalStrength.value = null
 
         // 8. Start new AA session with new SDR config
-        lastNegotiationKey = buildVideoNegotiationKey(
-            codecPreference = codecPreference,
-            videoAutoNegotiate = videoAutoNegotiate,
-            aaResolution = aaResolution,
-            aaDpi = aaDpi,
-            aaWidthMargin = aaWidthMargin,
-            aaHeightMargin = aaHeightMargin,
-            aaPixelAspect = aaPixelAspect,
-            aaTargetLayoutWidthDp = aaTargetLayoutWidthDp,
-            videoFps = videoFps,
-            driveSide = driveSide,
-            hideClock = hideClock,
-            hideSignal = hideSignal,
-            hideBattery = hideBattery,
-            safeAreaTop = safeAreaTop,
-            safeAreaBottom = safeAreaBottom,
-            safeAreaLeft = safeAreaLeft,
-            safeAreaRight = safeAreaRight,
-        )
         observeJob = scope.launch {
             decoderWatchJob = launch { watchDecoderState() }
             keyframeWatchJob = launch { watchKeyframeNeeds() }
             callStateJob = launch { watchCallState() }
 
             startSession(directTransport, hotspotSsid, hotspotPassword,
-                videoAutoNegotiate, codecPreference, aaResolution, aaDpi,
-                aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp, videoFps,
+                videoAutoNegotiate, codecPreference, aaResolution, aaDpi, aaAutoDpi,
+                aaWidthMargin, aaHeightMargin, aaPixelAspect, aaTargetLayoutWidthDp,
+                aaViewingDistanceMm, aaDecoderAdditionalDepth, aaAutoMargins,
+                videoFps,
                 driveSide, hideClock, hideSignal, hideBattery, scalingMode,
                 manualIpAddress,
                 safeAreaTop, safeAreaBottom, safeAreaLeft, safeAreaRight)
@@ -1122,67 +1299,160 @@ class SessionManager(
     }
 
     /**
-     * Called from Activity.onResume() to detect system sleep/wake.
+     * Called from [MainActivity.onResume]. Belt-and-suspenders alongside the
+     * SCREEN_ON broadcast receiver registered in [registerScreenReceiver] —
+     * both call into [markWake], which dedupes via [WAKE_DEDUPE_MS] so only
+     * one wake handler runs per real wake regardless of source.
      */
     fun onSystemWake() {
-        val now = SystemClock.elapsedRealtime()
-        val elapsed = now - lastActiveTimestamp
-        lastActiveTimestamp = now
-        // Mark wake so a queued SCREEN_OFF that arrives moments later (AAOS
-        // sometimes delivers it post-wake) is ignored by the screen receiver.
-        lastWakeTimestamp = now
+        markWake("activity_resume")
+    }
 
-        // If we paused for sleep, always restart on wake regardless of gap.
-        if (pausedForSleep) {
-            pausedForSleep = false
-            OalLog.i(TAG, "System wake: restarting session paused for sleep (${elapsed / 1000}s gap)")
-            DiagnosticLog.i("transport", "Wake: restart paused session (${elapsed / 1000}s)")
-            // Run on IO — start() reaches into JNI/SSL init.
-            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                pausedForSleepStopJob?.join()
-                pausedForSleepStopJob = null
-                aasdkSession?.start()
-            }
-            _clusterManager?.ensureAlive()
-            _mediaSessionManager?.getSessionToken()?.let { token ->
-                OalMediaBrowserService.updateSessionToken(token)
-            }
+    /**
+     * Called from [MainActivity.onPause]. Mirrors [onSystemWake] on the sleep
+     * side — both this and the SCREEN_OFF broadcast call [markGoingIdle],
+     * which freezes [lastActiveTimestamp] so the gap on the next wake is
+     * measured from this point rather than the last incoming control message.
+     */
+    fun onActivityPaused() {
+        markGoingIdle("activity_pause")
+    }
+
+    /**
+     * Called from [MainActivity.onConfigurationChanged] when the system
+     * UI night-mode flag flips. On real GM hardware, the VHAL NIGHT_MODE
+     * property drives the AA theme via [VehicleDataForwarder]; this hook
+     * covers AAOS images (and emulators) where the head unit theme is
+     * driven by [Configuration.uiMode] rather than VHAL.
+     *
+     * Always forwards — does NOT dedupe against [lastSentNightMode]. The
+     * VHAL path emits its (possibly stale) value every ~100ms and would
+     * otherwise reset [lastSentNightMode] between our UI events, silently
+     * dropping the back-flip. UI changes are discrete user actions, so an
+     * occasional duplicate event to the phone is harmless.
+     */
+    fun onUiNightModeChanged(night: Boolean) {
+        lastKnownUiNightMode = night
+        val session = aasdkSession ?: return
+        lastSentNightMode = night
+        OalLog.i(TAG, "UI night mode → $night (forwarding to phone)")
+        session.sendNightMode(night)
+    }
+
+    /**
+     * Single entry point for "the system just woke up". Called from multiple
+     * sources (Activity.onResume + SCREEN_ON / USER_PRESENT broadcasts);
+     * deduplicated via [WAKE_DEDUPE_MS] so a second source firing within a
+     * few seconds is a no-op.
+     *
+     * Behavior:
+     *  - Emit a [WakeEvent] on [wakeEvents] for observers (e.g. ProjectionViewModel
+     *    clears its in-memory active phone on a long gap).
+     *  - Re-assert cluster binding + MediaSession token (cheap; GM cluster can
+     *    drop these during suspend).
+     *  - If the gap is "long" and we were not IDLE before sleep, force a clean
+     *    reconnect — the TCP socket is almost certainly dead from the suspend.
+     */
+    fun markWake(reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastWakeHandledAtMs < WAKE_DEDUPE_MS) {
+            OalLog.d(TAG, "Wake dedup (reason=$reason within ${WAKE_DEDUPE_MS}ms)")
             return
         }
+        val gap = now - lastActiveTimestamp
+        lastWakeHandledAtMs = now
+        lastActiveTimestamp = now
 
-        if (elapsed < 10_000) return
-        val state = _sessionState.value
-        if (state == SessionState.IDLE) return
+        val gapStr = formatGap(gap)
+        OalLog.i(TAG, "Wake: reason=$reason gap=$gapStr")
+        DiagnosticLog.i("transport", "Wake: $reason gap=$gapStr")
 
-        OalLog.i(TAG, "System wake detected (${elapsed / 1000}s gap, state=$state)")
-        DiagnosticLog.i("transport", "System wake detected (${elapsed / 1000}s gap)")
+        _wakeEvents.tryEmit(WakeEvent(reason, gap))
 
-        // Re-establish cluster binding — GM Templates Host may have killed
-        // the session during sleep/suspend
+        // Re-establish cluster + MediaSession bindings — GM Templates Host can
+        // drop these during suspend even when our process survives.
         _clusterManager?.ensureAlive()
-
-        // Re-push MediaSession token — cluster media widget may have lost binding
         _mediaSessionManager?.getSessionToken()?.let { token ->
             OalMediaBrowserService.updateSessionToken(token)
         }
 
-        // Long gap (>30s) with the session not in IDLE means our TCP socket is
-        // almost certainly dead from suspend. Force a clean reconnect rather
-        // than wait for the keepalive/ping watchdog to notice.
-        if (elapsed > 30_000) {
-            OalLog.w(TAG, "Long wake gap — forcing clean reconnect")
-            clearTransientSessionState(mediaStatus = "Reconnecting", suspendVideo = true)
+        // Long gap means TCP socket is almost certainly dead. Force a clean
+        // reconnect rather than wait for the keepalive watchdog.
+        if (gap > LONG_WAKE_FORCE_RECONNECT_MS &&
+            _sessionState.value != SessionState.IDLE) {
+            OalLog.w(TAG, "Long wake gap ($gapStr) — forcing clean reconnect")
             scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                aasdkSession?.forceReconnect("system wake after ${elapsed / 1000}s gap")
+                aasdkSession?.forceReconnect("wake gap $gapStr")
             }
         }
     }
 
     /**
-     * Register a receiver for ACTION_SCREEN_OFF so we can gracefully tear down
-     * the AA session before AAOS deep-suspends. Without this, sockets go stale
-     * during sleep and on wake the app sits on a dead pipe rendering the last
-     * frame until the user manually reconnects.
+     * Single entry point for "system is going idle." Called from
+     * Activity.onPause and SCREEN_OFF. Freezes [lastActiveTimestamp] so the
+     * gap measured at the next wake reflects time-since-going-idle, not
+     * time-since-last-control-message (the latter can be many seconds stale
+     * during steady streaming).
+     */
+    fun markGoingIdle(reason: String) {
+        lastActiveTimestamp = SystemClock.elapsedRealtime()
+        OalLog.i(TAG, "Going idle: $reason")
+        DiagnosticLog.i("transport", "Going idle: $reason")
+    }
+
+    /**
+     * Debug-only simulation of an AAOS car sleep → wake cycle.
+     *
+     * Drives the same code paths a real car sleep does:
+     *   1. markGoingIdle (publishes the idle timestamp used to compute the
+     *      next wake gap).
+     *   2. Stop the live aasdkSession with explicitStop=true so the
+     *      AasdkSession auto-reconnect loop does NOT fire during the
+     *      simulated sleep window. This leaves SessionState at IDLE just
+     *      like a real network loss would.
+     *   3. Wait [durationMs] real wall-clock seconds.
+     *   4. markWake → the WakeEvent flow fires with gap≈durationMs. The
+     *      ProjectionViewModel wake collector picks it up and (when
+     *      conditions match: Car Hotspot mode, default set, resolved phone
+     *      in discovery, idle) kicks connect(). This is exactly the same
+     *      auto-reconnect path real car-wake uses.
+     *
+     * Trigger from adb:
+     *   adb shell am broadcast \
+     *     -a com.openautolink.app.DEBUG_SIMULATE_SLEEP \
+     *     --el duration_ms 60000 \
+     *     com.openautolink.app
+     */
+    fun debugSimulateSleep(durationMs: Long) {
+        OalLog.i(TAG, "DEBUG: simulating car sleep for ${formatGap(durationMs)}")
+        markGoingIdle("debug_sleep_sim")
+        // Force a clean shutdown with explicitStop=true (AasdkSession.stop()
+        // sets that), so the AA session's own retry loop doesn't fire during
+        // the sleep window. The wake side will reconnect via the
+        // ProjectionViewModel wake collector.
+        aasdkSession?.stop()
+        aasdkSession = null
+        scope.launch {
+            kotlinx.coroutines.delay(durationMs)
+            OalLog.i(TAG, "DEBUG: simulating car wake (after ${formatGap(durationMs)})")
+            markWake("debug_wake_sim")
+        }
+    }
+
+    private fun formatGap(ms: Long): String = when {
+        ms < 1_000 -> "${ms}ms"
+        ms < 60_000 -> "${ms / 1000}s"
+        ms < 3_600_000 -> "${ms / 60_000}m${(ms % 60_000) / 1000}s"
+        else -> "${ms / 3_600_000}h${(ms % 3_600_000) / 60_000}m"
+    }
+
+    /**
+     * Register a receiver for ACTION_SCREEN_OFF / _ON / USER_PRESENT. These
+     * broadcasts are not reliably delivered on every AAOS build (empirical:
+     * never observed firing on the 2024 Blazer EV during driving sessions),
+     * so the Activity.onResume / onPause callbacks in [MainActivity] are the
+     * primary signal. This receiver is belt-and-suspenders: when broadcasts
+     * do fire, [markWake]'s dedupe ensures we don't run the handler twice.
      */
     private fun registerScreenReceiver() {
         if (screenReceiver != null) return
@@ -1190,40 +1460,11 @@ class SessionManager(
         val r = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: android.content.Context?, intent: android.content.Intent?) {
                 when (intent?.action) {
-                    android.content.Intent.ACTION_SCREEN_OFF -> {
-                        // Suppress SCREEN_OFF that arrives shortly after a wake.
-                        // AAOS broadcasts can be queued/delayed during input
-                        // dispatch and we'd otherwise tear down a freshly woken
-                        // session. 5s window is generous; real sleep events
-                        // come in solo with no recent wake.
-                        val now = SystemClock.elapsedRealtime()
-                        if ((now - lastWakeTimestamp) < 5_000) {
-                            OalLog.i(TAG, "SCREEN_OFF ignored — arrived ${now - lastWakeTimestamp}ms after wake")
-                            return
-                        }
-                        if (_sessionState.value != SessionState.IDLE && aasdkSession != null) {
-                            OalLog.i(TAG, "SCREEN_OFF — pausing AA session for sleep")
-                            DiagnosticLog.i("transport", "SCREEN_OFF: pause for sleep")
-                            pausedForSleep = true
-                            _statusMessage.value = "Paused for sleep"
-                            clearTransientSessionState(mediaStatus = "Paused for sleep", suspendVideo = true)
-                            // Run aasdkSession.stop() off Main — it joins the C++
-                            // io_thread via JNI and can take 100s of ms. Doing this
-                            // on Main causes ANRs which are reported as crashes.
-                            pausedForSleepStopJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                aasdkSession?.stop()
-                            }
-                        }
-                    }
+                    android.content.Intent.ACTION_SCREEN_OFF ->
+                        markGoingIdle("screen_off")
                     android.content.Intent.ACTION_SCREEN_ON,
-                    android.content.Intent.ACTION_USER_PRESENT -> {
-                        // Record wake so a queued SCREEN_OFF arriving moments
-                        // later doesn't tear down our just-restarted session.
-                        lastWakeTimestamp = SystemClock.elapsedRealtime()
-                        if (pausedForSleep) {
-                            OalLog.i(TAG, "SCREEN_ON received — wake handler will restart session")
-                        }
-                    }
+                    android.content.Intent.ACTION_USER_PRESENT ->
+                        markWake(intent.action ?: "screen_on")
                 }
             }
         }
@@ -1234,8 +1475,8 @@ class SessionManager(
         }
         try {
             // SCREEN_OFF / SCREEN_ON / USER_PRESENT are protected system
-            // broadcasts — they're never sent by other apps, so RECEIVER_NOT_EXPORTED
-            // is safe and required on Android 14+ (target SDK 34+).
+            // broadcasts so RECEIVER_NOT_EXPORTED is safe and required on
+            // Android 14+ (target SDK 34+).
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
                 ctx.registerReceiver(r, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
             } else {
@@ -1257,38 +1498,84 @@ class SessionManager(
         screenReceiver = null
     }
 
+    // ------------------------------------------------------------------
+    // Debug-only: car sleep/wake simulation via broadcast.
+    //
+    // Trigger from a host running adb:
+    //   adb shell am broadcast \
+    //     -a com.openautolink.app.DEBUG_SIMULATE_SLEEP \
+    //     --el duration_ms 60000 \
+    //     com.openautolink.app
+    //
+    // Exposed for integration tests. Action is namespaced under our package
+    // and the receiver is package-internal (RECEIVER_NOT_EXPORTED on T+); on
+    // older platforms it's still package-scoped at the dispatch layer because
+    // we pass the package in the broadcast intent.
+    // ------------------------------------------------------------------
+    private var debugSleepReceiver: android.content.BroadcastReceiver? = null
+    private fun registerDebugReceiver() {
+        if (debugSleepReceiver != null) return
+        val ctx = context ?: return
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context?, intent: android.content.Intent?) {
+                when (intent?.action) {
+                    "com.openautolink.app.DEBUG_SIMULATE_SLEEP" -> {
+                        val ms = intent.getLongExtra("duration_ms", 60_000L).coerceAtLeast(1_000L)
+                        debugSimulateSleep(ms)
+                    }
+                    "com.openautolink.app.DEBUG_INJECT_PHONE" -> {
+                        val host = intent.getStringExtra("host")
+                        if (host.isNullOrBlank()) {
+                            OalLog.w(TAG, "DEBUG_INJECT_PHONE missing 'host' extra")
+                            return
+                        }
+                        val port = intent.getIntExtra("port", 5277)
+                        val phoneId = intent.getStringExtra("phone_id")
+                            ?: "debug_inject_${host.replace('.', '_')}"
+                        val friendlyName = intent.getStringExtra("name")
+                            ?: "Test Phone @ $host"
+                        val ctxApp = context
+                        if (ctxApp != null) {
+                            com.openautolink.app.transport.PhoneDiscovery.getInstance(ctxApp)
+                                .injectDebugPhone(
+                                    host = host,
+                                    port = port,
+                                    friendlyName = friendlyName,
+                                    phoneId = phoneId,
+                                )
+                            OalLog.i(TAG, "DEBUG injected phone: $friendlyName ($phoneId) @ $host:$port")
+                        }
+                    }
+                }
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction("com.openautolink.app.DEBUG_SIMULATE_SLEEP")
+            addAction("com.openautolink.app.DEBUG_INJECT_PHONE")
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                ctx.registerReceiver(r, filter, android.content.Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                ctx.registerReceiver(r, filter)
+            }
+            debugSleepReceiver = r
+            OalLog.i(TAG, "Debug receivers registered (DEBUG_SIMULATE_SLEEP, DEBUG_INJECT_PHONE)")
+        } catch (e: Exception) {
+            OalLog.w(TAG, "Debug receiver registration failed: ${e.message}")
+        }
+    }
+    private fun unregisterDebugReceiver() {
+        val ctx = context ?: return
+        debugSleepReceiver?.let {
+            try { ctx.unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        debugSleepReceiver = null
+    }
+
     suspend fun requestKeyframe() {
         aasdkSession?.requestKeyframe()
-    }
-
-    suspend fun closeVideoStreamForAppFocusLoss() {
-        if (videoClosedForAppFocusLoss) return
-        val session = aasdkSession ?: return
-        if (_sessionState.value == SessionState.IDLE) return
-        videoClosedForAppFocusLoss = true
-        OalLog.i(TAG, "App focus lost — closing video stream only")
-        _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "App focus lost: close video stream")
-        _videoDecoder?.suspendStream()
-        session.closeVideoStream()
-    }
-
-    suspend fun restartVideoStreamAfterAppFocusGain() {
-        if (!videoClosedForAppFocusLoss) return
-        if (_sessionState.value != SessionState.CONNECTED && _sessionState.value != SessionState.STREAMING) {
-            OalLog.i(TAG, "App focus gained — deferring video restart until session reconnects")
-            return
-        }
-        videoClosedForAppFocusLoss = false
-        OalLog.i(TAG, "App focus gained — restarting video stream")
-        _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "App focus gained: restart video stream")
-        restartVideoStream()
-    }
-
-    suspend fun restartVideoStream() {
-        OalLog.i(TAG, "Restarting video stream without reconnecting audio")
-        _remoteDiagnostics?.log(DiagnosticLevel.INFO, "video", "Video-only stream restart requested")
-        _videoDecoder?.restartStream()
-        aasdkSession?.restartVideoStream()
     }
 
     private suspend fun syncLocalPreferences() {
@@ -1302,29 +1589,6 @@ class SessionManager(
         // Start (idempotent-enough) EV tuning observer; coroutines just
         // re-read the same Volatiles on subsequent calls.
         observeEvTuningPrefs()
-    }
-
-    private fun observeClusterNavigationPreference() {
-        val ctx = context ?: return
-        val clusterManager = _clusterManager ?: return
-        clusterPreferenceJob?.cancel()
-        clusterPreferenceJob = scope.launch {
-            AppPreferences.getInstance(ctx).clusterNavigation.collectLatest { enabled ->
-                clusterNavigationEnabled = enabled
-                clusterManager.setClusterEnabled(enabled)
-                if (enabled) {
-                    // Templates Host on GM does not reliably auto-discover the
-                    // service; launching CarAppActivity starts the binding chain.
-                    clusterManager.launchClusterBinding()
-                    _navigationDisplay.currentManeuver.value?.let { maneuver ->
-                        ClusterNavigationState.update(maneuver)
-                    }
-                    OalLog.i(TAG, "Cluster navigation enabled and binding launched")
-                } else {
-                    OalLog.i(TAG, "Cluster navigation disabled")
-                }
-            }
-        }
     }
 
     suspend fun sendControlMessage(message: ControlMessage) {
@@ -1348,19 +1612,26 @@ class SessionManager(
                     )
                 }
             }
-            is ControlMessage.Button -> session.sendKeyEvent(
-                message.keycode,
-                message.down,
-                message.metastate,
-                message.longpress
-            )
+            is ControlMessage.Button -> session.sendKeyEvent(message.keycode, message.down)
             is ControlMessage.KeyframeRequest -> session.requestKeyframe()
             is ControlMessage.VehicleData -> {
                 message.speedKmh?.let { session.sendSpeed((it / 3.6f * 1000).toInt()) }
-                message.gearRaw?.let { session.sendGear(it) }
-                message.parkingBrake?.let { session.sendParkingBrake(it) }
-                message.nightMode?.let { session.sendNightMode(it) }
-                message.driving?.let { session.sendDrivingStatus(it) }
+                // Same edge-trigger discipline as the inline sendMessage path
+                // in start() — see lastSent* fields. Necessary because both
+                // paths share these state vars; without it, manual injections
+                // would force a resend even when value unchanged.
+                message.gearRaw?.let {
+                    if (lastSentGearRaw != it) { lastSentGearRaw = it; session.sendGear(it) }
+                }
+                message.parkingBrake?.let {
+                    if (lastSentParkingBrake != it) { lastSentParkingBrake = it; session.sendParkingBrake(it) }
+                }
+                message.nightMode?.let {
+                    if (lastSentNightMode != it) { lastSentNightMode = it; session.sendNightMode(it) }
+                }
+                message.driving?.let {
+                    if (lastSentDriving != it) { lastSentDriving = it; session.sendDrivingStatus(it) }
+                }
             }
             is ControlMessage.Gnss -> {
                 // GPS forwarded via LocationListener, not control messages
@@ -1410,13 +1681,7 @@ class SessionManager(
                         _remoteDiagnostics?.log(DiagnosticLevel.WARN, "video",
                             "Keyframe re-request #$attempt")
                     }
-                    delay(
-                        if (attempt < KEYFRAME_FAST_RETRY_ATTEMPTS) {
-                            KEYFRAME_FAST_RETRY_MS
-                        } else {
-                            KEYFRAME_SLOW_RETRY_MS
-                        }
-                    )
+                    delay(2000)
                 }
             }
         }
@@ -1438,18 +1703,13 @@ class SessionManager(
         when (message) {
             is ControlMessage.PhoneConnected -> {
                 _remoteDiagnostics?.log(DiagnosticLevel.INFO, "session", "Phone connected: ${message.phoneName}")
-                _videoDecoder?.restartStream()
-                _mediaSessionManager?.resetNowPlaying("Connected")
+                resetLatchedVehicleSensorState("phone_connected")
+                seedCurrentUiNightMode("phone_connected")
                 _sessionState.value = SessionState.STREAMING
                 _statusMessage.value = "Streaming"
                 aasdkSession?.let { startLocationForwarding(it) }
                 _vehicleDataForwarder?.start()
                 _imuForwarder?.start()
-                if (videoClosedForAppFocusLoss) {
-                    scope.launch {
-                        restartVideoStreamAfterAppFocusGain()
-                    }
-                }
             }
             is ControlMessage.PhoneDisconnected -> {
                 _remoteDiagnostics?.log(DiagnosticLevel.INFO, "session", "Phone disconnected: ${message.reason}")
@@ -1457,14 +1717,54 @@ class SessionManager(
                 _vehicleDataForwarder?.stop()
                 _imuForwarder?.stop()
                 stopDirectLocationForwarding()
-                clearTransientSessionState(mediaStatus = "Not connected", suspendVideo = true)
+                _navigationDisplay.clear()
+                ClusterNavigationState.clear()
+                if (message.reason == "byebye_user_selection") {
+                    OalLog.i(TAG, "User tapped Exit in AA launcher — tearing down cluster + session")
+                    // Drive cluster + session teardown HERE rather than from
+                    // MainActivity. AAOS force-finishes our Activity within
+                    // ~1s of acknowledging VIDEO_FOCUS_NATIVE, which cancels
+                    // its lifecycleScope before any collector can run. Doing
+                    // the cleanup in SessionManager's own scope guarantees
+                    // navigationEnded() reaches Templates Host before our
+                    // process is wound down — otherwise Templates Host keeps
+                    // its cluster Activity bound and respawns our process to
+                    // serve it.
+                    try {
+                        com.openautolink.app.cluster.ClusterMainSession.endActiveNavigation()
+                    } catch (e: Exception) {
+                        OalLog.w(TAG, "endActiveNavigation() failed: ${e.message}")
+                    }
+                    try {
+                        _clusterManager?.release()
+                        _clusterManager = null
+                    } catch (e: Exception) {
+                        OalLog.w(TAG, "clusterManager.release() failed: ${e.message}")
+                    }
+                    // Finish every task this app owns. Doing this from
+                    // SessionManager (app-scoped) rather than MainActivity
+                    // (whose lifecycleScope is gone the moment the OS
+                    // force-finishes us) makes sure cleanup actually runs.
+                    try {
+                        val ctx = context
+                        if (ctx != null) {
+                            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE)
+                                as? android.app.ActivityManager
+                            am?.appTasks?.forEach { task ->
+                                try { task.finishAndRemoveTask() } catch (_: Exception) {}
+                            }
+                            OalLog.i(TAG, "User exit: finished all app tasks")
+                        }
+                    } catch (e: Exception) {
+                        OalLog.w(TAG, "appTasks teardown failed: ${e.message}")
+                    }
+                    _userExitEvents.tryEmit(Unit)
+                }
             }
             is ControlMessage.NavState -> {
                 _navigationDisplay.onNavState(message)
-                if (clusterNavigationEnabled) {
-                    _navigationDisplay.currentManeuver.value?.let { maneuver ->
-                        ClusterNavigationState.update(maneuver)
-                    }
+                _navigationDisplay.currentManeuver.value?.let { maneuver ->
+                    ClusterNavigationState.update(maneuver)
                 }
             }
             is ControlMessage.NavStateClear -> {
@@ -1472,17 +1772,21 @@ class SessionManager(
                 ClusterNavigationState.clear()
             }
             is ControlMessage.MediaMetadata -> {
+                lastMediaMetadata = message
                 _mediaSessionManager?.updateMetadata(
                     title = message.title, artist = message.artist, album = message.album,
                     durationMs = message.durationMs, albumArtBase64 = message.albumArtBase64
                 )
                 if (message.playing != null) {
-                    _mediaSessionManager?.updatePlaybackState(
+                    val pb = ControlMessage.MediaPlaybackState(
                         playing = message.playing, positionMs = message.positionMs ?: 0
                     )
+                    lastMediaPlaybackState = pb
+                    _mediaSessionManager?.updatePlaybackState(pb.playing, pb.positionMs)
                 }
             }
             is ControlMessage.MediaPlaybackState -> {
+                lastMediaPlaybackState = message
                 _mediaSessionManager?.updatePlaybackState(
                     playing = message.playing, positionMs = message.positionMs
                 )
@@ -1526,31 +1830,6 @@ class SessionManager(
             }
             else -> {}
         }
-    }
-
-    private fun clearTransientSessionState(mediaStatus: String, suspendVideo: Boolean) {
-        _micCaptureManager?.stop()
-        _audioPlayer?.stopAll()
-        if (suspendVideo) {
-            _videoDecoder?.suspendStream()
-        }
-        _navigationDisplay.clear()
-        ClusterNavigationState.clear()
-        _mediaSessionManager?.resetNowPlaying(mediaStatus)
-        _phoneBatteryLevel.value = null
-        _phoneBatteryCritical.value = false
-        _voiceSessionActive.value = false
-        _phoneSignalStrength.value = null
-    }
-
-    private fun sendMediaKey(keyCode: Int) {
-        val session = aasdkSession ?: run {
-            DiagnosticLog.w("input", "MediaSession command ignored: no AA session")
-            return
-        }
-        DiagnosticLog.i("input", "MediaSession command -> AA key=${KeyEvent.keyCodeToString(keyCode)}")
-        session.sendKeyEvent(keyCode, true, 0, false)
-        session.sendKeyEvent(keyCode, false, 0, false)
     }
 
     // ── EV energy-model tuning ──────────────────────────────────────

@@ -24,7 +24,6 @@ class MainActivity : ComponentActivity() {
         add(Manifest.permission.BLUETOOTH_SCAN)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
-            add(Manifest.permission.NEARBY_WIFI_DEVICES)
         }
     }.toTypedArray()
 
@@ -119,7 +118,6 @@ object CompanionPrefs {
     const val NAME = "OalCompanionPrefs"
     const val SECRETS_NAME = "OalCompanionSecrets"
 
-    const val SERVICE_DESIRED_RUNNING = "service_desired_running"
     const val AUTO_START_MODE = "auto_start_mode"
     const val AUTO_START_BT_MACS = "auto_start_bt_macs"
     const val BT_DISCONNECT_STOP = "bt_disconnect_stop"
@@ -132,15 +130,9 @@ object CompanionPrefs {
     const val AUTO_START_APP_OPEN = 3
     const val AUTO_START_BT_AND_WIFI = 4
 
-    // Legacy key for car WiFi credentials. Current storage is in
-    // OalCompanionSecrets so credentials are not included in cloud backup.
+    // Car Hotspot WiFi credentials for WifiNetworkSpecifier auto-connect.
+    // Stored as Set<String>, each entry formatted as "ssid\tpassword".
     const val CAR_WIFI_ENTRIES = "car_wifi_entries"
-
-    const val TRANSPORT_MODE = "transport_mode"
-    const val REMOTE_SYSLOG_ENABLED = "remote_syslog_enabled"
-    const val TRANSPORT_NEARBY = "nearby"
-    const val TRANSPORT_TCP = "tcp"
-    const val DEFAULT_TRANSPORT = TRANSPORT_TCP
 
     // Connection mode — distinguishes which side hosts the WiFi network.
     // PHONE_HOTSPOT: phone is the AP, car is the client (current default).

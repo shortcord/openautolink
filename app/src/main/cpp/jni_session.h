@@ -218,14 +218,9 @@ private:
     JNIEnv* getEnv(bool& attached);
     void releaseEnv(bool attached);
     void callVoidCallback(jmethodID method);
-    void emitNativeEvent(int type, const uint8_t* payload, size_t length, int64_t timestampNs);
-    void emitNativeEvent(int type, const std::string& payload);
-    void clearCallbackException(JNIEnv* env, const char* callbackName);
 
     JavaVM* jvm_;
     jobject callbackRef_ = nullptr;
-    std::mutex callbackMutex_;
-    bool callbacksClosed_ = false;
 
     // Boost.Asio event loop
     std::unique_ptr<boost::asio::io_service> ioService_;
@@ -245,7 +240,6 @@ private:
     std::shared_ptr<aasdk::channel::mediasink::audio::AudioMediaSinkService> mediaAudioChannel_;
     std::shared_ptr<aasdk::channel::mediasink::audio::AudioMediaSinkService> guidanceAudioChannel_;
     std::shared_ptr<aasdk::channel::mediasink::audio::AudioMediaSinkService> systemAudioChannel_;
-    std::shared_ptr<aasdk::channel::mediasink::audio::AudioMediaSinkService> telephonyAudioChannel_;
     std::shared_ptr<aasdk::channel::inputsource::InputSourceService> inputChannel_;
     std::shared_ptr<aasdk::channel::sensorsource::SensorSourceService> sensorChannel_;
     std::shared_ptr<aasdk::channel::navigationstatus::NavigationStatusService> navChannel_;
@@ -258,7 +252,6 @@ private:
     std::shared_ptr<JniAudioSinkHandler> mediaAudioHandler_;
     std::shared_ptr<JniAudioSinkHandler> guidanceAudioHandler_;
     std::shared_ptr<JniAudioSinkHandler> systemAudioHandler_;
-    std::shared_ptr<JniAudioSinkHandler> telephonyAudioHandler_;
     std::shared_ptr<JniSensorHandler> sensorHandler_;
     std::shared_ptr<JniInputHandler> inputHandler_;
     std::shared_ptr<JniNavStatusHandler> navHandler_;
@@ -273,9 +266,23 @@ private:
     std::atomic<bool> pingOutstanding_{false};
     std::atomic<bool> aborted_{false};
     std::atomic<bool> sessionStoppedFired_{false};
+    // Reason string passed to Kotlin onSessionStopped. Defaults to "stopped";
+    // ByeByeRequest from phone overrides this (e.g. "byebye_user_selection" when
+    // the user taps the Exit button in the AA app launcher) so Kotlin can decide
+    // whether to suppress auto-reconnect.
+    std::string stopReason_{"stopped"};
     std::atomic<int> negotiatedCodecType_{0};
-    // Video stream session id (from Start indication). Used for media ACK flow control.
-    std::atomic<int> videoSessionId_{0};
+    // Current video focus state for the main display.
+    // 1 = VIDEO_FOCUS_PROJECTED (default — we always project on AAOS).
+    // Tracking this lets onVideoFocusRequest reply with our actual current
+    // state (mirroring GM's GALDisplayManager.onVideoFocusRequest), so we
+    // stay correct if/when we ever surrender focus (e.g. cluster work, or
+    // a future "back to AAOS Home while AA stays alive" feature).
+    std::atomic<int> currentVideoFocus_{1};
+    // Number of video configs we advertised in our SDR. Used by the video-
+    // setup handler to populate configuration_indices honestly. Set during
+    // buildServiceDiscoveryResponse(); read on the IO strand only after.
+    std::atomic<int> advertisedVideoConfigCount_{0};
     std::atomic<int64_t> pingSentAtMs_{0};
     std::atomic<int64_t> keyframeRequestedAtMs_{0};
 
@@ -333,6 +340,17 @@ private:
         int targetLayoutWidthDp = 0;
         std::vector<int> fuelTypes;
         std::vector<int> evConnectorTypes;
+        int viewingDistanceMm = 0;
+        int decoderAdditionalDepth = 0;
+        // Panel rect in pixels — used to (a) auto-pick landscape vs portrait
+        // codec tiers when auto-negotiating, and (b) compute per-tier
+        // width/height margins so the inner content rect matches panel AR.
+        // 0 = unknown (skip auto-margin; fall back to user override).
+        int panelWidth = 0;
+        int panelHeight = 0;
+        // When true, ignore marginWidth/marginHeight and auto-compute from
+        // panel AR. When false, send the literal user-set values.
+        bool autoMargins = true;
     };
     SdrConfig sdrConfig_;
 
@@ -355,7 +373,6 @@ private:
         jmethodID onVoiceSession = nullptr;
         jmethodID onAudioFocusRequest = nullptr;
         jmethodID onError = nullptr;
-        jmethodID onNativeEvent = nullptr;
     };
     CallbackMethods cbMethods_;
 };

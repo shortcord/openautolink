@@ -15,15 +15,17 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Bluetooth permissions for Direct Mode AA handshake.
-         The app registers an RFCOMM server on the AA UUID so the phone can
-         discover and initiate wireless AA projection via BT. -->
+    <!-- Bluetooth permissions. BLUETOOTH_CONNECT is needed to read the head
+         unit's BT MAC address (Settings.Secure["bluetooth_address"] /
+         BluetoothAdapter.getAddress()) for the AA Service Discovery Response.
+         The other BLUETOOTH_* flags are kept as belt-and-suspenders for
+         AAOS BT adapters that gate getAddress() behind older permission
+         names; they cost nothing on modern API levels. -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
-    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
 
     <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
     <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
@@ -38,6 +40,12 @@
     <uses-permission android:name="android.car.permission.CAR_INFO" />
     <uses-permission android:name="android.car.permission.CAR_ENERGY_PORTS" />
     <uses-permission android:name="android.car.permission.READ_CAR_DISPLAY_UNITS" />
+    <!-- Round-6 audit additions — dangerous-level perms grantable to normal apps.
+         CAR_MILEAGE unlocks PERF_ODOMETER; CAR_TIRES unlocks TIRE_PRESSURE per wheel;
+         CAR_DYNAMICS_STATE unlocks ABS_ACTIVE / TRACTION_CONTROL_ACTIVE. -->
+    <uses-permission android:name="android.car.permission.CAR_MILEAGE" />
+    <uses-permission android:name="android.car.permission.CAR_TIRES" />
+    <uses-permission android:name="android.car.permission.CAR_DYNAMICS_STATE" />
 
     <uses-feature
         android:name="android.hardware.type.automotive"
@@ -46,11 +54,6 @@
     <uses-feature
         android:name="android.software.car.templates_host"
         android:required="true" />
-
-    <!-- USB Host feature (optional — don't block install on devices without it) -->
-    <uses-feature
-        android:name="android.hardware.usb.host"
-        android:required="false" />
 
     <application
         android:name=".OalApplication"
@@ -66,7 +69,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density|fontScale|locale|layoutDirection|navigation|touchscreen"
             android:screenOrientation="sensorLandscape"
             android:launchMode="singleTask"
             android:windowSoftInputMode="stateAlwaysHidden">
@@ -147,21 +150,6 @@
                 <action android:name="com.openautolink.app.RECONNECT" />
             </intent-filter>
         </receiver>
-
-        <!-- USB device attached handler — routes to MainActivity -->
-        <activity
-            android:name=".transport.usb.UsbAttachedActivity"
-            android:exported="true"
-            android:enabled="true"
-            android:directBootAware="true"
-            android:theme="@android:style/Theme.NoDisplay">
-            <intent-filter>
-                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
-            </intent-filter>
-            <meta-data
-                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
-                android:resource="@xml/usb_device_filter" />
-        </activity>
 
         <!-- Media source for AAOS system UI, cluster, and steering wheel controls -->
         <service

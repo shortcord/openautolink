@@ -25,7 +25,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.DisplaySettings
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Router
@@ -72,39 +71,23 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
-import com.openautolink.app.BuildConfig
 import com.openautolink.app.session.SessionState
 import com.openautolink.app.data.AppPreferences
-import com.openautolink.app.transport.usb.UsbConnectionManager
+import com.openautolink.app.ui.components.LocalEchoTextField
 import androidx.compose.material3.FilterChip
 
 private enum class SettingsTab(
     val title: String,
     val icon: ImageVector,
 ) {
-    CONNECTION("Connections", Icons.Default.Router),
+    CONNECTION("Connection", Icons.Default.Router),
     DISPLAY("Display", Icons.Default.DisplaySettings),
     VIDEO("Video", Icons.Default.VideoSettings),
     AUDIO("Audio", Icons.Default.Mic),
+    INPUT("Input", Icons.Default.Keyboard),
     EV("EV", Icons.Default.BatteryChargingFull),
-    ABOUT("About", Icons.Default.Info),
     DIAGNOSTICS("Diagnostics", Icons.Default.BugReport),
 }
-
-private data class LicenseItem(
-    val name: String,
-    val license: String,
-)
-
-private val licenseItems = listOf(
-    LicenseItem("OpenAutoLink", "License TBD"),
-    LicenseItem("aasdk", "GNU GPLv3"),
-    LicenseItem("AndroidX, Jetpack Compose, Material Icons, Navigation, Lifecycle, DataStore", "Apache License 2.0"),
-    LicenseItem("Kotlin, Kotlin coroutines, Kotlin serialization", "Apache License 2.0"),
-    LicenseItem("Conscrypt", "Apache License 2.0"),
-    LicenseItem("Protocol Buffers", "BSD 3-Clause License"),
-    LicenseItem("Google Nearby Connections / Play services", "Google APIs Terms of Service"),
-)
 
 private data class DisplayModeOption(
     val key: String,
@@ -130,7 +113,6 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = viewModel(),
     sessionState: SessionState = SessionState.IDLE,
     onSaveAndConnect: () -> Unit = {},
-    onSaveAndRestartVideo: () -> Unit = {},
     onBack: () -> Unit = {},
     onNavigateToDiagnostics: () -> Unit = {},
     onNavigateToSafeAreaEditor: () -> Unit = {},
@@ -176,11 +158,7 @@ fun SettingsScreen(
                         NavigationRailItem(
                             selected = selectedTab == tab,
                             onClick = {
-                                if (tab == SettingsTab.DIAGNOSTICS) {
-                                    onNavigateToDiagnostics()
-                                } else {
-                                    selectedTab = tab
-                                }
+                                selectedTab = tab
                             },
                             icon = {
                                 Icon(
@@ -207,7 +185,6 @@ fun SettingsScreen(
                 ConnectionStatusBar(
                     sessionState = sessionState,
                     onSaveAndConnect = onSaveAndConnect,
-                    onSaveAndRestartVideo = onSaveAndRestartVideo,
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -222,9 +199,11 @@ fun SettingsScreen(
                         )
                         SettingsTab.VIDEO -> VideoTab(viewModel, uiState)
                         SettingsTab.AUDIO -> AudioTab(viewModel, uiState)
+                        SettingsTab.INPUT -> InputTab(viewModel, uiState)
                         SettingsTab.EV -> EvEnergyModelTab()
-                        SettingsTab.DIAGNOSTICS -> Unit
-                        SettingsTab.ABOUT -> AboutTab()
+                        SettingsTab.DIAGNOSTICS -> DiagnosticsSettingsTab(
+                            viewModel, uiState, onNavigateToDiagnostics
+                        )
                     }
                 }
             }
@@ -236,7 +215,6 @@ fun SettingsScreen(
 private fun ConnectionStatusBar(
     sessionState: SessionState,
     onSaveAndConnect: () -> Unit,
-    onSaveAndRestartVideo: () -> Unit,
 ) {
     val statusColor = when (sessionState) {
         SessionState.STREAMING -> Color(0xFF4CAF50) // Green
@@ -274,19 +252,6 @@ private fun ConnectionStatusBar(
             Text("Save & Reconnect")
         }
 
-        FilledTonalButton(
-            onClick = onSaveAndRestartVideo,
-            modifier = Modifier.testTag("saveAndRestartVideoButton"),
-        ) {
-            Icon(
-                imageVector = Icons.Default.VideoSettings,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Save & Restart Video")
-        }
-
         // Status indicator dot + text
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -317,75 +282,63 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        val usbStatus by UsbConnectionManager.status.collectAsStateWithLifecycle()
+        // --- Connection Mode (phone-hotspot vs car-hotspot) ---
         val connectionMode by viewModel.connectionMode.collectAsStateWithLifecycle()
         val knownPhones by viewModel.knownPhones.collectAsStateWithLifecycle()
         val defaultPhoneId by viewModel.defaultPhoneId.collectAsStateWithLifecycle()
-        val isUsbTransport = uiState.directTransport == "usb"
 
+        // --- Transport ---
         SectionHeader("Transport")
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            listOf(
-                "usb" to "USB",
-                AppPreferences.CONNECTION_MODE_CAR_HOTSPOT to "Car Hotspot",
-                AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT to "Phone Hotspot",
-            ).forEach { (mode, label) ->
-                val selected = if (mode == "usb") {
-                    isUsbTransport
-                } else {
-                    !isUsbTransport && connectionMode == mode
-                }
+            listOf("hotspot" to "Wi-Fi").forEach { (mode, label) ->
                 FilterChip(
-                    selected = selected,
-                    onClick = {
-                        when (mode) {
-                            "usb" -> viewModel.selectUsbTransport()
-                            AppPreferences.CONNECTION_MODE_CAR_HOTSPOT -> viewModel.selectCarHotspotTransport()
-                            AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT -> viewModel.selectPhoneHotspotTransport()
-                        }
-                    },
+                    selected = uiState.directTransport == mode,
+                    onClick = { viewModel.updateDirectTransport(mode) },
                     label = { Text(label) },
                 )
             }
         }
         Text(
-            text = when {
-                isUsbTransport ->
-                    "Direct wired Android Auto over AOA v2. No companion app or WiFi is required. Plug the phone into the car's USB port and approve the USB permission prompt."
-                connectionMode == AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT ->
+            text = "Phone and car talk over the shared Wi-Fi network configured below. USB projection is temporarily disabled after recent car firmware changes.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SectionHeader("Connection Mode")
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf(
+                AppPreferences.CONNECTION_MODE_CAR_HOTSPOT to "Car Hotspot",
+                AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT to "Phone Hotspot",
+            ).forEach { (mode, label) ->
+                FilterChip(
+                    selected = connectionMode == mode,
+                    onClick = { viewModel.updateConnectionMode(mode) },
+                    label = { Text(label) },
+                )
+            }
+        }
+        Text(
+            text = when (connectionMode) {
+                AppPreferences.CONNECTION_MODE_PHONE_HOTSPOT ->
                     "Phone is the WiFi access point; the car connects to it. Optimized for one phone."
-                else ->
+                AppPreferences.CONNECTION_MODE_CAR_HOTSPOT ->
                     "Car's hotspot is the WiFi network; phones connect to it. Multiple phones can be online at once and the floating switcher button picks the active one."
+                else -> ""
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
-
-        if (isUsbTransport) {
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.5f))
-            Spacer(modifier = Modifier.height(16.dp))
-            SectionHeader("USB Status")
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = usbStatus,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-            Text(
-                text = "OpenAutoLink listens for a phone on the car USB port, requests permission, switches the phone into Android Open Accessory mode, and starts projection directly from the AAOS app.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-            return
-        }
 
         // Known phones list — only relevant in Car Hotspot mode.
         if (connectionMode == AppPreferences.CONNECTION_MODE_CAR_HOTSPOT) {
@@ -594,13 +547,12 @@ private fun ConnectionTab(viewModel: SettingsViewModel, uiState: SettingsUiState
                     uiState.manualIpAddress.isBlank() || isValidIpv4(uiState.manualIpAddress)
                 }
 
-                OutlinedTextField(
+                LocalEchoTextField(
                     value = uiState.manualIpAddress,
-                    onValueChange = { input ->
-                        // Allow only digits and dots
-                        val filtered = input.filter { it.isDigit() || it == '.' }
+                    onValueChange = { filtered ->
                         viewModel.updateManualIpAddress(filtered)
                     },
+                    filter = { input -> input.filter { it.isDigit() || it == '.' } },
                     label = { Text("Phone IP Address") },
                     placeholder = { Text("e.g. 192.168.1.100") },
                     singleLine = true,
@@ -643,7 +595,7 @@ private fun DisplayTab(
 
         Text(
             text = "Controls how the app interacts with AAOS system bars. " +
-                    "Changes apply immediately and restart only the video stream. On some AAOS head units, the system may " +
+                    "Changes apply immediately. On some AAOS head units, the system may " +
                     "prevent apps from hiding bars. To change the video encoding resolution, " +
                     "use AA Resolution on the Video tab.",
             style = MaterialTheme.typography.bodyMedium,
@@ -686,13 +638,19 @@ private fun DisplayTab(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- Safe Area ---
-        SectionHeader("Safe Area")
+        // --- AA Display Insets ---
+        SectionHeader("AA Display Insets")
 
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Keeps Android Auto clear of screen edges and system UI.",
+            text = "Tells the phone where to keep critical AA UI (dropdowns, " +
+                    "dialogs, FAB buttons) so they don't land on physical " +
+                    "curves, AAOS chrome, or anywhere you don't want. " +
+                    "Leave at 0 to use what AAOS reports (system bars + " +
+                    "display cutouts). Set values to add extra padding for " +
+                    "vehicles whose curves AAOS doesn't expose (e.g. Blazer " +
+                    "EV's rounded top-right corner).",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
@@ -709,7 +667,7 @@ private fun DisplayTab(
                 onClick = onNavigateToSafeAreaEditor,
                 modifier = Modifier.testTag("editSafeAreaButton"),
             ) {
-                Text("Edit Safe Area")
+                Text("Edit Display Insets")
             }
 
             Text(
@@ -818,7 +776,7 @@ private fun DisplayTab(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "Show turn-by-turn directions on the instrument cluster.",
+                    text = "Enable the cluster service to show turn-by-turn directions on the instrument cluster. Disable if your car doesn't have a cluster display or Templates Host. Takes effect on next connect.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -844,7 +802,7 @@ private fun DisplayTab(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "Send accelerometer, gyroscope, and compass data to Android Auto.",
+                    text = "Send accelerometer, gyroscope, and compass data to the bridge.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -868,86 +826,11 @@ private fun DisplayTab(
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Show or hide floating overlay buttons during streaming.",
+            text = "Customize floating overlay buttons during streaming.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
         )
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth(0.7f)
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Settings Button",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = "Floating gear icon to access settings during projection.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = uiState.overlaySettingsButton,
-                onCheckedChange = { viewModel.updateOverlaySettingsButton(it) },
-                modifier = Modifier.testTag("overlaySettingsToggle"),
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth(0.7f)
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Restart Video Button",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = "Floating button to restart only the projected video stream.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = uiState.overlayRestartVideoButton,
-                onCheckedChange = { viewModel.updateOverlayRestartVideoButton(it) },
-                modifier = Modifier.testTag("overlayRestartVideoToggle"),
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth(0.7f)
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Switch Phone Button",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = "Floating button to open the phone chooser in Car Hotspot mode.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = uiState.overlaySwitchPhoneButton,
-                onCheckedChange = { viewModel.updateOverlaySwitchPhoneButton(it) },
-                modifier = Modifier.testTag("overlaySwitchPhoneToggle"),
-            )
-        }
 
         Row(
             modifier = Modifier
@@ -1088,11 +971,7 @@ private fun DisplayTab(
         }
         } // Column (hide flags)
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
-
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         SectionHeader("Distance Units")
 
@@ -1182,17 +1061,18 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         Text(
             text = "Video codec the phone uses to encode the AA stream. " +
-                    "H.265 is recommended for 1440p/4K. H.264 may work at higher resolutions " +
-                    "depending on your phone.",
+                    "H.264 is the safe default — instant clean startup, capped at 1080p. " +
+                    "H.265 supports up to 4K but may show a brief green/distorted picture " +
+                    "for the first 30–60 seconds while the phone's encoder warms up.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
         )
 
-        val isHighRes = uiState.aaResolution in listOf("1440p", "4k")
+        val isHighRes = uiState.aaResolution in listOf("1440p", "4k", "1440p_p", "4k_p")
         listOf(
-            Triple("h264", "H.264", if (isHighRes) "" else " (Recommended)"),
-            Triple("h265", "H.265 / HEVC", if (isHighRes) " (Recommended)" else ""),
+            Triple("h264", "H.264", " (Recommended)"),
+            Triple("h265", "H.265 / HEVC", if (isHighRes) " — needed for 1440p/4K" else " — green-startup risk"),
             Triple("vp9", "VP9", ""),
         ).forEach { (key, label, suffix) ->
             Row(
@@ -1282,6 +1162,12 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             Triple("1080p", "1080p (1920×1080)", false),
             Triple("1440p", "1440p (2560×1440)", true),
             Triple("4k", "4K (3840×2160)", true),
+            // Portrait variants — AA enum has 9:16 mirrors of 720p+ for tall
+            // panels. No 480p portrait in the spec.
+            Triple("720p_p", "720p portrait (720×1280)", false),
+            Triple("1080p_p", "1080p portrait (1080×1920)", false),
+            Triple("1440p_p", "1440p portrait (1440×2560)", true),
+            Triple("4k_p", "4K portrait (2160×3840)", true),
         ).forEach { (key, label, isHighRes) ->
             val warningColor = Color(0xFFFFB74D)
             Row(
@@ -1544,7 +1430,43 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
 
         // Slider for custom DPI (80-640 range)
         var sliderDpi by remember(uiState.aaDpi) { mutableIntStateOf(uiState.aaDpi) }
-        val dpiSliderEnabled = !(uiState.aaTargetLayoutWidthDp > 0 && uiState.videoAutoNegotiate)
+        // Slider is disabled either when:
+        //  - target-dp mode is active in auto-negotiate (existing behaviour), or
+        //  - aaAutoDpi is on (auto-DPI overrides whatever the slider says).
+        val dpiSliderEnabled =
+            !(uiState.aaTargetLayoutWidthDp > 0 && uiState.videoAutoNegotiate) &&
+            !uiState.aaAutoDpi
+
+        // Auto-DPI toggle. When ON, density is computed at session start
+        // from panel DPI + render rect + codec margins so AA UI lands at
+        // native physical sizes regardless of display mode. When OFF, the
+        // manual slider value is sent literally.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Auto DPI",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Compute density from panel DPI, render rect, and codec margins. " +
+                        "Tracks display mode (fullscreen vs system UI visible) automatically.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = uiState.aaAutoDpi,
+                onCheckedChange = { viewModel.updateAaAutoDpi(it) },
+                modifier = Modifier.testTag("aaAutoDpi"),
+            )
+        }
+
         Text(
             text = "DPI: $sliderDpi",
             style = MaterialTheme.typography.titleMedium,
@@ -1570,7 +1492,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                 .padding(top = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            listOf(120, 160, 240, 320, 480).forEach { preset ->
+            listOf(96, 132, 160, 200, 240, 320, 480).forEach { preset ->
                 val isSelected = uiState.aaDpi == preset
                 Surface(
                     shape = MaterialTheme.shapes.small,
@@ -1608,7 +1530,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
             text = "How the video fits your screen. " +
                     "Letterbox shows the full frame with black bars on the sides. " +
                     "Crop fills the screen but cuts off top/bottom. " +
-                    "Changing this restarts only the video stream; audio keeps playing.",
+                    "Requires reconnect (Save & Reconnect).",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
@@ -1650,13 +1572,34 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Override how AA layouts its UI within the video frame. " +
-                    "0 = auto-computed from your display aspect ratio. " +
-                    "Use these to adjust if AA buttons appear behind letterbox bars or display curves.",
+            text = "Tells the phone to letterbox its UI inside the encoded video. " +
+                    "Crop mode renders only the inner (non-margin) rect onto the panel " +
+                    "with uniform square-pixel scaling. Auto computes margins per-tier " +
+                    "from panel aspect ratio so any AA codec resolution lands correctly. " +
+                    "Disable Auto to send the literal values below " +
+                    "(0/0 = no margins, decoder stretches the full codec frame).",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 12.dp)
         )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Auto-compute margins",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.width(220.dp),
+            )
+            Switch(
+                checked = uiState.aaAutoMargins,
+                onCheckedChange = { viewModel.updateAaAutoMargins(it) },
+                modifier = Modifier.testTag("aaAutoMargins"),
+            )
+        }
 
         // Width Margin
         Row(
@@ -1670,12 +1613,13 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.width(140.dp),
             )
-            OutlinedTextField(
+            LocalEchoTextField(
                 value = if (uiState.aaWidthMargin == 0) "" else uiState.aaWidthMargin.toString(),
-                onValueChange = { value ->
-                    val margin = value.filter { it.isDigit() }.toIntOrNull() ?: 0
+                onValueChange = { filtered ->
+                    val margin = filtered.toIntOrNull() ?: 0
                     viewModel.updateAaWidthMargin(margin.coerceIn(0, 1000))
                 },
+                filter = { it.filter { c -> c.isDigit() } },
                 placeholder = { Text("0 (auto)") },
                 singleLine = true,
                 modifier = Modifier.width(120.dp).testTag("aaWidthMargin"),
@@ -1696,18 +1640,95 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.width(140.dp),
             )
-            OutlinedTextField(
+            LocalEchoTextField(
                 value = if (uiState.aaHeightMargin == 0) "" else uiState.aaHeightMargin.toString(),
-                onValueChange = { value ->
-                    val margin = value.filter { it.isDigit() }.toIntOrNull() ?: 0
+                onValueChange = { filtered ->
+                    val margin = filtered.toIntOrNull() ?: 0
                     viewModel.updateAaHeightMargin(margin.coerceIn(0, 1000))
                 },
+                filter = { it.filter { c -> c.isDigit() } },
                 placeholder = { Text("0 (auto)") },
                 singleLine = true,
                 modifier = Modifier.width(120.dp).testTag("aaHeightMargin"),
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text("px", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // --- Viewing Distance / Decoder Depth (GM SDR fields) ---
+        // GM puts viewing_distance + decoder_additional_depth in every
+        // VideoConfiguration. The phone uses viewing_distance (mm from driver
+        // eye to screen) to pick text/icon sizes that look right at the
+        // actual seating distance. decoder_additional_depth tells the phone
+        // how many extra reordered frames the car can buffer (GM uses 1).
+        Text(
+            text = "Viewing distance & decoder depth (advanced)",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+        )
+        Text(
+            text = "Sent in VideoConfiguration. Viewing distance = mm from driver eye " +
+                    "to display (GM uses ~700 for centre IP screens; tune per vehicle). " +
+                    "Decoder depth = extra reordered frames the head unit can buffer " +
+                    "(GM uses 1; raise only if you see B-frame stalls). 0 = omit field.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Viewing Distance",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.width(140.dp),
+            )
+            LocalEchoTextField(
+                value = if (uiState.aaViewingDistanceMm == 0) "" else uiState.aaViewingDistanceMm.toString(),
+                onValueChange = { filtered ->
+                    val mm = filtered.toIntOrNull() ?: 0
+                    viewModel.updateAaViewingDistanceMm(mm.coerceIn(0, 5000))
+                },
+                filter = { it.filter { c -> c.isDigit() } },
+                placeholder = { Text("0 (omit)") },
+                singleLine = true,
+                modifier = Modifier.width(120.dp).testTag("aaViewingDistanceMm"),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("mm", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Decoder Add'l Depth",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.width(140.dp),
+            )
+            LocalEchoTextField(
+                value = if (uiState.aaDecoderAdditionalDepth == 0) "" else uiState.aaDecoderAdditionalDepth.toString(),
+                onValueChange = { filtered ->
+                    val depth = filtered.toIntOrNull() ?: 0
+                    viewModel.updateAaDecoderAdditionalDepth(depth.coerceIn(0, 8))
+                },
+                filter = { it.filter { c -> c.isDigit() } },
+                placeholder = { Text("0 (omit)") },
+                singleLine = true,
+                modifier = Modifier.width(120.dp).testTag("aaDecoderAdditionalDepth"),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("frames", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -1784,12 +1805,13 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.width(180.dp),
                 )
-                OutlinedTextField(
+                LocalEchoTextField(
                     value = uiState.aaPixelAspect.toString(),
-                    onValueChange = { value ->
-                        val pa = value.filter { it.isDigit() }.toIntOrNull() ?: 10000
+                    onValueChange = { filtered ->
+                        val pa = filtered.toIntOrNull() ?: 10000
                         viewModel.updateAaPixelAspect(pa.coerceIn(1, 30000))
                     },
+                    filter = { it.filter { c -> c.isDigit() } },
                     placeholder = { Text("10000") },
                     singleLine = true,
                     modifier = Modifier.width(140.dp).testTag("aaPixelAspect"),
@@ -1807,7 +1829,7 @@ private fun VideoTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "After changing video/display settings, use \"Save & Restart Video\" to apply without reconnecting audio.",
+            text = "Changes to video settings require an AA session reconnect (Save & Reconnect).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1828,8 +1850,6 @@ private val mappableActions = listOf(
     MappableAction(87, "Next Track", "Skip to next track"),
     MappableAction(88, "Previous Track", "Go to previous track"),
     MappableAction(86, "Stop", "Stop media playback"),
-    MappableAction(89, "Rewind", "Rewind media playback"),
-    MappableAction(90, "Fast Forward", "Fast-forward media playback"),
     MappableAction(126, "Play", "Start media playback"),
     MappableAction(127, "Pause", "Pause media playback"),
     MappableAction(84, "Voice Assistant", "Activate Google Assistant"),
@@ -1959,17 +1979,70 @@ private fun InputTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
     if (captureTarget != null) {
         val target = captureTarget!!
 
-        // Subscribe to the global Activity-level key bus while the dialog is
-        // open. Compose `onKeyEvent` does NOT receive steering-wheel / remote
-        // keys inside an AlertDialog (different window, no focus), so we hook
-        // MainActivity.dispatchKeyEvent via KeyCaptureBus instead.
+        // Subscribe to the global key bus while the dialog is open. Compose
+        // `onKeyEvent` does NOT receive steering-wheel / remote keys, and an
+        // AlertDialog runs in its own Window so `Activity.dispatchKeyEvent`
+        // is also bypassed — we have to hook the dialog window's callback.
         DisposableEffect(target) {
+            com.openautolink.app.diagnostics.OalLog.i(
+                "KeyRemapDialog",
+                "Capture dialog opened for target=${target.label} (aaKeycode=${target.aaKeycode}) — installing listener",
+            )
             com.openautolink.app.input.KeyCaptureBus.listener = { code ->
                 val name = android.view.KeyEvent.keyCodeToString(code)
                     .removePrefix("KEYCODE_")
+                com.openautolink.app.diagnostics.OalLog.i(
+                    "KeyRemapDialog",
+                    "Listener fired: keycode=$code name=$name",
+                )
                 lastDetectedKey = code to name
             }
-            onDispose { com.openautolink.app.input.KeyCaptureBus.listener = null }
+            onDispose {
+                com.openautolink.app.diagnostics.OalLog.i(
+                    "KeyRemapDialog",
+                    "Capture dialog closing — clearing listener",
+                )
+                com.openautolink.app.input.KeyCaptureBus.listener = null
+            }
+        }
+
+        // Hook the dialog's own Window so steering-wheel keys delivered to
+        // the dialog window get routed into KeyCaptureBus.
+        val dialogView = androidx.compose.ui.platform.LocalView.current
+        DisposableEffect(target, dialogView) {
+            var node: android.view.ViewParent? = dialogView.parent
+            var provider: androidx.compose.ui.window.DialogWindowProvider? = null
+            while (node != null) {
+                if (node is androidx.compose.ui.window.DialogWindowProvider) {
+                    provider = node
+                    break
+                }
+                node = (node as? android.view.View)?.parent
+            }
+            val window = provider?.window
+            val original = window?.callback
+            com.openautolink.app.diagnostics.OalLog.i(
+                "KeyRemapDialog",
+                "Window hook setup: providerFound=${provider != null} " +
+                    "windowFound=${window != null} originalCallbackPresent=${original != null}",
+            )
+            if (window != null && original != null) {
+                window.callback = object : android.view.Window.Callback by original {
+                    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+                        com.openautolink.app.diagnostics.OalLog.i(
+                            "KeyRemapDialog",
+                            "Dialog window dispatchKeyEvent: keycode=${event.keyCode} " +
+                                "(${android.view.KeyEvent.keyCodeToString(event.keyCode)}) " +
+                                "action=${event.action} source=0x${Integer.toHexString(event.source)}",
+                        )
+                        if (com.openautolink.app.input.KeyCaptureBus.handle(event)) return true
+                        return original.dispatchKeyEvent(event)
+                    }
+                }
+            }
+            onDispose {
+                if (window != null && original != null) window.callback = original
+            }
         }
 
         androidx.compose.material3.AlertDialog(
@@ -2068,6 +2141,59 @@ private fun AudioTab(viewModel: SettingsViewModel, uiState: SettingsUiState) {
                     )
                 }
             }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // --- Phone Call Routing ---
+        SectionHeader("Phone Calls")
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "Android Auto routes call audio through your phone's Bluetooth pairing, not through OpenAutoLink. " +
+                "With \"Call audio\" enabled on the phone for this car's BT pairing, calls play through the car " +
+                "speakers and the car's built-in phone app takes the screen during the call. With \"Call audio\" " +
+                "disabled, AA shows its in-projection call card and audio plays through the phone earpiece. " +
+                "This matches every factory head unit.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(0.7f).padding(bottom = 12.dp),
+        )
+
+        // BT MAC override — used in the SDR's bluetooth_service.car_address.
+        // Some phones won't enter wireless AA pairing without a valid car MAC.
+        // Does NOT affect call audio routing.
+        Column(
+            modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 8.dp),
+        ) {
+            Text(
+                text = "Bluetooth MAC override",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "Override the Bluetooth MAC reported to the phone in the AA Service Discovery " +
+                    "Response. Leave blank to auto-detect. Some phones won't enter wireless AA pairing " +
+                    "if auto-detect returns empty or 02:00:00:00:00:00. Read the head unit's BT MAC from " +
+                    "Settings → About → Bluetooth address and paste it here (format AA:BB:CC:DD:EE:FF). " +
+                    "Does NOT affect call audio routing. Requires Save & Reconnect.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            LocalEchoTextField(
+                value = uiState.btMacOverride,
+                onValueChange = { filtered -> viewModel.updateBtMacOverride(filtered) },
+                filter = { it.filter { c -> c.isLetterOrDigit() || c == ':' || c == '-' }.take(17).uppercase() },
+                placeholder = { Text("AA:BB:CC:DD:EE:FF") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag("btMacOverride"),
+            )
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -2205,53 +2331,114 @@ private fun formatInsetLabel(top: Int, bottom: Int, left: Int, right: Int): Stri
     return parts.joinToString(", ")
 }
 
+private val logLevelOptions = listOf("DEBUG", "INFO", "WARN", "ERROR")
+
 @Composable
-private fun AboutTab() {
+private fun DiagnosticsSettingsTab(
+    viewModel: SettingsViewModel,
+    uiState: SettingsUiState,
+    onNavigateToDiagnostics: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .testTag("aboutSettingsTab"),
+            .verticalScroll(rememberScrollState()),
     ) {
-        SectionHeader("About")
+        SectionHeader("Diagnostics")
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        SettingRow(
-            label = "Version",
-            value = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+        Text(
+            text = "View structured logs and telemetry in the diagnostics dashboard.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 12.dp),
         )
 
-        SettingRow(
-            label = "Git Hash",
-            value = BuildConfig.GIT_HASH,
-        )
+        Spacer(modifier = Modifier.height(16.dp))
 
-        Spacer(modifier = Modifier.height(18.dp))
+        // Link to full diagnostics screen
+        FilledTonalButton(
+            onClick = onNavigateToDiagnostics,
+            modifier = Modifier.testTag("openDiagnosticsButton"),
+        ) {
+            Icon(
+                imageVector = Icons.Default.BugReport,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Open Diagnostics Dashboard")
+        }
 
-        SectionHeader("Licenses")
+        Spacer(modifier = Modifier.height(24.dp))
 
-        licenseItems.forEach { item ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth(0.7f)
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                }
+        SectionHeader("File Logging")
+
+        Row(
+            modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Log to File", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    text = item.license,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
+                    "Write OAL diagnostic logs (transport, video, audio, sensors, " +
+                        "navigation) to a file in openautolink/logs/. Recommended " +
+                        "only for troubleshooting — turn off for best performance.",
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
-            HorizontalDivider(modifier = Modifier.fillMaxWidth(0.7f))
+            Switch(
+                checked = uiState.fileLoggingEnabled,
+                onCheckedChange = { viewModel.updateFileLoggingEnabled(it) },
+                modifier = Modifier.testTag("fileLoggingToggle"),
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Always Log to USB", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Automatically start file logging whenever the app is running, " +
+                        "but ONLY if a USB drive is mounted. No fallback to internal " +
+                        "storage. Logging starts as soon as a stick is attached and " +
+                        "stops when it's removed. Independent of the overlay record " +
+                        "button \u2014 it can still be used to stop a session early.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Switch(
+                checked = uiState.fileLoggingAutoStartUsb,
+                onCheckedChange = { viewModel.updateFileLoggingAutoStartUsb(it) },
+                modifier = Modifier.testTag("fileLoggingAutoUsbToggle"),
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Include Full Logcat", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Also capture the full Android logcat for our app's process " +
+                        "(native C++/JNI, AOSP framework, MediaCodec, AudioTrack, " +
+                        "Binder, Surface). Saves to logcat_<timestamp>.log. " +
+                        "AAOS does not allow apps to read system-wide logs without " +
+                        "root, so other apps and PowerManager events are not " +
+                        "included. Significantly larger files — only enable when " +
+                        "actively troubleshooting.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Switch(
+                checked = uiState.logcatCaptureEnabled,
+                onCheckedChange = { viewModel.updateLogcatCaptureEnabled(it) },
+                modifier = Modifier.testTag("logcatCaptureToggle"),
+            )
         }
     }
 }

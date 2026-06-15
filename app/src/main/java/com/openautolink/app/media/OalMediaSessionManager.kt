@@ -10,7 +10,6 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Base64
 import android.util.Log
-import android.view.KeyEvent
 
 /**
  * Manages a MediaSession that publishes now-playing metadata from the bridge
@@ -32,7 +31,6 @@ class OalMediaSessionManager(private val context: Context) {
 
     // Dedup: avoid redundant pushes to MediaSession
     private var lastPushedPlaying: Boolean? = null
-    private var lastPushedPositionMs: Long? = null
 
     // Album art cache: avoid redundant BitmapFactory decodes
     private var cachedArtHash = 0
@@ -54,56 +52,19 @@ class OalMediaSessionManager(private val context: Context) {
 
             mediaSession = MediaSessionCompat(context, "OpenAutoLinkMedia").apply {
                 setCallback(object : MediaSessionCompat.Callback() {
-                    override fun onPlay() {
-                        Log.i(TAG, "MediaSession command: play")
-                        com.openautolink.app.diagnostics.DiagnosticLog.i("input", "MediaSession command: play")
-                        mediaControlCallback?.onPlay()
-                    }
-
-                    override fun onPause() {
-                        Log.i(TAG, "MediaSession command: pause")
-                        com.openautolink.app.diagnostics.DiagnosticLog.i("input", "MediaSession command: pause")
-                        mediaControlCallback?.onPause()
-                    }
-
-                    override fun onSkipToNext() {
-                        Log.i(TAG, "MediaSession command: next")
-                        com.openautolink.app.diagnostics.DiagnosticLog.i("input", "MediaSession command: next")
-                        mediaControlCallback?.onSkipToNext()
-                    }
-
-                    override fun onSkipToPrevious() {
-                        Log.i(TAG, "MediaSession command: previous")
-                        com.openautolink.app.diagnostics.DiagnosticLog.i("input", "MediaSession command: previous")
-                        mediaControlCallback?.onSkipToPrevious()
-                    }
+                    override fun onPlay() { mediaControlCallback?.onPlay() }
+                    override fun onPause() { mediaControlCallback?.onPause() }
+                    override fun onSkipToNext() { mediaControlCallback?.onSkipToNext() }
+                    override fun onSkipToPrevious() { mediaControlCallback?.onSkipToPrevious() }
 
                     override fun onMediaButtonEvent(mediaButtonEvent: android.content.Intent): Boolean {
-                        val ke = mediaButtonEvent.getParcelableExtra<KeyEvent>(android.content.Intent.EXTRA_KEY_EVENT)
+                        val ke = mediaButtonEvent.getParcelableExtra<android.view.KeyEvent>(android.content.Intent.EXTRA_KEY_EVENT)
                         Log.i(TAG, "onMediaButtonEvent: keycode=${ke?.keyCode} (${ke?.let { android.view.KeyEvent.keyCodeToString(it.keyCode) }}) action=${ke?.action}")
                         com.openautolink.app.diagnostics.DiagnosticLog.i(
                             "input",
                             "MediaSession.onMediaButtonEvent: keycode=${ke?.keyCode} (${ke?.let { android.view.KeyEvent.keyCodeToString(it.keyCode) }}) action=${ke?.action}"
                         )
-                        if (ke?.action == KeyEvent.ACTION_DOWN) {
-                            when (ke.keyCode) {
-                                KeyEvent.KEYCODE_MEDIA_PLAY -> mediaControlCallback?.onPlay()
-                                KeyEvent.KEYCODE_MEDIA_PAUSE -> mediaControlCallback?.onPause()
-                                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                                    if (lastPushedPlaying == true) {
-                                        mediaControlCallback?.onPause()
-                                    } else {
-                                        mediaControlCallback?.onPlay()
-                                    }
-                                }
-                                KeyEvent.KEYCODE_MEDIA_NEXT -> mediaControlCallback?.onSkipToNext()
-                                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> mediaControlCallback?.onSkipToPrevious()
-                            }
-                        }
-                        // Always consume media-button events targeted at OAL. Falling through to
-                        // MediaSessionCompat's default handling can re-enter onPlay/onPause and
-                        // create duplicate toggles on some AAOS builds.
-                        return true
+                        return super.onMediaButtonEvent(mediaButtonEvent)
                     }
 
                     override fun onCommand(command: String, extras: android.os.Bundle?, cb: android.os.ResultReceiver?) {
@@ -139,38 +100,11 @@ class OalMediaSessionManager(private val context: Context) {
             cachedArtHash = 0
             cachedBitmap = null
             lastPushedPlaying = null
-            lastPushedPositionMs = null
             Log.i(TAG, "MediaSession released")
         }
     }
 
     fun getSessionToken(): MediaSessionCompat.Token? = mediaSession?.sessionToken
-
-    /**
-     * Clear stale now-playing state from AAOS widgets before a new phone/session
-     * starts sending media status again.
-     */
-    fun resetNowPlaying(status: String = "Not connected") {
-        synchronized(sessionLock) {
-            val session = mediaSession ?: return
-            cachedArtHash = 0
-            cachedBitmap = null
-            lastPushedPlaying = null
-            lastPushedPositionMs = null
-
-            session.setPlaybackState(buildPlaybackState(PlaybackStateCompat.STATE_STOPPED, 0L))
-            session.setMetadata(
-                MediaMetadataCompat.Builder()
-                    .putString(MediaMetadataCompat.METADATA_KEY_TITLE, "OpenAutoLink")
-                    .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, status)
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, "OpenAutoLink")
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, status)
-                    .build()
-            )
-            session.setPlaybackState(buildPlaybackState(PlaybackStateCompat.STATE_NONE, 0L))
-            Log.i(TAG, "MediaSession now-playing reset: $status")
-        }
-    }
 
     /**
      * Update now-playing metadata from bridge media_metadata control message.
@@ -184,17 +118,12 @@ class OalMediaSessionManager(private val context: Context) {
     ) {
         synchronized(sessionLock) {
             val session = mediaSession ?: return
-            val displayTitle = title ?: "Unknown"
-            val displayArtist = artist ?: "Unknown"
-            val displayAlbum = album ?: ""
 
             val builder = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, displayTitle)
-                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, displayArtist)
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, displayAlbum)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, displayTitle)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, displayArtist)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAlbum)
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title ?: "Unknown")
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist ?: "Unknown")
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, album ?: "")
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, "OpenAutoLink")
 
             if (durationMs != null && durationMs > 0) {
                 builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
@@ -233,21 +162,23 @@ class OalMediaSessionManager(private val context: Context) {
                     builder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, bitmap)
                 }
             } else {
-                cachedArtHash = 0
-                cachedBitmap = null
+                // Playback-only update (no new art) — preserve cached bitmap
+                cachedBitmap?.let { bitmap ->
+                    builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
+                    builder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, bitmap)
+                }
             }
 
             session.setMetadata(builder.build())
 
-            // Some AAOS dashboard widgets do not repaint metadata changes until the
-            // playback state also changes. Re-push the latest known playback snapshot.
-            // This ensures the widget refreshes even when the actual playback state is stale.
-            val state = when (lastPushedPlaying) {
-                true -> PlaybackStateCompat.STATE_PLAYING
-                false -> PlaybackStateCompat.STATE_PAUSED
-                null -> PlaybackStateCompat.STATE_NONE
-            }
-            session.setPlaybackState(buildPlaybackState(state, lastPushedPositionMs ?: 0L))
+            // Nudge PlaybackState so consumers that only react to onPlaybackStateChanged
+            // (notably the AAOS cluster media tile) re-read the new metadata. We don't
+            // know the current position on a metadata-only update, so reuse 0 with the
+            // last known playing state. setState is idempotent if nothing actually changed
+            // for consumers that DO listen to onMetadataChanged.
+            val playing = lastPushedPlaying ?: false
+            val st = if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+            session.setPlaybackState(buildPlaybackState(st, 0L))
         }
     }
 
@@ -257,9 +188,11 @@ class OalMediaSessionManager(private val context: Context) {
     fun updatePlaybackState(playing: Boolean, positionMs: Long) {
         synchronized(sessionLock) {
             val session = mediaSession ?: return
-            if (playing == lastPushedPlaying && positionMs == lastPushedPositionMs) return
+            // Don't dedup on `playing` alone: position resets to 0 on track change while
+            // playing stays true, and the AAOS cluster media tile only re-reads metadata
+            // when PlaybackState changes. Skipping the push leaves the cluster stuck on
+            // the previous track's title/art until nav takes over and is cancelled.
             lastPushedPlaying = playing
-            lastPushedPositionMs = positionMs
 
             val state = if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
             session.setPlaybackState(buildPlaybackState(state, positionMs))

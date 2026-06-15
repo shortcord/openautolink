@@ -1,0 +1,45 @@
+
+# 2026-06-10 18:13:28.432119
++n
+
+# 2026-06-10 18:14:29.346374
++Explain how wifi works in this project.
+
+# 2026-06-10 18:15:26.058705
++Can you review the wifi connection path and identify issues if any?
+
+# 2026-06-10 18:16:27.240718
++Problems surrounding keeping connected. It seems to flaky, once connected it will commonly disconnect in a loop.
+
+# 2026-06-10 18:17:08.268789
++y
+
+# 2026-06-12 18:01:55.990194
++n
+
+# 2026-06-12 18:02:03.477999
++y
+
+# 2026-06-12 18:03:03.816758
++n
+
+# 2026-06-12 18:03:16.234284
++/read-only
+
+# 2026-06-12 18:03:17.713577
++I want to recreate this project but in dotnet core. How feasible is that?
+
+# 2026-06-12 18:07:12.377516
++n
+
+# 2026-06-12 18:07:42.842283
++y
+
+# 2026-06-12 18:07:50.765195
++I want to recreate this project but in dotnet core. How feasible is that?
+
+# 2026-06-12 18:09:17.281294
++n
+
+# 2026-06-12 18:09:27.704756
++I want to recreate this project but in dotnet core. How feasible is that?

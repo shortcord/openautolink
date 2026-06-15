@@ -87,9 +87,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
 
-    // Google Nearby Connections
-    implementation(libs.nearby.connections)
-
     // Testing
     testImplementation(libs.junit)
 }

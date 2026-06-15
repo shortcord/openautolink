@@ -27,16 +27,18 @@ import kotlinx.coroutines.runBlocking
  *
  * Supported keys:
  *   aa_dpi              --ei value <int>       160, 200, 321, 400
+ *   aa_auto_dpi         --ez bvalue <bool>     true/false
  *   aa_pixel_aspect     --ei value <int>       -1=auto, 0=off, >0=manual e4
  *   aa_resolution       --es svalue <str>      480p, 720p, 1080p, 1440p, 4k
  *   aa_width_margin     --ei value <int>       0+
  *   aa_height_margin    --ei value <int>       0+
+ *   aa_auto_margins     --ez bvalue <bool>     true/false
  *   aa_target_layout_dp --ei value <int>       0=off, 960/1280/1920
  *   video_scaling_mode  --es svalue <str>      crop, letterbox
  *   video_auto_negotiate --ez bvalue <bool>    true/false
  *   video_codec         --es svalue <str>      h264, h265, vp9
  *   video_fps           --ei value <int>       30, 60
- *   direct_transport    --es svalue <str>      hotspot, nearby
+ *   direct_transport    --es svalue <str>      hotspot, usb
  *   drive_side          --es svalue <str>      left, right
  *   manual_ip_enabled   --ez bvalue <bool>     true/false
  *   manual_ip_address   --es svalue <str>      e.g. 10.0.2.2
@@ -60,6 +62,12 @@ class SettingsReceiver : BroadcastReceiver() {
                     val v = intent.getIntExtra("value", -1)
                     if (v > 0) { prefs.setAaDpi(v); log("aa_dpi=$v") }
                 }
+                "aa_auto_dpi" -> {
+                    if (intent.hasExtra("bvalue")) {
+                        val v = intent.getBooleanExtra("bvalue", true)
+                        prefs.setAaAutoDpi(v); log("aa_auto_dpi=$v")
+                    }
+                }
                 "aa_pixel_aspect" -> {
                     val v = intent.getIntExtra("value", Int.MIN_VALUE)
                     if (v != Int.MIN_VALUE) { prefs.setAaPixelAspect(v); log("aa_pixel_aspect=$v") }
@@ -75,6 +83,12 @@ class SettingsReceiver : BroadcastReceiver() {
                 "aa_height_margin" -> {
                     val v = intent.getIntExtra("value", -1)
                     if (v >= 0) { prefs.setAaHeightMargin(v); log("aa_height_margin=$v") }
+                }
+                "aa_auto_margins" -> {
+                    if (intent.hasExtra("bvalue")) {
+                        val v = intent.getBooleanExtra("bvalue", true)
+                        prefs.setAaAutoMargins(v); log("aa_auto_margins=$v")
+                    }
                 }
                 "aa_target_layout_dp" -> {
                     val v = intent.getIntExtra("value", -1)
@@ -120,6 +134,10 @@ class SettingsReceiver : BroadcastReceiver() {
                     val v = intent.getStringExtra("svalue") ?: return@runBlocking
                     prefs.setMicSource(v); log("mic_source=$v")
                 }
+                "bt_mac_override" -> {
+                    val v = intent.getStringExtra("svalue") ?: ""
+                    prefs.setBtMacOverride(v); log("bt_mac_override=$v")
+                }
                 else -> log("Unknown key: $key")
             }
         }
@@ -158,10 +176,14 @@ class SettingsReceiver : BroadcastReceiver() {
                     videoAutoNegotiate = prefs.videoAutoNegotiate.first(),
                     aaResolution = prefs.aaResolution.first(),
                     aaDpi = prefs.aaDpi.first(),
+                    aaAutoDpi = prefs.aaAutoDpi.first(),
                     aaWidthMargin = prefs.aaWidthMargin.first(),
                     aaHeightMargin = prefs.aaHeightMargin.first(),
                     aaPixelAspect = prefs.aaPixelAspect.first(),
                     aaTargetLayoutWidthDp = prefs.aaTargetLayoutWidthDp.first(),
+                    aaViewingDistanceMm = prefs.aaViewingDistanceMm.first(),
+                    aaDecoderAdditionalDepth = prefs.aaDecoderAdditionalDepth.first(),
+                    aaAutoMargins = prefs.aaAutoMargins.first(),
                     videoFps = prefs.videoFps.first(),
                     driveSide = prefs.driveSide.first(),
                     manualIpAddress = if (prefs.manualIpEnabled.first())
