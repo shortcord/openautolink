@@ -21,6 +21,7 @@ import androidx.lifecycle.lifecycleScope
 import com.openautolink.app.data.AppPreferences
 import com.openautolink.app.ui.navigation.AppNavHost
 import com.openautolink.app.ui.projection.ProjectionViewModel
+import com.openautolink.app.input.IgnitionMonitor
 import com.openautolink.app.ui.theme.OpenAutoLinkTheme
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -60,6 +61,10 @@ class MainActivity : ComponentActivity() {
         // Request runtime permissions on first launch
         requestMissingPermissions()
 
+        // Start ignition monitor — watches IGNITION_STATE and GEAR_SELECTION
+        // to prevent auto-reconnect during shutdown ("ghost wake" period).
+        IgnitionMonitor.start(this)
+
         // Apply saved display mode (sync read for initial state)
         val prefs = AppPreferences.getInstance(this)
         val displayMode = runBlocking { prefs.displayMode.first() }
@@ -77,6 +82,25 @@ class MainActivity : ComponentActivity() {
 
         // Keep screen on during projection
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Observe ignition state to control auto-connect behavior.
+        // When ignition goes OFF or LOCK, we want to suppress auto-reconnect
+        // until the car is actually back on (avoiding the "ghost wake" period).
+        lifecycleScope.launch {
+            IgnitionMonitor.ignitionState.collectLatest { state ->
+                when (state) {
+                    2, 1 -> { // OFF or LOCK
+                        com.openautolink.app.session.SessionManager.instanceOrNull()
+                            ?.onIgnitionOffOrLocked()
+                    }
+                    4, 5 -> { // ON or START
+                        com.openautolink.app.session.SessionManager.instanceOrNull()
+                            ?.onIgnitionOn(state)
+                    }
+                    else -> {}
+                }
+            }
+        }
 
         // Hardcode landscape — AA is always landscape on car head units.
         // The manifest sets sensorLandscape, this is belt-and-suspenders.

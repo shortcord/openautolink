@@ -201,6 +201,11 @@ class SettingsReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION = "com.openautolink.app.SET_PREF"
         const val ACTION_RECONNECT = "com.openautolink.app.RECONNECT"
-        private val receiverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        private lateinit var receiverScope: CoroutineScope
+
+        init {
+            receiverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        }
     }
 }

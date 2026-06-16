@@ -106,7 +106,8 @@ object GmHistoryProviderRepository {
         val uri = Uri.parse("content://$AUTHORITY/${series.path}")
         return try {
             context.contentResolver.query(uri, null, SELECTION_DATA, null, null)?.use { c ->
-                if (c.count == 0) return@use null
+                // Guard against null cursor or empty result set
+                if (c == null || c.count == 0) return@use null
                 c.moveToLast()
                 val idx = c.getColumnIndex("value").let { if (it >= 0) it else 0 }
                 c.getFloat(idx)
