@@ -904,6 +904,16 @@ class ProjectionViewModel(application: Application) : AndroidViewModel(applicati
                 }
             }
         }
+        // When SessionManager forces a reconnect (e.g. wake-from-sleep with
+        // long gap), reset hasConnected so the next auto-reconnect attempt
+        // actually starts a fresh session instead of calling
+        // ensureClusterAlive() on a stale one.
+        viewModelScope.launch {
+            sessionManager.forceReconnectEvents.collect { reason ->
+                OalLog.i(TAG, "Force-reconnect event: $reason — resetting hasConnected")
+                hasConnected = false
+            }
+        }
         // Ignition ON edge: when the user starts the car (IGNITION_STATE
         // transitions to ON=4 or START=5), kick an auto-reconnect even if
         // no other signal fired. This is the authoritative "car is alive

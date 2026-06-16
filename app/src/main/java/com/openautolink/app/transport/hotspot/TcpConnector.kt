@@ -1,6 +1,8 @@
 package com.openautolink.app.transport.hotspot
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -42,7 +44,19 @@ class TcpConnector(
         const val COMPANION_PORT = 5277
         const val NSD_SERVICE_TYPE = "_openautolink._tcp"
         private const val CONNECT_TIMEOUT_MS = 5000
-        private const val RETRY_DELAY_MS = 3000L
+        /**
+         * Retry configuration for connection attempts.
+         * Exponential backoff: 1s, 3s, 8s (max 15s).
+         * Total worst-case retry time: ~22s for 3 retries.
+         */
+        private const val RETRY_BASE_DELAY_MS = 1000L
+        private const val RETRY_MAX_DELAY_MS = 15000L
+        private const val MAX_RETRIES = 3
+        private const val RETRY_DELAY_MS = 1000L
+        /**
+         * Throttle for network change detection spam.
+         */
+        private const val NETWORK_CHANGE_WARN_GAP_MS = 60_000L
     }
 
     /** When set, connects only to this IP (skips mDNS and gateway discovery). */
@@ -61,10 +75,80 @@ class TcpConnector(
     @Volatile
     private var nsdFoundPort: Int = 0
 
+    /**
+     * Last wall-clock ms at which the "no IPv4 interface" warning was emitted.
+     */
+    @Volatile private var lastNoIfaceWarnMs: Long = 0L
+
+    /**
+     * Last gateway IP seen. Used to detect IP address changes.
+     */
+    @Volatile private var lastGatewayIp: String? = null
+
+    /**
+     * Network callback for detecting interface/IP changes.
+     */
+    private val networkChangeCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLinkPropertiesChanged(network: android.net.Network, linkProperties: LinkProperties) {
+            val newGateway = getGatewayIp()
+            if (newGateway != null) {
+                val now = System.currentTimeMillis()
+                if (now - lastNoIfaceWarnMs > NETWORK_CHANGE_WARN_GAP_MS) {
+                    if (newGateway != lastGatewayIp) {
+                        lastGatewayIp = newGateway
+                        OalLog.i(TAG, "Gateway IP changed: $newGateway")
+                        // Trigger re-discovery by clearing cached host/port
+                        nsdFoundHost = null
+                        nsdFoundPort = 0
+                    } else {
+                        // Throttle spam: only log once per NETWORK_CHANGE_WARN_GAP_MS
+                        if (now - lastNoIfaceWarnMs > NETWORK_CHANGE_WARN_GAP_MS) {
+                            OalLog.d(TAG, "Gateway IP stable: $newGateway")
+                            lastNoIfaceWarnMs = now
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun getGatewayIp(): String? {
+        try {
+            val wifiManager = context.applicationContext
+                .getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
+            @Suppress("DEPRECATION")
+            val dhcp = wifiManager.dhcpInfo ?: return null
+            val gateway = dhcp.gateway
+            if (gateway == 0) return null
+            return "${gateway and 0xFF}.${(gateway shr 8) and 0xFF}.${(gateway shr 16) and 0xFF}.${(gateway shr 24) and 0xFF}"
+        } catch (e: Exception) {
+            OalLog.e(TAG, "Gateway detection failed: ${e.message}")
+            return null
+        }
+    }
+
     fun start() {
         if (isRunning) return
         isRunning = true
+        // Reset cached discovery state from any previous connection cycle.
+        nsdFoundHost = null
+        nsdFoundPort = 0
+        lastGatewayIp = null
+        lastNoIfaceWarnMs = 0L
         OalLog.i(TAG, "Starting TCP connector (port $COMPANION_PORT)")
+
+        // Register network change callback for IP address change detection
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return
+            val networkRequest = android.net.NetworkRequest.Builder()
+                .addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                .build()
+            cm.registerNetworkCallback(networkRequest, networkChangeCallback)
+            OalLog.d(TAG, "Registered network change callback")
+        } catch (e: Exception) {
+            OalLog.w(TAG, "Failed to register network change callback: ${e.message}")
+        }
 
         // Manual IP may be either "host" or "host:port". If a port is given it
         // overrides COMPANION_PORT — used by the debug discovery-injection
@@ -94,7 +178,7 @@ class TcpConnector(
             while (isActive && isRunning) {
                 // Manual IP — skip all discovery, connect directly
                 if (manualHost != null) {
-                    if (tryConnect(manualHost, manualPort, "manual")) return@launch
+                    if (tryConnectWithRetry(manualHost, manualPort, "manual")) return@launch
                     onConnectFailure?.invoke()
                     delay(RETRY_DELAY_MS)
                     continue
@@ -105,26 +189,65 @@ class TcpConnector(
                 var anyTried = false
                 if (nsdHost != null && nsdFoundPort > 0) {
                     anyTried = true
-                    if (tryConnect(nsdHost, nsdFoundPort, "mDNS")) return@launch
+                    if (tryConnectWithRetry(nsdHost, nsdFoundPort, "mDNS")) return@launch
                 }
 
                 // Fall back to gateway IP (works on phone hotspot)
                 val gatewayIp = getGatewayIp()
                 if (gatewayIp != null) {
                     anyTried = true
-                    if (tryConnect(gatewayIp, COMPANION_PORT, "gateway")) return@launch
+                    if (tryConnectWithRetry(gatewayIp, COMPANION_PORT, "gateway")) return@launch
                 } else {
                     OalLog.d(TAG, "No WiFi gateway — waiting for mDNS or network...")
                 }
 
-                if (anyTried) onConnectFailure?.invoke()
+                // Always advance the failure counter so picker escalation can
+                // trigger even when discovery has no targets (WiFi briefly down,
+                // mDNS not yet resolved). Without this, consecutiveReconnectFailures
+                // never increments and the user is stuck with no way to intervene.
+                onConnectFailure?.invoke()
                 delay(RETRY_DELAY_MS)
             }
         }
     }
 
-    private fun tryConnect(host: String, port: Int, source: String): Boolean {
-        OalLog.i(TAG, "Connecting to $host:$port ($source)")
+    /**
+     * Connect with exponential backoff retry.
+     *
+     * Retries with increasing delays: 1s, 3s, 8s (max 15s).
+     * Total worst-case retry time: ~22s for 3 retries.
+     *
+     * @param host target host
+     * @param port target port
+     * @param source connection source (mDNS, gateway, manual)
+     * @param attempt current attempt number (1-based)
+     * @return true if connection succeeded
+     */
+    private suspend fun tryConnectWithRetry(
+        host: String,
+        port: Int,
+        source: String,
+        attempt: Int = 1,
+    ): Boolean {
+        val maxRetries = MAX_RETRIES
+        val baseDelayMs = RETRY_BASE_DELAY_MS
+        val maxDelayMs = RETRY_MAX_DELAY_MS
+
+        // First attempt
+        if (attempt == 1) {
+            OalLog.i(TAG, "Connecting to $host:$port ($source)")
+        } else {
+            // Exponential backoff: 1s, 3s, 8s (max 15s)
+            // Formula: base * 2^(attempt-2) + base, capped at max
+            val delayMs = minOf((baseDelayMs * (1L shl (attempt - 2)) + baseDelayMs), maxDelayMs)
+            OalLog.w(
+                TAG,
+                "Connection to $host:$port ($source) failed (attempt $attempt/$maxRetries) — " +
+                    "retrying in ${formatDelay(delayMs)}",
+            )
+            delay(delayMs)
+        }
+
         return try {
             val socket = Socket()
             socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
@@ -152,6 +275,14 @@ class TcpConnector(
         } catch (e: Exception) {
             OalLog.d(TAG, "Connection to $host:$port ($source) failed: ${e.message}")
             false
+        }
+    }
+
+    /** Format delay for logging. */
+    private fun formatDelay(ms: Long): String {
+        return when {
+            ms < 1000 -> "${ms}ms"
+            else -> "${ms / 1000}s"
         }
     }
 
@@ -229,21 +360,18 @@ class TcpConnector(
         connectJob?.cancel()
         connectJob = null
         stopNsdDiscovery()
-    }
-
-    private fun getGatewayIp(): String? {
+        // Unregister network change callback
         try {
-            val wifiManager = context.applicationContext
-                .getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
-            @Suppress("DEPRECATION")
-            val dhcp = wifiManager.dhcpInfo ?: return null
-            val gateway = dhcp.gateway
-            if (gateway == 0) return null
-            return "${gateway and 0xFF}.${(gateway shr 8) and 0xFF}.${(gateway shr 16) and 0xFF}.${(gateway shr 24) and 0xFF}"
-        } catch (e: Exception) {
-            OalLog.e(TAG, "Gateway detection failed: ${e.message}")
-            return null
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return
+            cm.unregisterNetworkCallback(networkChangeCallback)
+        } catch (_: Exception) {
+            // May already be unregistered — swallow to avoid leak on next start()
         }
+        // Reset cached gateway and warning timestamp so a fresh start() doesn't
+        // carry stale state from a previous connection cycle.
+        lastGatewayIp = null
+        lastNoIfaceWarnMs = 0L
     }
 
     /**

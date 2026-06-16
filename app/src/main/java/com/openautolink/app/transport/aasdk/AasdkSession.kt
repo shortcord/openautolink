@@ -97,6 +97,14 @@ class AasdkSession(
     @Volatile
     private var explicitStop = false
 
+    /**
+     * Generation counter incremented by each [startTcp] call. [onSessionStopped]
+     * captures the generation at the time it fires and only schedules a reconnect
+     * if the generation matches the current one. This prevents stale callbacks
+     * from a torn-down session from racing with a freshly-started one.
+     */
+    private var sessionGeneration = 0
+
     /** Consecutive reconnect failures — drives exponential backoff. Also
      *  exposed as a StateFlow so the UI controller can escalate (e.g., open
      *  the phone picker) after a threshold of repeated failures. */
@@ -124,7 +132,8 @@ class AasdkSession(
     }
 
     private fun startTcp() {
-        OalLog.i(TAG, "Starting aasdk session (TCP/hotspot transport)")
+        sessionGeneration++
+        OalLog.i(TAG, "Starting aasdk session (TCP/hotspot transport), generation=$sessionGeneration")
         _tcpConnector?.stop()
         _tcpConnector = TcpConnector(
             context,
@@ -149,6 +158,13 @@ class AasdkSession(
 
     private fun handleConnection(socket: Socket) {
         _connectionState.value = ConnectionState.CONNECTING
+        // TCP connection succeeded — reset the failure counter so that
+        // onConnectFailure and onSessionStopped failures count from this
+        // point forward. Without this, a TCP connect failure followed by
+        // a successful TCP connect but AA handshake failure would double-count
+        // as 2 failures, reaching picker escalation in just 1 reconnect cycle.
+        consecutiveReconnectFailures = 0
+        _reconnectAttempt.value = 0
 
         val input = socket.getInputStream()
         val output = socket.getOutputStream()
@@ -187,10 +203,14 @@ class AasdkSession(
      */
     fun forceReconnect(reason: String) {
         OalLog.w(TAG, "Force reconnect: $reason")
-        // Treat the upcoming nativeStopSession() as an explicit stop so the
-        // onSessionStopped handler doesn't schedule its own auto-reconnect 3s
-        // later — we're doing the restart ourselves immediately. Without this
-        // both reconnects race and one fails with "Native session start failed".
+        // Increment the generation so any stale onSessionStopped callback
+        // from the old session sees a mismatch and skips auto-reconnect.
+        // This replaces the previous explicitStop=true/false toggle which
+        // had a race window between clearing explicitStop and the callback
+        // firing — the generation counter is race-free because startTcp()
+        // always increments it, and onSessionStopped only reconnects if
+        // the generation matches what it captured at callback time.
+        sessionGeneration++
         explicitStop = true
         _tcpConnector?.stop()
         _tcpConnector = null
@@ -198,8 +218,9 @@ class AasdkSession(
         transportPipe?.close()
         transportPipe = null
         _connectionState.value = ConnectionState.DISCONNECTED
-        // Now clear the explicitStop flag so the freshly-started session can
-        // auto-reconnect normally if its connection later dies.
+        // Clear explicitStop so the freshly-started session can auto-reconnect
+        // normally if its connection later dies. The generation counter prevents
+        // stale callbacks from the old session from racing with this restart.
         explicitStop = false
         // Restart transport.
         startTcp()
@@ -287,6 +308,11 @@ class AasdkSession(
             explicitStop = true
         }
 
+        // Capture the generation at callback time. If startTcp() has been
+        // called since (e.g. by forceReconnect), this callback is stale and
+        // its reconnect would race with the new session.
+        val stoppedGeneration = sessionGeneration
+
         scope.launch {
             _connectionState.value = ConnectionState.DISCONNECTED
             _controlMessages.emit(ControlMessage.PhoneDisconnected(reason = reason))
@@ -298,19 +324,27 @@ class AasdkSession(
                 consecutiveReconnectFailures++
                 _reconnectAttempt.value = consecutiveReconnectFailures
 
-                // Exponential backoff: 3s base, longer if protocol error (phone
-                // needs time to tear down old SSL session). Cap at 30s.
-                val baseDelayMs = if (lastFailureWasProtocolError) 5000L else 3000L
-                val backoffMs = (baseDelayMs * (1L shl (consecutiveReconnectFailures - 1).coerceAtMost(3)))
-                    .coerceAtMost(30_000L)
-                OalLog.i(TAG, "Session died unexpectedly — retry #$consecutiveReconnectFailures in ${backoffMs}ms" +
-                    if (lastFailureWasProtocolError) " (protocol error, extended backoff)" else "")
+                // Use the reconnect policy for backoff timing. First 2 attempts
+                // in hotspot mode use fast retry (~250ms + jitter); after that
+                // exponential backoff (3s base, 5s for protocol errors, 30s cap).
+                val decision = AasdkReconnectPolicy.decision(
+                    transportMode = transportMode,
+                    attempt = consecutiveReconnectFailures,
+                    protocolError = lastFailureWasProtocolError,
+                    jitterSeed = System.currentTimeMillis(),
+                )
+                OalLog.i(TAG, "Session died unexpectedly — retry #$consecutiveReconnectFailures in ${decision.delayMs}ms (${decision.reason})")
                 lastFailureWasProtocolError = false
 
-                kotlinx.coroutines.delay(backoffMs)
-                if (!explicitStop) {
+                kotlinx.coroutines.delay(decision.delayMs)
+                // Only reconnect if no new session has been started since this
+                // callback fired. A generation mismatch means forceReconnect()
+                // or a new start() has already taken over.
+                if (sessionGeneration == stoppedGeneration && !explicitStop) {
                     OalLog.i(TAG, "Restarting transport connector")
                     startTcp()
+                } else {
+                    OalLog.i(TAG, "Skipping reconnect — generation changed ($stoppedGeneration→$sessionGeneration) or explicit stop")
                 }
             }
         }

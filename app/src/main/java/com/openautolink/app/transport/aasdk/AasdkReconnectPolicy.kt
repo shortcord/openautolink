@@ -1,12 +1,12 @@
 package com.openautolink.app.transport.aasdk
 
-internal data class AasdkReconnectDecision(
+data class AasdkReconnectDecision(
     val delayMs: Long,
     val extendedBackoff: Boolean,
     val reason: String,
 )
 
-internal object AasdkReconnectPolicy {
+object AasdkReconnectPolicy {
     private const val FAST_MIN_MS = 250L
     private const val FAST_SPREAD_MS = 501L
     private const val NORMAL_BASE_MS = 3_000L

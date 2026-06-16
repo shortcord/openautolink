@@ -381,6 +381,13 @@ class SessionManager(
     val wakeEvents: SharedFlow<WakeEvent> = _wakeEvents.asSharedFlow()
 
     /**
+     * Fires whenever [forceReconnect] is called so observers (e.g. ProjectionViewModel)
+     * can reset their in-flight state. The event carries the reason string.
+     */
+    private val _forceReconnectEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val forceReconnectEvents: SharedFlow<String> = _forceReconnectEvents.asSharedFlow()
+
+    /**
      * Emitted when the user taps the Exit button in the AA app launcher on
      * the phone (ByeByeReason.USER_SELECTION). MainActivity observes this and
      * backgrounds the entire app — user re-enters by tapping our icon in the
@@ -1413,6 +1420,7 @@ class SessionManager(
             scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 aasdkSession?.forceReconnect("wake gap $gapStr")
             }
+            _forceReconnectEvents.tryEmit("wake gap $gapStr")
         }
     }
 

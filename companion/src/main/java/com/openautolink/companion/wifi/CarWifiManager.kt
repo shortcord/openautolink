@@ -130,7 +130,9 @@ class CarWifiManager(private val context: Context) {
         attempt++
         _state.value = State.Scanning(attempt, MAX_ATTEMPTS)
 
-        val entry = entries.first()
+        // Round-robin through configured entries so that if the first SSID
+        // consistently fails, alternate SSIDs get a chance on subsequent attempts.
+        val entry = entries[(attempt - 1) % entries.size]
         CompanionLog.i(TAG, "Attempt $attempt/$MAX_ATTEMPTS: requesting \"${entry.ssid}\"")
 
         releaseCallback()
@@ -166,6 +168,11 @@ class CarWifiManager(private val context: Context) {
             override fun onLost(network: Network) {
                 if (!running) return
                 CompanionLog.w(TAG, "Car WiFi \"${entry.ssid}\" lost")
+                // Reset attempt counter — onLost is a new connection scenario,
+                // not a continuation of the initial scanning. Without this,
+                // a mid-scan WiFi drop would resume from the current attempt
+                // count instead of starting fresh.
+                attempt = 0
                 _state.value = State.Scanning(attempt, MAX_ATTEMPTS)
                 scheduleRetry(LOST_RETRY_DELAY_MS)
             }

@@ -67,6 +67,14 @@ class TcpAdvertiser(
         private const val BIND_RETRY_MAX = 10
         /** Delay between bind retries (ms). 10 retries × 300ms = 3s max wait. */
         private const val BIND_RETRY_DELAY_MS = 300L
+        /** Read timeout on the car socket. If no data arrives in this window,
+         *  the proxy's pump() will throw SocketTimeoutException and the bridge
+         *  closes, freeing the accept slot for a fresh connection. Covers the
+         *  case where the car opens a socket but never sends data. */
+        private const val CAR_IDLE_TIMEOUT_MS = 120_000L
+        /** Minimum gap between accepting car connections. Prevents rapid
+         *  connect/disconnect cycles from exhausting resources. */
+        private const val MIN_INTER_CONNECTION_MS = 2_000L
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -78,6 +86,7 @@ class TcpAdvertiser(
     private var nsdManager: NsdManager? = null
     private var nsdRegistrationListener: NsdManager.RegistrationListener? = null
     private var aaConnectWatchdog: Job? = null
+    @Volatile private var lastConnectionTimeMs: Long = 0
 
     @Volatile
     private var isRunning = false
@@ -123,6 +132,19 @@ class TcpAdvertiser(
 
                 while (isRunning) {
                     val carSocket = server.accept()
+                    // Rate-limit: if the car is rapidly connecting and
+                    // disconnecting, enforce a minimum gap between
+                    // handleCarConnection calls to prevent resource exhaustion.
+                    val now = System.currentTimeMillis()
+                    val gap = now - lastConnectionTimeMs
+                    if (gap < MIN_INTER_CONNECTION_MS && lastConnectionTimeMs > 0L) {
+                        val wait = MIN_INTER_CONNECTION_MS - gap
+                        CompanionLog.w(TAG, "Car connection rate-limited — waiting ${wait}ms")
+                        runCatching { carSocket.close() }
+                        kotlinx.coroutines.delay(wait)
+                        continue
+                    }
+                    lastConnectionTimeMs = now
                     val remoteIp = carSocket.inetAddress?.hostAddress ?: "unknown"
                     val localIp = carSocket.localAddress?.hostAddress ?: "unknown"
                     CompanionLog.i(
@@ -334,6 +356,16 @@ class TcpAdvertiser(
     }
 
     private fun handleCarConnection(carSocket: Socket) {
+        // Set a read timeout so zombie connections (car connected but sent no
+        // data) don't hold the accept loop slot indefinitely. The AA watchdog
+        // covers the AA-connection phase, but if the car TCP-opens and then
+        // goes silent, the proxy's pump() would block forever without this.
+        try {
+            carSocket.soTimeout = CAR_IDLE_TIMEOUT_MS.toInt()
+        } catch (e: Exception) {
+            CompanionLog.w(TAG, "Failed to set car socket timeout: ${e.message}")
+        }
+
         val proxy = activeProxy
         // If a proxy is already listening and AA hasn't connected yet, reuse it:
         // swap in the new car socket so the next AA connection bridges to the
