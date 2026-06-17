@@ -52,7 +52,7 @@ class TcpConnector(
         private const val RETRY_BASE_DELAY_MS = 1000L
         private const val RETRY_MAX_DELAY_MS = 15000L
         private const val MAX_RETRIES = 3
-        private const val RETRY_DELAY_MS = 1000L
+        private const val DISCOVERY_RETRY_MS = 1000L
         /**
          * Throttle for network change detection spam.
          */
@@ -101,12 +101,9 @@ class TcpConnector(
                         nsdFoundHost = null
                         nsdFoundPort = 0
                     } else {
-                        // Throttle spam: only log once per NETWORK_CHANGE_WARN_GAP_MS
-                        if (now - lastNoIfaceWarnMs > NETWORK_CHANGE_WARN_GAP_MS) {
-                            OalLog.d(TAG, "Gateway IP stable: $newGateway")
-                            lastNoIfaceWarnMs = now
-                        }
+                        OalLog.d(TAG, "Gateway IP stable: $newGateway")
                     }
+                    lastNoIfaceWarnMs = now
                 }
             }
         }
@@ -129,18 +126,16 @@ class TcpConnector(
 
     fun start() {
         if (isRunning) return
-        isRunning = true
         // Reset cached discovery state from any previous connection cycle.
         nsdFoundHost = null
         nsdFoundPort = 0
         lastGatewayIp = null
         lastNoIfaceWarnMs = 0L
-        OalLog.i(TAG, "Starting TCP connector (port $COMPANION_PORT)")
 
         // Register network change callback for IP address change detection
         try {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                ?: return
+                ?: return  // can't start without connectivity service; isRunning not yet set
             val networkRequest = android.net.NetworkRequest.Builder()
                 .addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI)
                 .build()
@@ -149,6 +144,11 @@ class TcpConnector(
         } catch (e: Exception) {
             OalLog.w(TAG, "Failed to register network change callback: ${e.message}")
         }
+
+        // Mark running after setup succeeds — early returns above don't leave
+        // the connector in a stuck isRunning=true state.
+        isRunning = true
+        OalLog.i(TAG, "Starting TCP connector (port $COMPANION_PORT)")
 
         // Manual IP may be either "host" or "host:port". If a port is given it
         // overrides COMPANION_PORT — used by the debug discovery-injection
@@ -180,7 +180,7 @@ class TcpConnector(
                 if (manualHost != null) {
                     if (tryConnectWithRetry(manualHost, manualPort, "manual")) return@launch
                     onConnectFailure?.invoke()
-                    delay(RETRY_DELAY_MS)
+                    delay(DISCOVERY_RETRY_MS)
                     continue
                 }
 
@@ -201,12 +201,14 @@ class TcpConnector(
                     OalLog.d(TAG, "No WiFi gateway — waiting for mDNS or network...")
                 }
 
-                // Always advance the failure counter so picker escalation can
-                // trigger even when discovery has no targets (WiFi briefly down,
-                // mDNS not yet resolved). Without this, consecutiveReconnectFailures
-                // never increments and the user is stuck with no way to intervene.
-                onConnectFailure?.invoke()
-                delay(RETRY_DELAY_MS)
+                // Only advance the failure counter when we actually had a target
+                // to try. During WiFi blackouts (no gateway, no mDNS), the
+                // counter stays steady so the user doesn't see spurious picker
+                // escalation.
+                if (anyTried) {
+                    onConnectFailure?.invoke()
+                }
+                delay(DISCOVERY_RETRY_MS)
             }
         }
     }
@@ -214,68 +216,63 @@ class TcpConnector(
     /**
      * Connect with exponential backoff retry.
      *
-     * Retries with increasing delays: 1s, 3s, 8s (max 15s).
+     * Retries up to [MAX_RETRIES] times with increasing delays: 1s, 3s, 8s (capped at 15s).
      * Total worst-case retry time: ~22s for 3 retries.
      *
      * @param host target host
      * @param port target port
      * @param source connection source (mDNS, gateway, manual)
-     * @param attempt current attempt number (1-based)
      * @return true if connection succeeded
      */
     private suspend fun tryConnectWithRetry(
         host: String,
         port: Int,
         source: String,
-        attempt: Int = 1,
     ): Boolean {
-        val maxRetries = MAX_RETRIES
-        val baseDelayMs = RETRY_BASE_DELAY_MS
-        val maxDelayMs = RETRY_MAX_DELAY_MS
-
-        // First attempt
-        if (attempt == 1) {
-            OalLog.i(TAG, "Connecting to $host:$port ($source)")
-        } else {
-            // Exponential backoff: 1s, 3s, 8s (max 15s)
-            // Formula: base * 2^(attempt-2) + base, capped at max
-            val delayMs = minOf((baseDelayMs * (1L shl (attempt - 2)) + baseDelayMs), maxDelayMs)
-            OalLog.w(
-                TAG,
-                "Connection to $host:$port ($source) failed (attempt $attempt/$maxRetries) — " +
-                    "retrying in ${formatDelay(delayMs)}",
-            )
-            delay(delayMs)
-        }
-
-        return try {
-            val socket = Socket()
-            socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            socket.tcpNoDelay = true
-            // Detect dead phone within ~10s (kernel sends keepalive after idle, then
-            // 3 probes 2s apart). Critical for sleep/wake and ungraceful disconnects.
-            try {
-                socket.keepAlive = true
-                // Best-effort: low-level setsockopt for tighter timing on Android.
-                // Falls back to OS defaults (~2h idle) if reflection fails.
-                setKeepAliveParams(socket, idleSec = 5, intervalSec = 2, count = 3)
-            } catch (e: Exception) {
-                OalLog.d(TAG, "TCP keepalive tuning unavailable: ${e.message}")
+        for (attempt in 1..MAX_RETRIES) {
+            if (attempt > 1) {
+                // Exponential backoff: 1s, 3s, 8s (max 15s)
+                // Formula: base * 2^(attempt-2) + base, capped at max
+                val delayMs = minOf((RETRY_BASE_DELAY_MS * (1L shl (attempt - 2)) + RETRY_BASE_DELAY_MS), RETRY_MAX_DELAY_MS)
+                OalLog.w(
+                    TAG,
+                    "Connection to $host:$port ($source) failed (attempt $attempt/$MAX_RETRIES) — " +
+                        "retrying in ${formatDelay(delayMs)}",
+                )
+                delay(delayMs)
+            } else {
+                OalLog.i(TAG, "Connecting to $host:$port ($source)")
             }
-            val local = socket.localAddress?.hostAddress ?: "unknown"
-            val remote = socket.inetAddress?.hostAddress ?: host
-            OalLog.i(
-                TAG,
-                "Connected to companion at $remote:$port ($source), local=$local:${socket.localPort}",
-            )
-            isRunning = false
-            stopNsdDiscovery()
-            onSocketReady(socket)
-            true
-        } catch (e: Exception) {
-            OalLog.d(TAG, "Connection to $host:$port ($source) failed: ${e.message}")
-            false
+
+            try {
+                val socket = Socket()
+                socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+                socket.tcpNoDelay = true
+                // Detect dead phone within ~10s (kernel sends keepalive after idle, then
+                // 3 probes 2s apart). Critical for sleep/wake and ungraceful disconnects.
+                try {
+                    socket.keepAlive = true
+                    // Best-effort: low-level setsockopt for tighter timing on Android.
+                    // Falls back to OS defaults (~2h idle) if reflection fails.
+                    setKeepAliveParams(socket, idleSec = 5, intervalSec = 2, count = 3)
+                } catch (e: Exception) {
+                    OalLog.d(TAG, "TCP keepalive tuning unavailable: ${e.message}")
+                }
+                val local = socket.localAddress?.hostAddress ?: "unknown"
+                val remote = socket.inetAddress?.hostAddress ?: host
+                OalLog.i(
+                    TAG,
+                    "Connected to companion at $remote:$port ($source), local=$local:${socket.localPort}",
+                )
+                isRunning = false
+                stopNsdDiscovery()
+                onSocketReady(socket)
+                return true
+            } catch (e: Exception) {
+                OalLog.d(TAG, "Connection to $host:$port ($source) failed: ${e.message}")
+            }
         }
+        return false
     }
 
     /** Format delay for logging. */

@@ -351,10 +351,6 @@ class SessionManager(
     @Volatile private var lastSentDriving: Boolean? = null
     @Volatile private var lastSentGearRaw: Int? = null
 
-    /** Last-known ignition state from IgnitionMonitor. Used to gate auto-reconnect
-     * during the "ghost wake" period after car shutdown. 0=UNKNOWN/OFF/LOCK, 4=ON, 5=START. */
-    @Volatile private var lastKnownIgnitionState: Int = 0
-
     // Cluster manager
     private var _clusterManager: com.openautolink.app.cluster.ClusterManager? = null
 
@@ -1358,7 +1354,6 @@ class SessionManager(
      * before attempting to reconnect, avoiding wasted timeouts on dead WiFi.
      */
     fun onIgnitionOffOrLocked() {
-        lastKnownIgnitionState = 0 // UNKNOWN/OFF/LOCK
         OalLog.i(TAG, "Ignition OFF or LOCK — suppressing auto-reconnect")
         DiagnosticLog.i("transport", "Ignition OFF/LOCK: suppressing auto-reconnect")
     }
@@ -1370,7 +1365,6 @@ class SessionManager(
      * auto-reconnect logic if needed.
      */
     fun onIgnitionOn(gearPosition: Int) {
-        lastKnownIgnitionState = gearPosition // ON=4, START=5
         OalLog.i(TAG, "Ignition ON (gear=$gearPosition) — resuming normal reconnect logic")
         DiagnosticLog.i("transport", "Ignition ON: resuming auto-reconnect")
     }

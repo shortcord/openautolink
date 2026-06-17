@@ -103,6 +103,7 @@ class AasdkSession(
      * if the generation matches the current one. This prevents stale callbacks
      * from a torn-down session from racing with a freshly-started one.
      */
+    @Volatile
     private var sessionGeneration = 0
 
     /** Consecutive reconnect failures — drives exponential backoff. Also
@@ -158,13 +159,6 @@ class AasdkSession(
 
     private fun handleConnection(socket: Socket) {
         _connectionState.value = ConnectionState.CONNECTING
-        // TCP connection succeeded — reset the failure counter so that
-        // onConnectFailure and onSessionStopped failures count from this
-        // point forward. Without this, a TCP connect failure followed by
-        // a successful TCP connect but AA handshake failure would double-count
-        // as 2 failures, reaching picker escalation in just 1 reconnect cycle.
-        consecutiveReconnectFailures = 0
-        _reconnectAttempt.value = 0
 
         val input = socket.getInputStream()
         val output = socket.getOutputStream()

@@ -134,17 +134,18 @@ class TcpAdvertiser(
                     val carSocket = server.accept()
                     // Rate-limit: if the car is rapidly connecting and
                     // disconnecting, enforce a minimum gap between
-                    // handleCarConnection calls to prevent resource exhaustion.
+                    // handleCarConnection calls. Delay processing rather than
+                    // closing the socket — the warm-proxy path can swap in a
+                    // new car socket efficiently, so closing a valid connection
+                    // just adds latency.
                     val now = System.currentTimeMillis()
                     val gap = now - lastConnectionTimeMs
                     if (gap < MIN_INTER_CONNECTION_MS && lastConnectionTimeMs > 0L) {
                         val wait = MIN_INTER_CONNECTION_MS - gap
-                        CompanionLog.w(TAG, "Car connection rate-limited — waiting ${wait}ms")
-                        runCatching { carSocket.close() }
+                        CompanionLog.w(TAG, "Car connection rate-limited — delaying ${wait}ms before handling")
                         kotlinx.coroutines.delay(wait)
-                        continue
                     }
-                    lastConnectionTimeMs = now
+                    lastConnectionTimeMs = System.currentTimeMillis()
                     val remoteIp = carSocket.inetAddress?.hostAddress ?: "unknown"
                     val localIp = carSocket.localAddress?.hostAddress ?: "unknown"
                     CompanionLog.i(
