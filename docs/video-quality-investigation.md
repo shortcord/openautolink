@@ -1,5 +1,11 @@
 # Video Quality Investigation — Real-Time UI Projection
 
+> **Historical document.** This investigation was conducted using the bridge-mode
+> setup (VIM4 SBC, OAL protocol over TCP ports 5288/5289/5290). The findings
+> about MediaCodec lifecycle, frame handling, and codec selection remain relevant
+> to the current app/companion architecture. The test setup (tcp_relay.py, SBC
+> hardware) is bridge-mode specific.
+
 ## Problem Statement
 
 Android Auto projection video appears blocky/pixelated during motion (map scrolling, UI transitions). This is a **real-time UI projection stream**, not video playback — latency matters more than perfect quality, but visible compression artifacts during normal use are unacceptable.

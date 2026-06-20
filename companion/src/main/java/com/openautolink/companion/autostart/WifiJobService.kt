@@ -81,8 +81,7 @@ class WifiJobService : JobService() {
                 val targetSsids = prefs.getStringSet(CompanionPrefs.AUTO_START_WIFI_SSIDS, emptySet())
                     ?: emptySet()
                 val wm = app.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                val raw = wm.connectionInfo?.ssid?.replace("\"", "") ?: ""
-                val current = if (raw == "<unknown ssid>") "" else raw
+                val current = CompanionPrefs.currentSsid(app) ?: ""
                 val matched = current.isNotBlank() &&
                     targetSsids.any { it.equals(current, ignoreCase = true) }
                 if (matched) {
@@ -135,8 +134,7 @@ class WifiJobService : JobService() {
 
             val wifiManager = context.applicationContext
                 .getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val ssid = wifiManager.connectionInfo?.ssid?.replace("\"", "") ?: ""
-            val currentSsid = if (ssid == "<unknown ssid>") "" else ssid
+            val currentSsid = CompanionPrefs.currentSsid(context) ?: ""
             val matched = currentSsid.isNotBlank() &&
                 targetSsids.any { it.equals(currentSsid, ignoreCase = true) }
 

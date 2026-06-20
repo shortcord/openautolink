@@ -1,4 +1,9 @@
-# OpenAutoLink — Work Plan
+# OpenAutoLink — Work Plan Archive
+
+> **Bridge-mode historical archive.** This file contains carry-forward issues and
+> milestone details from the bridge-mode development phase. The current
+> app/companion architecture is documented in [architecture.md](architecture.md)
+> and [networking.md](networking.md).
 
 ---
 

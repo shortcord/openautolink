@@ -1,5 +1,9 @@
 # USB Transport for Android Auto — Implementation Plan
 
+> **Status: Planned — not yet implemented.** The `transport/usb/` package does not
+> exist in the current codebase. See [usb-mode.md](usb-mode.md) for the design
+> document.
+
 ## Overview
 
 Add USB as another transport option alongside the current TCP companion path. When a phone is plugged into the car's USB port, our app performs the AOA v2 (Android Open Accessory) handshake to switch the phone into accessory mode, then feeds the raw USB byte pipe into our existing aasdk JNI transport layer.

@@ -1,29 +1,29 @@
 # OpenAutoLink — Local Testing Guide
 
-> **Needs refresh for the current app/companion architecture.** The early
-> sections below still describe the historical SBC bridge test bench and ports
-> `5288/5289/5290`. The active workflow is the AAOS app connecting to the phone
-> companion on TCP `5277`, with discovery on mDNS, UDP `5279`, and TCP identity
-> probe `5278`; see [architecture.md](architecture.md) and
-> [networking.md](networking.md). The remote diagnostics/no-ADB guidance remains
-> useful.
+> **Last updated: June 19, 2026 — refreshed for the current app/companion architecture.**
+>
+> The historical SBC bridge test bench (ports `5288/5289/5290`, SBC hardware) has been
+> replaced by the direct app/companion workflow. The active setup is the AAOS app
+> connecting to the phone companion on TCP `5277`, with discovery on mDNS, UDP `5279`,
+> and TCP identity probe `5278`; see [architecture.md](architecture.md) and
+> [networking.md](networking.md). The emulator setup, VHAL testing, and remote
+> diagnostics sections below are current and useful.
 
 ## Overview
 
-Full end-to-end testing requires the AAOS app talking to the bridge over a real network. Since the GM head unit has **no ADB access** due to GM restrictions, we use the Android SDK AAOS emulator as a stand-in. The bridge runs on a physical SBC connected to the development PC via two separate network cables.
+Full end-to-end testing requires the AAOS app talking to the phone companion over a
+shared WiFi network. Since the GM head unit has **no ADB access** due to GM restrictions,
+we use the Android SDK AAOS emulator as a stand-in. The phone companion runs on a
+physical Android phone or a second emulator instance.
 
 ```
 ┌──────────────────┐         ┌─────────────────────────────────────┐
-│  Dev PC (Windows) │         │          SBC (Bridge)               │
+│  Dev PC           │         │  Phone (or second emulator)          │
 │                   │         │                                     │
-│  AAOS Emulator    │◄──eth──►│  Onboard NIC (eth0)                │
-│  (192.168.222.108)│  bridge │  Static IP: 192.168.222.222        │
-│                   │  traffic│  Ports: 5288, 5289, 5290            │
-│                   │         │                                     │
-│  PC NIC / USB-NIC │◄──eth──►│  USB NIC (eth1+)                   │
-│  (DHCP / static)  │   SSH   │  SSH access                        │
-│                   │         │                                     │
-│  adb → emulator   │         │  Phone ── WiFi ──► wlan0 (5277)    │
+│  AAOS Emulator    │◄──WiFi──►  Companion app on TCP :5277         │
+│  (192.168.x.x)    │  same   │  mDNS _openautolink._tcp            │
+│                   │  network│  Identity probe :5278                │
+│  adb → emulator   │         │  UDP discovery :5279                │
 └──────────────────┘         └─────────────────────────────────────┘
 ```
 
@@ -34,102 +34,37 @@ Full end-to-end testing requires the AAOS app talking to the bridge over a real 
   - **`BlazerEV_AAOS`** — Android 33 Automotive (Google APIs, no Play Store), x86_64, 2914×1134. Supports `adb root` and VHAL injection. Primary testing image.
   - **`BlazerEV_AAOS_14`** — Android 14 Automotive (Google APIs, no Play Store), x86_64, 2914×1134. Supports `adb root` and VHAL injection. AAOS 14 compatibility testing.
   - **`DD_AAOS_33`** — Android 33 Automotive Distant Display (Google Play), x86_64, 2914×1134 + cluster displays. For visual cluster testing. No `adb root`.
-- SBC with bridge built and running (see [bridge/sbc/BUILD.md](../bridge/sbc/BUILD.md))
-- Two ethernet cables
-- One USB ethernet adapter (for the SBC's SSH connection)
-- A phone with Android Auto for full end-to-end tests
+- A phone with Android Auto running the companion app for full end-to-end tests
+- Both devices on the same WiFi network (phone hotspot or shared network)
 
-## 1. Hardware Setup
+## 1. Companion Setup
 
-### Two-Cable Network Connection
+The phone companion app handles TCP listening, identity probes, and Android Auto launch.
 
-The SBC requires **two separate network connections** to your PC:
+### Install the Companion
 
-| Cable | SBC Side | PC Side | Purpose |
-|-------|----------|---------|---------|
-| **Cable 1 — Bridge traffic** | **Onboard NIC** (eth0, RJ45 on the board) | Dedicated NIC or USB ethernet adapter on PC | OAL protocol (control/video/audio) |
-| **Cable 2 — SSH** | **USB NIC** (USB ethernet adapter plugged into SBC) | Any available NIC on PC | SSH access for development |
-
-> **Why two cables?** The onboard NIC is locked to the car network subnet (192.168.222.0/24) with a static IP. Mixing SSH and bridge traffic on one interface creates routing conflicts and doesn't match the real car topology.
-
-### SSH Connection via WiFi Sharing
-
-The simplest way to give the SBC an SSH-accessible IP from your dev PC:
-
-1. **Share your PC's WiFi to the SSH NIC** — In Windows: Settings → Network → Wi-Fi → Properties → "Share this connection" → select the NIC connected to the SBC's USB ethernet adapter
-2. Windows ICS (Internet Connection Sharing) runs a DHCP server on that NIC in the **`192.168.137.0/24`** subnet (the PC becomes `192.168.137.1`)
-3. The SBC's USB NIC gets a DHCP lease (e.g. `192.168.137.x`)
-4. **Discover the SBC's IP via ARP:**
-   ```powershell
-   # After the SBC boots and gets a DHCP lease:
-   arp -a | Select-String "192.168.137"
-   ```
-5. SSH in: `ssh khadas@192.168.137.x` (substitute your SBC's username and discovered IP)
-
-> **Tip:** The SBC's MAC address won't change, so Windows ICS will usually assign the same IP across reboots. Note it down after first discovery.
-
-### IP Addressing
-
-This mirrors the real car environment:
-
-| Device | IP | Role |
-|--------|-----|------|
-| SBC onboard NIC (eth0) | `192.168.222.222` | Bridge — already configured by `setup-car-net.sh` |
-| Emulator (acting as head unit) | `192.168.222.108` | App — matches the IP the GM head unit assigns to its USB NIC |
-| SBC USB NIC (eth1+) | DHCP from Windows ICS | SSH management — `192.168.137.x` subnet |
-| PC SSH NIC | `192.168.137.1` | SSH client access (Windows ICS gateway) |
-
-## 2. SBC Initial Setup (First Time Only)
-
-Before the bridge can be built and deployed, the SBC needs a one-time setup for key-based SSH and passwordless sudo so that development tools (including Copilot) can work freely on the SBC.
-
-### 2a. OS Setup
-
-1. Flash the SBC's OS image per its manufacturer's instructions
-2. Boot the SBC and connect via SSH (password auth initially): `ssh <user>@<sbc-ip>`
-3. Update the OS:
-   ```bash
-   sudo apt update && sudo apt upgrade -y
-   ```
-
-### 2b. Key-Based SSH
-
-Generate an SSH key on your dev PC (if you don't have one) and copy it to the SBC:
-
-```powershell
-# On the dev PC (PowerShell)
-# Generate key if needed:
-ssh-keygen -t ed25519 -C "openautolink-dev"
-
-# Copy public key to SBC (will prompt for password one last time):
-type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <user>@<sbc-ip> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
-```
-
-Verify: `ssh <user>@<sbc-ip>` should now connect without a password prompt.
-
-### 2c. Passwordless Sudo
-
-On the SBC, add a sudoers rule so the dev user can run commands without a password:
+Build and install the companion APK on your phone:
 
 ```bash
-# On the SBC:
-sudo visudo -f /etc/sudoers.d/dev-nopasswd
-# Add this line (replace <user> with your SBC username):
-<user> ALL=(ALL) NOPASSWD: ALL
+cd companion
+../gradlew assembleDebug
+adb install -r build/outputs/apk/debug/*.apk
 ```
 
-Verify: `sudo whoami` should return `root` without a password prompt.
+### Configure Connection Mode
 
-> **Why passwordless sudo?** Copilot and deployment scripts (`scp`, `ssh` commands in `deploy-to-sbc.ps1`) need to restart services, install files to `/opt/openautolink/`, and run `systemctl` without interactive prompts.
+1. Open the Companion app on your phone
+2. Set the connection mode to match your test setup (Phone Hotspot or Car Hotspot)
+3. If using Phone Hotspot mode: enable the phone's WiFi hotspot
+4. If using Car Hotspot mode: configure the car's WiFi SSID in the companion settings
 
-### 2d. Verify
+### Start the Companion Service
 
-```powershell
-# From the dev PC — should work with no prompts:
-ssh <user>@<sbc-ip> "sudo systemctl status sshd"
-```
-
-Once complete, proceed to build and deploy the bridge per [bridge/sbc/BUILD.md](../bridge/sbc/BUILD.md).
+Tap **Start** in the companion app. The service begins listening on:
+- TCP `5277` — main AA byte pipe
+- TCP `5278` — identity probe responder
+- UDP `5279` — broadcast discovery responder
+- mDNS `_openautolink._tcp` — service advertisement
 
 ## 3. Emulator Setup
 
@@ -221,47 +156,18 @@ adb shell "cmd car_service inject-vhal-event 289408000 8"        # gear: DRIVE
 
 > **Note:** VHAL injection requires the non-Play Store image (`BlazerEV_AAOS`). The distant display image (`DD_AAOS_33`) blocks `inject-vhal-event` with a security exception.
 
-### Configuring the Emulator's Network for Bridge Traffic
+### Configuring the Emulator's Network for Companion Traffic
 
-The emulator must be reachable at `192.168.222.108` on the bridge network — this is the IP the GM head unit always assigns when a USB NIC is plugged in. Configuring the emulator this way ensures the app behaves identically to the real car.
-
-#### Option A: Host-Side Port Forwarding (Simplest)
-
-Use `adb` to forward the emulator's ports through the host PC's bridge NIC:
+The emulator and phone companion must be on the same network. The simplest approach is to use the host PC's network with `adb reverse`:
 
 ```powershell
-# Forward bridge ports from PC (192.168.222.108) to emulator
-# Run these after the emulator is booted
-
-# On the PC NIC connected to the SBC, set a secondary IP:
-# (Control Panel → Network Adapter → Properties → IPv4 → Advanced → Add 192.168.222.108)
-# Or via PowerShell (run as Administrator):
-New-NetIPAddress -InterfaceAlias "Ethernet 2" -IPAddress 192.168.222.108 -PrefixLength 24
-
-# Forward ports from PC to emulator
-adb forward tcp:5288 tcp:5288
-adb forward tcp:5289 tcp:5289
-adb forward tcp:5290 tcp:5290
+# Make the emulator see the host's localhost as its own
+# The companion runs on the phone, reachable at the phone's IP on the shared network
+# Or use adb reverse if running a second emulator as the companion:
+adb reverse tcp:5277 tcp:5277
 ```
 
-> **Note:** Replace `"Ethernet 2"` with the name of your PC NIC connected to the SBC's onboard NIC. Run `Get-NetAdapter` to list adapters.
-
-With this approach, the bridge connects to `192.168.222.108:5288/5289/5290` and the traffic is forwarded into the emulator.
-
-#### Option B: Reverse ADB (App Connects Outbound)
-
-Since the app initiates the TCP connections (app → bridge), you can use `adb reverse` to let the emulator reach the SBC:
-
-```powershell
-# Make the emulator see 192.168.222.222:5288 as localhost:5288
-adb reverse tcp:5288 tcp:5288
-adb reverse tcp:5289 tcp:5289
-adb reverse tcp:5290 tcp:5290
-```
-
-Then configure the app to connect to `localhost` (or `127.0.0.1`) as the bridge address. The traffic will route through the host to the SBC at `192.168.222.222`.
-
-> **Recommended:** Option B is the most reliable for the app's connection model (app connects to bridge). Set the bridge IP in the app's settings to `127.0.0.1` and use `adb reverse` to tunnel.
+For testing with a real phone, ensure both the emulator host and phone are on the same WiFi network. The app discovers the companion via mDNS, UDP broadcast, or TCP identity probe — no manual IP configuration needed in most cases.
 
 ## 4. Installing and Running the App
 
@@ -291,59 +197,26 @@ adb logcat --pid=$(adb shell pidof com.openautolink.app)
 adb logcat -s OAL:* Transport:* Video:* Audio:*
 ```
 
-## 5. Bridge Setup (SBC Side)
+## 5. End-to-End Test Workflow
 
-### Verify Car Network
-
-SSH into the SBC via the USB NIC connection:
-
-```bash
-# Check the onboard NIC has the correct IP
-ip addr show eth0
-# Should show 192.168.222.222/24
-
-# Verify the bridge service is running
-sudo systemctl status openautolink.service
-
-# Check bridge logs
-sudo journalctl -u openautolink.service -f
-```
-
-### Verify Network Connectivity
-
-From the SBC, confirm the emulator (or its host) is reachable:
-
-```bash
-ping -c 3 192.168.222.108
-```
-
-From the PC, confirm the bridge is reachable:
-
-```powershell
-Test-NetConnection -ComputerName 192.168.222.222 -Port 5288
-```
-
-## 6. End-to-End Test Workflow
-
-1. **Boot SBC** — bridge starts automatically via systemd
-2. **SSH into SBC** — verify `eth0` is `192.168.222.222`, bridge is running
-3. **Start emulator** — launch `BlazerEV_AAOS`
-4. **Configure networking** — set up port forwarding or `adb reverse` (see Section 2)
-5. **Install app** — `adb install` the debug APK
-6. **Launch app** — app should show "Connecting..." and attempt to reach the bridge
-7. **Pair phone** — use Bluetooth on the SBC to pair with a phone running Android Auto
-8. **Verify projection** — video should render in the emulator, audio should play, touch should respond
+1. **Start the companion** on your phone — tap Start in the Companion app
+2. **Start emulator** — launch `BlazerEV_AAOS`
+3. **Ensure same network** — phone and emulator host on the same WiFi
+4. **Install app** — `adb install` the debug APK
+5. **Launch app** — app discovers the companion via mDNS/UDP/TCP probe and connects
+6. **Verify projection** — video should render in the emulator, audio should play, touch should respond
 
 ### What to Verify
 
 | Component | How to Test | Expected Behavior |
 |-----------|-------------|-------------------|
-| **TCP connection** | App status UI / logcat | Three channels connect (control, video, audio) |
+| **Discovery** | App status UI / logcat | Phone discovered via mDNS, UDP, or TCP probe |
+| **TCP connection** | App status UI / logcat | App connects to companion on port 5277 |
 | **Video** | Emulator display | Phone screen projected, smooth rendering |
 | **Audio** | Emulator audio output | Media/nav audio plays through correct purposes |
 | **Touch** | Click/drag in emulator | Touch events forwarded to phone, UI responds |
-| **Reconnection** | Kill bridge, restart | App shows "Connecting...", reconnects when bridge returns |
-| **Settings** | App settings screen | Bridge IP, codec preferences persisted via DataStore |
+| **Reconnection** | Kill companion, restart | App shows "Connecting...", reconnects when companion returns |
+| **Settings** | App settings screen | Codec, display, and connection preferences persisted via DataStore |
 
 ## 7. Unit and Integration Tests
 
@@ -357,9 +230,13 @@ These run without hardware:
 .\gradlew :app:connectedDebugAndroidTest
 ```
 
-## 8. Mock Bridge Testing (No SBC Required)
+## 8. Mock Bridge Testing (Historical — Bridge-Mode Only)
 
-The mock bridge (`scripts/mock_bridge.py`) lets you test the app's full video/audio/control pipeline without a physical SBC, phone, or car. It speaks OAL protocol directly to the app, generating synthetic H.264 video (via ffmpeg) and PCM audio (sine wave).
+> **Note:** The mock bridge (`scripts/mock_bridge.py`) speaks the OAL protocol (ports 5288/5289/5290)
+> which is the historical bridge-mode protocol. It is **not** used with the current app/companion
+> direct mode (port 5277). This section is preserved for developers working on the `bridge-mode` branch.
+
+The mock bridge lets you test the app's full video/audio/control pipeline without a physical SBC, phone, or car. It speaks OAL protocol directly to the app, generating synthetic H.264 video (via ffmpeg) and PCM audio (sine wave).
 
 ### What You Can Test
 
@@ -464,7 +341,6 @@ In-car testing is harder than emulator testing but critical at key milestones �
 - **No ADB access** — GM locks down ADB on production head units. No `logcat`, no `adb install`, no `adb reverse`
 - **No debug APKs** — the app must be built as a **signed AAB** (Android App Bundle) and uploaded to the **Google Play Console internal/closed testing track** for every new build
 - **No live debugging** — rely on the app's built-in diagnostics screen for status and error info
-- **Bridge SSH still works** — the second USB NIC cable from your laptop to the SBC provides SSH access, same as in emulator testing. You can still deploy bridge updates, view logs, and restart services from your laptop while sitting in the car
 
 ### Deploying a Test Build
 
@@ -485,27 +361,16 @@ In-car testing is harder than emulator testing but critical at key milestones �
 >
 > **Keystore:** The signing keystore lives at `secrets/upload-key.jks` (gitignored). Create one with `scripts\create-upload-keystore.ps1` if you don't have it yet.
 
-### Bridge Access While In-Car
-
-SSH into the SBC from your laptop the same way as on the bench — share WiFi to your USB NIC, discover the SBC via ARP, and connect:
-
-```powershell
-arp -a | Select-String "192.168.137"
-ssh khadas@192.168.137.x
-# View bridge logs live:
-sudo journalctl -u openautolink.service -f
-```
-
 ### What to Test In-Car (vs Emulator)
 
 | Area | Why in-car matters |
 |------|-------------------|
 | **Hardware video decoding** | Real Qualcomm C2 decoders behave differently than emulator software decoders |
 | **Audio routing** | Car audio system, steering wheel controls, multi-zone output |
-| **Reconnection** | Real power cycle — ignition off/on, SBC cold boot |
+| **Reconnection** | Real power cycle — ignition off/on |
 | **Touch calibration** | Real touchscreen DPI, coordinate mapping on 2914×1134 display |
 | **VHAL data** | Real vehicle speed, gear, parking state |
-| **Network stability** | Real USB gadget/NIC behavior on the car's USB port |
+| **Network stability** | Real WiFi behavior on the car's head unit |
 
 This is why emulator testing handles the bulk of development — it's the only environment with full `adb` access for rapid iteration. In-car testing validates what the emulator can't.
 
@@ -627,9 +492,8 @@ Or check the app's **Diagnostics → Network** tab — it lists all network inte
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| Emulator can't reach `192.168.222.222` | Port forwarding / reverse not set up | Run `adb reverse` commands (Section 3, Option B) |
-| Bridge can't reach `192.168.222.108` | PC NIC missing secondary IP | Add `192.168.222.108` to the PC NIC on the bridge subnet |
-| App shows "Connecting..." forever | Bridge not running or wrong IP in app | Check `systemctl status openautolink.service`; verify app bridge IP setting |
+| App can't find companion | Network isolation or mDNS blocked | Ensure both devices on same WiFi; check firewall rules |
+| App shows "Connecting..." forever | Companion not running or wrong network | Verify companion service is started and both devices are on the same network |
 | Video renders but no audio | Audio purpose routing mismatch | Check logcat for AudioTrack errors; see [embedded-knowledge.md](embedded-knowledge.md) |
 | Emulator is slow / video stutters | x86_64 emulated decoder limitations | Expected — emulator hardware decoding is weaker than the real head unit |
-| SSH connection drops | SBC USB NIC lost / wrong cable | Verify USB NIC is `eth1+` not `eth0`; check `setup-eth-ssh.sh` logs |
+| Companion not discovered | mDNS not working across subnets | Try manual IP entry in app settings, or check UDP/TCP probe ports are open |

@@ -25,7 +25,7 @@ object AasdkReconnectPolicy {
         val useFastHotspotRetry = transportMode == "hotspot" && !protocolError && !repeatedFailure
 
         if (useFastHotspotRetry) {
-            val jitter = positiveModulo(jitterSeed, FAST_SPREAD_MS)
+            val jitter = Math.floorMod(jitterSeed, FAST_SPREAD_MS)
             return AasdkReconnectDecision(
                 delayMs = FAST_MIN_MS + jitter,
                 extendedBackoff = false,
@@ -44,10 +44,5 @@ object AasdkReconnectPolicy {
                 else -> "standard retry"
             },
         )
-    }
-
-    private fun positiveModulo(value: Long, mod: Long): Long {
-        val result = value % mod
-        return if (result < 0) result + mod else result
     }
 }

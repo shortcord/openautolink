@@ -43,14 +43,6 @@ object AasdkNative {
     @JvmStatic
     external fun nativeStopSession()
 
-    /** Close only projected video on the active AA session. */
-    @JvmStatic
-    external fun nativeCloseVideoStream()
-
-    /** Restart only projected video on the active AA session. */
-    @JvmStatic
-    external fun nativeRestartVideoStream()
-
     // -- Input (app → phone) --
 
     @JvmStatic
@@ -71,9 +63,6 @@ object AasdkNative {
         lat: Double, lon: Double, alt: Double,
         speed: Float, bearing: Float, timestampMs: Long
     )
-
-    @JvmStatic
-    external fun nativeSendVehicleSensor(sensorType: Int, data: ByteArray)
 
     @JvmStatic
     external fun nativeSendSpeed(speedMmPerS: Int)
@@ -130,7 +119,4 @@ object AasdkNative {
 
     @JvmStatic
     external fun nativeRequestKeyframe()
-
-    @JvmStatic
-    external fun nativeIsStreaming(): Boolean
 }

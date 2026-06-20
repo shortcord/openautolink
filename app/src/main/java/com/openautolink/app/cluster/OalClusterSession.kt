@@ -25,17 +25,11 @@ import androidx.car.app.navigation.model.LaneDirection
 import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.openautolink.app.diagnostics.DiagnosticLog
 import com.openautolink.app.navigation.ManeuverIconRenderer
 import com.openautolink.app.navigation.ManeuverState
 import com.openautolink.app.navigation.ManeuverType
 import com.openautolink.app.navigation.LaneInfo
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.ZonedDateTime
 import java.util.Collections
@@ -55,17 +49,14 @@ class OalClusterSession : Session() {
 
     companion object {
         private const val TAG = "OalClusterSession"
-        private const val RETRY_DELAY_MS = 2_000L
-        private const val MAX_RETRY_ATTEMPTS = 3
     }
 
     private var screen: OalClusterScreen? = null
     private var navigationManager: NavigationManager? = null
-    private var scope: CoroutineScope? = null
-    private var isNavigating = false
-    private var hasSeenActiveNav = false
     private var sessionRegistered = false
-    private var retryJob: Job? = null
+
+    // Shared navigation delegate — handles state collection, debounce, retry
+    private lateinit var delegate: ClusterSessionDelegate
 
     override fun onCreateScreen(intent: Intent): Screen {
         if (!sessionRegistered) {
@@ -76,6 +67,16 @@ class OalClusterSession : Session() {
 
         val clusterScreen = OalClusterScreen(carContext)
         screen = clusterScreen
+
+        delegate = ClusterSessionDelegate(
+            navigationManager = { navigationManager },
+            carContext = { carContext },
+        ).apply {
+            onManeuverUpdate = { maneuver -> screen?.updateState(maneuver) }
+            onNavCleared = { screen?.updateState(null) }
+            onIdle = { screen?.updateState(null) }
+            setup()
+        }
 
         try {
             navigationManager = carContext.getCarService(NavigationManager::class.java)
@@ -90,175 +91,31 @@ class OalClusterSession : Session() {
                     navigationManager?.navigationStarted()
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to re-assert navigationStarted(): ${e.message}")
-                    isNavigating = false
+                    delegate.isNavigating = false
                 }
             }
             override fun onAutoDriveEnabled() {}
         })
 
-        val sessionScope = CoroutineScope(Dispatchers.Main)
-        scope = sessionScope
-        sessionScope.launch { collectNavigationState() }
-
         lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onDestroy(owner: LifecycleOwner) {
-                if (isNavigating) {
+                if (delegate.isNavigating) {
                     try { navigationManager?.navigationEnded() } catch (_: Exception) {}
-                    isNavigating = false
+                    delegate.isNavigating = false
                 }
                 if (sessionRegistered) {
                     val activeSessions = ClusterBindingState.onSessionDestroyed()
                     sessionRegistered = false
                     Log.i(TAG, "Session destroyed; activeSessions=$activeSessions")
                 }
-                retryJob?.cancel()
-                retryJob = null
+                delegate.cleanup()
                 clearManeuverIconCache()
-                scope?.cancel()
-                scope = null
                 screen = null
                 navigationManager = null
             }
         })
 
         return clusterScreen
-    }
-
-    private suspend fun collectNavigationState() {
-        var debounceJob: Job? = null
-        ClusterNavigationState.state.collectLatest { maneuver ->
-            debounceJob?.cancel()
-            debounceJob = scope?.launch {
-                delay(200)
-                processStateUpdate(maneuver)
-            }
-        }
-    }
-
-    private fun processStateUpdate(maneuver: ManeuverState?) {
-        processStateUpdate(maneuver, retryAttempt = 0)
-    }
-
-    private fun processStateUpdate(maneuver: ManeuverState?, retryAttempt: Int) {
-        val navManager = navigationManager ?: return
-
-        if (maneuver != null) {
-            hasSeenActiveNav = true
-            if (!isNavigating) {
-                try {
-                    navManager.navigationStarted()
-                    isNavigating = true
-                } catch (e: Exception) {
-                    Log.e(TAG, "navigationStarted() failed: ${e.message}. Retrying in 2s...")
-                    com.openautolink.app.diagnostics.DiagnosticLog.e("cluster", "navigationStarted failed: ${e.message}")
-                    scheduleRetry(maneuver, retryAttempt)
-                    return
-                }
-            }
-
-            try {
-                val trip = buildTrip(maneuver)
-                navManager.updateTrip(trip)
-            } catch (e: Exception) {
-                Log.e(TAG, "updateTrip() failed: ${e.message}. Retrying in 2s...")
-                com.openautolink.app.diagnostics.DiagnosticLog.e("cluster", "updateTrip failed: ${e.message}")
-                scheduleRetry(maneuver, retryAttempt)
-                return
-            }
-
-            retryJob?.cancel()
-            retryJob = null
-            screen?.updateState(maneuver)
-        } else if (isNavigating && hasSeenActiveNav) {
-            retryJob?.cancel()
-            retryJob = null
-            try {
-                navManager.navigationEnded()
-            } catch (e: Exception) {
-                Log.e(TAG, "navigationEnded() failed: ${e.message}. Retrying in 2s...")
-                com.openautolink.app.diagnostics.DiagnosticLog.e("cluster", "navigationEnded failed: ${e.message}")
-                // Don't fail the update — let the widget show the idle state briefly
-                // before the next update arrives.
-                return
-            }
-            isNavigating = false
-            screen?.updateState(null)
-        } else {
-            retryJob?.cancel()
-            retryJob = null
-            screen?.updateState(null)
-        }
-    }
-
-    private fun scheduleRetry(maneuver: ManeuverState, retryAttempt: Int) {
-        if (retryAttempt >= MAX_RETRY_ATTEMPTS) {
-            Log.w(TAG, "Cluster update retry limit reached")
-            return
-        }
-        retryJob?.cancel()
-        retryJob = scope?.launch {
-            delay(RETRY_DELAY_MS)
-            if (ClusterNavigationState.state.value == maneuver) {
-                processStateUpdate(maneuver, retryAttempt + 1)
-            }
-        }
-    }
-
-    private fun buildTrip(maneuver: ManeuverState): Trip {
-        val tripBuilder = Trip.Builder()
-        val eta = ZonedDateTime.now().plus(
-            Duration.ofSeconds((maneuver.etaSeconds ?: 0).toLong())
-        )
-
-        val maneuverObj = buildManeuver(maneuver, carContext)
-        val stepBuilder = Step.Builder()
-        stepBuilder.setManeuver(maneuverObj)
-        // Use cue text if available (richer instruction from modern proto), else road name
-        val cueText = maneuver.cue ?: maneuver.roadName
-        cueText?.let { stepBuilder.setCue(it) }
-        maneuver.roadName?.let { stepBuilder.setRoad(it) }
-
-        // Add lane guidance from modern NavigationState
-        maneuver.lanes?.let { laneInfoList ->
-            if (laneInfoList.isNotEmpty()) {
-                for (lane in buildLanes(laneInfoList)) {
-                    stepBuilder.addLane(lane)
-                }
-            }
-        }
-
-        val distance = toDistance(
-            maneuver.distanceMeters ?: 0,
-            ClusterNavigationState.distanceUnits,
-            maneuver.displayDistance,
-            maneuver.displayDistanceUnit
-        )
-        val stepEstimate = TravelEstimate.Builder(distance, eta).build()
-        tripBuilder.addStep(stepBuilder.build(), stepEstimate)
-
-        // Add destination info when available (address + arrival ETA + remaining distance)
-        maneuver.destination?.let { destAddress ->
-            val destBuilder = Destination.Builder()
-            destBuilder.setName(destAddress)
-            destBuilder.setAddress(destAddress)
-
-            val destDistance = toDistance(
-                maneuver.destDistanceMeters ?: maneuver.distanceMeters ?: 0,
-                ClusterNavigationState.distanceUnits,
-                maneuver.destDistanceDisplay,
-                maneuver.destDistanceUnit
-            )
-            val destEta = if (maneuver.timeToArrivalSeconds != null && maneuver.timeToArrivalSeconds > 0) {
-                ZonedDateTime.now().plus(Duration.ofSeconds(maneuver.timeToArrivalSeconds))
-            } else {
-                eta
-            }
-            val destEstimate = TravelEstimate.Builder(destDistance, destEta).build()
-            tripBuilder.addDestination(destBuilder.build(), destEstimate)
-        }
-
-        tripBuilder.setLoading(false)
-        return tripBuilder.build()
     }
 }
 
@@ -508,4 +365,62 @@ internal fun toDistance(
             )
         }
     }
+}
+
+/**
+ * Build a Trip from a ManeuverState for cluster display.
+ * Shared between ClusterMainSession and OalClusterSession.
+ */
+internal fun buildClusterTrip(maneuver: ManeuverState, carContext: CarContext): Trip {
+    val tripBuilder = Trip.Builder()
+    val eta = ZonedDateTime.now().plus(
+        Duration.ofSeconds((maneuver.etaSeconds ?: 0).toLong())
+    )
+
+    val maneuverObj = buildManeuver(maneuver, carContext)
+    val stepBuilder = Step.Builder()
+    stepBuilder.setManeuver(maneuverObj)
+    val cueText = maneuver.cue ?: maneuver.roadName
+    cueText?.let { stepBuilder.setCue(it) }
+    maneuver.roadName?.let { stepBuilder.setRoad(it) }
+
+    maneuver.lanes?.let { laneInfoList ->
+        if (laneInfoList.isNotEmpty()) {
+            for (lane in buildLanes(laneInfoList)) {
+                stepBuilder.addLane(lane)
+            }
+        }
+    }
+
+    val distance = toDistance(
+        maneuver.distanceMeters ?: 0,
+        ClusterNavigationState.distanceUnits,
+        maneuver.displayDistance,
+        maneuver.displayDistanceUnit
+    )
+    val stepEstimate = TravelEstimate.Builder(distance, eta).build()
+    tripBuilder.addStep(stepBuilder.build(), stepEstimate)
+
+    maneuver.destination?.let { destAddress ->
+        val destBuilder = Destination.Builder()
+        destBuilder.setName(destAddress)
+        destBuilder.setAddress(destAddress)
+
+        val destDistance = toDistance(
+            maneuver.destDistanceMeters ?: maneuver.distanceMeters ?: 0,
+            ClusterNavigationState.distanceUnits,
+            maneuver.destDistanceDisplay,
+            maneuver.destDistanceUnit
+        )
+        val destEta = if (maneuver.timeToArrivalSeconds != null && maneuver.timeToArrivalSeconds > 0) {
+            ZonedDateTime.now().plus(Duration.ofSeconds(maneuver.timeToArrivalSeconds))
+        } else {
+            eta
+        }
+        val destEstimate = TravelEstimate.Builder(destDistance, destEta).build()
+        tripBuilder.addDestination(destBuilder.build(), destEstimate)
+    }
+
+    tripBuilder.setLoading(false)
+    return tripBuilder.build()
 }

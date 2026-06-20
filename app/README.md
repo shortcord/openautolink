@@ -18,12 +18,15 @@ See [docs/architecture.md](../docs/architecture.md) for the component island pla
 | Island | Package | Purpose |
 |--------|---------|---------|
 | Transport | `transport/` | aasdk JNI session + TCP companion discovery/transport |
-| Video | `video/` | MediaCodec lifecycle, Surface rendering |
-| Audio | `audio/` | Multi-purpose AudioTrack (5 slots), mic capture |
-| Input | `input/` | Touch, GNSS, VHAL vehicle data, IMU sensors |
+| Video | `video/` | MediaCodec lifecycle, Surface rendering, NAL parsing |
+| Audio | `audio/` | Multi-purpose AudioTrack (5 slots), AAC-LC decode, mic capture |
+| Input | `input/` | Touch, GNSS, VHAL vehicle data, IMU sensors, ignition monitoring |
 | UI | `ui/` | Compose screens — projection, settings, diagnostics |
-| Navigation | `navigation/` | Nav state from aasdk, cluster service |
+| Navigation | `navigation/` | Nav state from aasdk, maneuver icons |
 | Session | `session/` | Session orchestrator — connects islands |
+| Cluster | `cluster/` | Cluster service sessions, delegate, icon shim |
+| Data | `data/` | DataStore preferences, EV profiles, known phones |
+| Media | `media/` | Media browser service and session |
 | Diagnostics | `diagnostics/` | Logging, telemetry, remote debug tools |
 
 ## Diagnostics

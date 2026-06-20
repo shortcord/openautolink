@@ -3,8 +3,8 @@
 ## Status: WORKING — ACCURATE (verified on emulator + real car)
 
 EV routing with battery-on-arrival estimates is fully functional via the AA protocol.
-When connected to an EV with VHAL data, the bridge sends a VehicleEnergyModel protobuf
-through undocumented sensor type 23. Google Maps on the phone processes it and shows
+When connected to an EV with VHAL data, the app sends a VehicleEnergyModel protobuf
+through aasdk sensor type 23. Google Maps on the phone processes it and shows
 battery percentage remaining at each destination in search results and during navigation.
 
 **Verified:**

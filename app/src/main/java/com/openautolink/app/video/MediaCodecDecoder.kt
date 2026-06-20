@@ -106,7 +106,6 @@ class MediaCodecDecoder(
 
     private val _needsKeyframeFlow = MutableStateFlow(false)
     override val needsKeyframe: StateFlow<Boolean> = _needsKeyframeFlow.asStateFlow()
-    @Volatile private var _needsKeyframe = false
     private var pendingWidth: Int? = null
     private var pendingHeight: Int? = null
 
@@ -178,10 +177,8 @@ class MediaCodecDecoder(
                     // arrives — shows a frozen-but-clean cached frame
                     // instead of progressively-corrupting blocky garbage.
                     awaitingFreshIdr = true
-                    _needsKeyframe = false
                     _needsKeyframeFlow.value = true
                 } else {
-                    _needsKeyframe = false
                     _needsKeyframeFlow.value = true  // Signal caller to request IDR
                 }
             }
@@ -244,8 +241,7 @@ class MediaCodecDecoder(
     }
 
     override fun requestKeyframe(): Boolean {
-        if (_needsKeyframe) return false
-        _needsKeyframe = true
+        if (_needsKeyframeFlow.value) return false
         _needsKeyframeFlow.value = true
         return true
     }
@@ -261,7 +257,6 @@ class MediaCodecDecoder(
         pendingHeight = null
         renderingEnabled = false
         outputFormatReceived = false
-        _needsKeyframe = true
         _needsKeyframeFlow.value = true
         _decoderState.value = DecoderState.IDLE
         lastStatsTime = 0L
@@ -283,7 +278,6 @@ class MediaCodecDecoder(
         receivedIdr = false
         renderingEnabled = false
         outputFormatReceived = false
-        _needsKeyframe = false
         _needsKeyframeFlow.value = false
         _decoderState.value = DecoderState.PAUSED
         updateStats(null)
@@ -300,7 +294,6 @@ class MediaCodecDecoder(
         _decoderState.value = DecoderState.IDLE
         receivedIdr = false
         awaitingFreshIdr = false
-        _needsKeyframe = true
         _needsKeyframeFlow.value = true
         codecConfigData?.let { config ->
             if (surface != null) configureCodec(config)
@@ -352,8 +345,7 @@ class MediaCodecDecoder(
         codecConfigData = frame.data.copyOf()
         receivedIdr = false
         awaitingFreshIdr = false
-        _needsKeyframe = true  // Request IDR after codec reconfigure
-        _needsKeyframeFlow.value = true
+        _needsKeyframeFlow.value = true  // Request IDR after codec reconfigure
 
         if (surface != null) {
             configureCodec(frame.data)
@@ -427,8 +419,7 @@ class MediaCodecDecoder(
             // Don't cache the seed IDR — if surface is recreated, we don't want
             // to replay a green frame. Better to wait for a real one.
             // Keep requesting a real IDR — the phone may eventually respond
-            if (!_needsKeyframe) {
-                _needsKeyframe = true
+            if (!_needsKeyframeFlow.value) {
                 _needsKeyframeFlow.value = true
             }
             return
@@ -437,7 +428,6 @@ class MediaCodecDecoder(
         Log.i(TAG, "IDR keyframe received: ${frame.data.size} bytes, renderGate: false->true")
         DiagnosticLog.i("video", "IDR received: ${frame.data.size}B, codecActive=${codec != null}, enabling render")
         receivedIdr = true
-        _needsKeyframe = false
         _needsKeyframeFlow.value = false
         // Fresh IDR from the phone re-anchors the reference chain — safe to
         // resume feeding P-frames (clears the cached-IDR-replay guard).
@@ -495,7 +485,6 @@ class MediaCodecDecoder(
                 DiagnosticLog.i("video", "Seed warmup done (${elapsed}ms), render enabled")
                 renderingEnabled = true
                 seedIdrTimeMs = 0  // Clear — warmup is done
-                _needsKeyframe = false
                 _needsKeyframeFlow.value = false
             }
         }
@@ -558,7 +547,78 @@ class MediaCodecDecoder(
         }
     }
 
+    /**
+     * Configure codec from SPS/PPS codec config data (H.264/H.265).
+     * Parses video dimensions from the config data for accurate codec init.
+     */
     private fun configureCodec(configData: ByteArray) {
+        // Parse codec config to get actual video dimensions
+        val spsDims = when (mimeType) {
+            CodecSelector.MIME_H264 -> NalParser.parseSpsResolution(configData)
+            CodecSelector.MIME_H265 -> NalParser.parseH265SpsResolution(configData)
+            else -> null
+        }
+        val videoWidth = spsDims?.first ?: pendingWidth ?: 0
+        val videoHeight = spsDims?.second ?: pendingHeight ?: 0
+        val configWidth = if (videoWidth > 0) videoWidth else 1920
+        val configHeight = if (videoHeight > 0) videoHeight else 1080
+
+        Log.i(TAG, "Configuring codec with video dims: ${configWidth}x${configHeight} " +
+                "(parsed=${spsDims != null}, pending=${pendingWidth}x${pendingHeight}, surface: ${surfaceWidth}x${surfaceHeight})")
+
+        val formatBuilder: (MediaFormat) -> Unit = { fmt ->
+            fmt.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(configData))
+        }
+
+        configureCodecInternal(configWidth, configHeight, formatBuilder) { success ->
+            if (success) {
+                // When SPS was successfully parsed, dimensions match the stream — no
+                // resolution transition will occur, so INFO_OUTPUT_FORMAT_CHANGED may
+                // not fire on some Qualcomm H.265 decoders. Only gate on format change
+                // when using fallback dimensions.
+                outputFormatReceived = (spsDims != null)
+                renderingEnabled = false  // Don't render until first IDR is queued
+
+                // Replay cached IDR if one arrived while codec was configuring
+                val cachedIdr = cachedIdrFrame
+                if (cachedIdr != null) {
+                    Log.i(TAG, "Replaying cached IDR after codec configure (${cachedIdr.data.size} bytes)")
+                    cachedIdrFrame = null
+                    handleKeyframe(cachedIdr)
+                }
+            }
+        }
+    }
+
+    /**
+     * Configure codec without SPS/PPS (for VP9/AV1 which are self-describing).
+     * MediaCodec auto-detects codec parameters from the bitstream.
+     */
+    private fun configureCodecDirect(width: Int, height: Int) {
+        Log.i(TAG, "Configuring codec direct: ${width}x${height} ($mimeType)")
+        configureCodecInternal(width, height, {}) { success ->
+            if (success) {
+                renderingEnabled = true  // VP9/AV1: no reference dependency, render immediately
+            }
+        }
+    }
+
+    /**
+     * Shared codec configuration — tries each candidate decoder with up to 2 retries.
+     *
+     * @param width video width in pixels
+     * @param height video height in pixels
+     * @param formatCustomizer called with the [MediaFormat] before configure() to set
+     *                         codec-specific parameters (e.g., csd-0 for H.264/H.265)
+     * @param onResult called with true if configuration succeeded, false otherwise.
+     *                 The callback sets up post-configure state (rendering gate, etc.)
+     */
+    private fun configureCodecInternal(
+        width: Int,
+        height: Int,
+        formatCustomizer: (MediaFormat) -> Unit,
+        onResult: (success: Boolean) -> Unit,
+    ) {
         releaseCodec()
         _decoderState.value = DecoderState.CONFIGURING
 
@@ -571,28 +631,6 @@ class MediaCodecDecoder(
                 return
             }
 
-            // Parse codec config to get actual video dimensions
-            val spsDims = when (mimeType) {
-                CodecSelector.MIME_H264 -> NalParser.parseSpsResolution(configData)
-                CodecSelector.MIME_H265 -> NalParser.parseH265SpsResolution(configData)
-                else -> null
-            }
-            // Use parsed SPS dimensions if available, then pending dimensions from frame headers.
-            // Do NOT fall back to surfaceWidth/Height — surface is the display size
-            // (portrait phone = 1080x2340) which corrupts H.265 decoder init.
-            val videoWidth = spsDims?.first ?: pendingWidth ?: 0
-            val videoHeight = spsDims?.second ?: pendingHeight ?: 0
-
-            // Ensure we have valid dimensions — H.265 initial config may arrive before
-            // frame headers provide width/height. Use a reasonable default to avoid 0x0.
-            // CRITICAL: Do NOT use surfaceWidth/Height as fallback — the surface is the
-            // display size (e.g. 1080x2340 portrait) which is wrong for the video
-            // (e.g. 1920x1080). Wrong dimensions cause green/corrupt first frames.
-            val configWidth = if (videoWidth > 0) videoWidth else 1920
-            val configHeight = if (videoHeight > 0) videoHeight else 1080
-            Log.i(TAG, "Configuring codec with video dims: ${configWidth}x${configHeight} " +
-                    "(parsed=${spsDims != null}, pending=${pendingWidth}x${pendingHeight}, surface: ${surfaceWidth}x${surfaceHeight})")
-
             // Try each candidate (HW first, SW fallback) with up to 2 retries.
             // Mirrors GM ProjectionRenderer.initializeCodec (CODEC_START_ATTEMPT_ALLOWANCE)
             // and persist.hw.decoder.aa SW fallback. Cheap reliability insurance.
@@ -602,18 +640,17 @@ class MediaCodecDecoder(
                 for (attempt in 1..2) {
                     var mc: MediaCodec? = null
                     try {
-                        val format = MediaFormat.createVideoFormat(mimeType, configWidth, configHeight)
-                        format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(configData))
-                        format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-                        try { format.setInteger("priority", 0) } catch (_: Exception) {}
+                        val format = MediaFormat.createVideoFormat(mimeType, width, height).apply {
+                            setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                            try { setInteger("priority", 0) } catch (_: Exception) {}
+                            formatCustomizer(this)
+                        }
 
                         mc = MediaCodec.createByCodecName(decoderName)
                         mc.configure(format, surface, null, 0)
                         try { mc.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT) }
                         catch (_: Exception) {}
                         mc.start()
-                        try { mc.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT) }
-                        catch (_: Exception) {}
                         codec = mc
                         activeDecoderName = decoderName
                         configured = true
@@ -634,108 +671,24 @@ class MediaCodecDecoder(
                 Log.e(TAG, "Failed to configure any decoder for $mimeType", lastError)
                 DiagnosticLog.e("video", "All decoders failed for $mimeType: ${lastError?.message}")
                 _decoderState.value = DecoderState.ERROR
+                onResult(false)
                 return
             }
 
             firstFrameRendered = false
-            // Set outputFormatReceived based on whether we have reliable dimensions.
-            // When SPS was successfully parsed, dimensions match the stream — no
-            // resolution transition will occur, so INFO_OUTPUT_FORMAT_CHANGED may
-            // not fire on some Qualcomm H.265 decoders. Waiting for it would block
-            // rendering indefinitely, showing green (uninitialized surface).
-            // Only gate on format change when using fallback dimensions.
-            outputFormatReceived = (spsDims != null)
             decodeStartTimeMs = System.currentTimeMillis()
-            renderingEnabled = false  // Don't render until first IDR is queued
 
             // Start output drain thread
             startDrainThread(codec!!)
 
             _decoderState.value = DecoderState.DECODING
             updateStats(activeDecoderName)
-
-            // Replay cached IDR if one arrived while codec was configuring
-            val cachedIdr = cachedIdrFrame
-            if (cachedIdr != null) {
-                Log.i(TAG, "Replaying cached IDR after codec configure (${cachedIdr.data.size} bytes)")
-                cachedIdrFrame = null
-                handleKeyframe(cachedIdr)
-            }
+            onResult(true)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to configure codec", e)
             DiagnosticLog.e("video", "Failed to configure codec: ${e.message}")
             _decoderState.value = DecoderState.ERROR
-        }
-    }
-
-    /**
-     * Configure codec without SPS/PPS (for VP9/AV1 which are self-describing).
-     * MediaCodec auto-detects codec parameters from the bitstream.
-     */
-    private fun configureCodecDirect(width: Int, height: Int) {
-        releaseCodec()
-        _decoderState.value = DecoderState.CONFIGURING
-
-        try {
-            val candidates = CodecSelector.decoderCandidates(mimeType)
-            if (candidates.isEmpty()) {
-                Log.e(TAG, "No decoder available for $mimeType")
-                DiagnosticLog.e("video", "No decoder available for $mimeType")
-                _decoderState.value = DecoderState.ERROR
-                return
-            }
-
-            Log.i(TAG, "Configuring codec direct: ${width}x${height} ($mimeType)")
-
-            var lastError: Throwable? = null
-            var configured = false
-            outer@ for (decoderName in candidates) {
-                for (attempt in 1..2) {
-                    var mc: MediaCodec? = null
-                    try {
-                        val format = MediaFormat.createVideoFormat(mimeType, width, height)
-                        format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-                        try { format.setInteger("priority", 0) } catch (_: Exception) {}
-
-                        mc = MediaCodec.createByCodecName(decoderName)
-                        mc.configure(format, surface, null, 0)
-                        mc.start()
-                        try { mc.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT) }
-                        catch (_: Exception) {}
-                        codec = mc
-                        activeDecoderName = decoderName
-                        configured = true
-                        Log.i(TAG, "Codec configured direct: $decoderName ($mimeType, attempt=$attempt)")
-                        DiagnosticLog.i("video", "Codec selected: $decoderName ($mimeType)")
-                        break@outer
-                    } catch (e: Throwable) {
-                        lastError = e
-                        Log.w(TAG, "Codec direct init failed ($decoderName attempt $attempt): ${e.message}")
-                        try { mc?.reset() } catch (_: Throwable) {}
-                        try { mc?.release() } catch (_: Throwable) {}
-                    }
-                }
-            }
-
-            if (!configured) {
-                Log.e(TAG, "Failed to configure any decoder for $mimeType (direct)", lastError)
-                DiagnosticLog.e("video", "All decoders failed for $mimeType: ${lastError?.message}")
-                _decoderState.value = DecoderState.ERROR
-                return
-            }
-
-            firstFrameRendered = false
-            decodeStartTimeMs = System.currentTimeMillis()
-            renderingEnabled = true  // VP9/AV1: no reference dependency, render immediately
-
-            startDrainThread(codec!!)
-
-            _decoderState.value = DecoderState.DECODING
-            updateStats(activeDecoderName)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to configure codec direct", e)
-            DiagnosticLog.e("video", "Failed to configure codec: ${e.message}")
-            _decoderState.value = DecoderState.ERROR
+            onResult(false)
         }
     }
 
@@ -797,7 +750,7 @@ class MediaCodecDecoder(
             DiagnosticLog.e("video", "Codec error queuing frame: ${e.message}, recoverable=${e.isRecoverable}")
             if (!e.isRecoverable) {
                 _decoderState.value = DecoderState.ERROR
-                _needsKeyframe = true
+                _needsKeyframeFlow.value = true
             }
         } catch (e: IllegalStateException) {
             Log.w(TAG, "Codec in bad state", e)
@@ -859,7 +812,7 @@ class MediaCodecDecoder(
                     Log.e(TAG, "Codec error in drain loop", e)
                     DiagnosticLog.e("video", "Codec error in drain loop: ${e.message}")
                     _decoderState.value = DecoderState.ERROR
-                    _needsKeyframe = true
+                    _needsKeyframeFlow.value = true
                     break
                 } catch (e: IllegalStateException) {
                     // Codec was released
@@ -966,7 +919,7 @@ class MediaCodecDecoder(
             height = pendingHeight ?: current.height,
             codecResets = codecResetCount,
             bitrateKbps = currentBitrateKbps,
-            waitingForKeyframe = _needsKeyframe,
+            waitingForKeyframe = _needsKeyframeFlow.value,
         )
     }
 }

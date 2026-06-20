@@ -201,9 +201,7 @@ sealed class ControlMessage {
 enum class ConnectionState {
     DISCONNECTED,
     CONNECTING,
-    CONNECTED,        // AA handshake complete
-    PHONE_CONNECTED,  // Phone AA session active, channels opening
-    STREAMING         // Video/audio flowing
+    CONNECTED        // AA handshake complete
 }
 
 enum class AudioPurpose {

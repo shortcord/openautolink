@@ -58,7 +58,7 @@ When modifying **app Kotlin** code that interacts with the JNI layer, **read the
 - **Min SDK 32**, target SDK 36, Kotlin, Jetpack Compose, DataStore preferences
 - **MVVM** with `StateFlow` — ViewModels own UI state, repositories own data
 - Uses aasdk v1.6 AA protocol via JNI (C++ native library)
-- **No USB adapter support** — WiFi only (Car Hotspot or Phone Hotspot)
+- **WiFi only** (Car Hotspot or Phone Hotspot) — USB AOA v2 transport is planned but not yet implemented
 
 ### C++ JNI Layer (`app/src/main/cpp/`)
 
@@ -164,15 +164,11 @@ See [bridge/sbc/BUILD.md](bridge/sbc/BUILD.md) for SBC setup. CI builds via `.gi
 | [docs/architecture.md](docs/architecture.md) | Component island architecture, milestone plan |
 | [docs/protocol.md](docs/protocol.md) | OAL wire protocol specification (bridge-mode only) |
 | [docs/embedded-knowledge.md](docs/embedded-knowledge.md) | Hardware lessons (MUST READ before touching video/audio/VHAL) |
-| [docs/networking.md](docs/networking.md) | Three-network architecture (bridge-mode only) |
-| [bridge/sbc/BUILD.md](bridge/sbc/BUILD.md) | SBC build and deployment guide (bridge-mode only) |
-| [docs/bridge-update.md](docs/bridge-update.md) | Bridge OTA update system — as-built design, flow, security |
-| [docs/testing.md](docs/testing.md) | Local testing with AAOS emulator + SBC + remote diagnostics |
+| [docs/networking.md](docs/networking.md) | Active app/companion networking architecture |
+| [docs/testing.md](docs/testing.md) | Local testing with AAOS emulator + remote diagnostics |
 ## Pitfalls
 
-- **CRLF**: Shell scripts must be LF (enforced via `.gitattributes eol=lf`). Windows `scp` from PowerShell injects CRLF. **`sed`, `tr`, and `perl` over SSH from PowerShell cannot fix this** — PowerShell re-injects `\r` into escape sequences. Use the Python binary-I/O method in [bridge/sbc/BUILD.md](bridge/sbc/BUILD.md#manually-copying-files-from-windows). The `deploy-bridge.ps1` script handles this automatically.
 - **aasdk v1.6**: Phone requires v1.6 ServiceConfiguration format. v1.1 format = silent ignore
-- **BlueZ SAP plugin** (bridge-mode only): Steals RFCOMM channel 8. Disable with `--noplugin=sap`
 - **MediaCodec lifecycle**: Must release codec on pause, recreate on resume. Surface changes require full codec reset
 - **AudioTrack purpose routing**: See [docs/embedded-knowledge.md](docs/embedded-knowledge.md) — the 5-slot decode_type/audioType matching is non-obvious
 - **No ADB on GM cars**: GM locks ADB on production head units. Use the app's built-in Remote Log Server (TCP port 6555) for live log streaming from a laptop on the same network. See [docs/testing.md](docs/testing.md#10-remote-diagnostics-no-adb-required)

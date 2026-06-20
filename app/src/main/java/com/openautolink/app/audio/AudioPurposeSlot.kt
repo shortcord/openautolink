@@ -3,7 +3,6 @@ package com.openautolink.app.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
-import android.os.Process
 import android.util.Log
 import com.openautolink.app.transport.AudioPurpose
 import java.util.concurrent.ExecutorService
@@ -12,13 +11,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * One AudioTrack + AudioRingBuffer per audio purpose.
- * Based on app_v1's production-proven approach:
- * - Ring buffer absorbs TCP/network jitter (500ms capacity)
- * - Dedicated URGENT_AUDIO thread drains at steady rate
- * - Pre-fill 80ms before calling AudioTrack.play()
- * - Non-blocking writes with residual tracking (no data loss)
- * - Steady 10ms write pacing from dedicated thread
+ * One AudioTrack per audio purpose, with a dedicated write thread
+ * for non-blocking PCM output and AAC decode-on-demand.
  */
 class AudioPurposeSlot(
     val purpose: AudioPurpose,
@@ -85,10 +79,19 @@ class AudioPurposeSlot(
         active.set(true)
         startedAtNs = System.nanoTime()
 
-        // Create per-purpose write thread with URGENT_AUDIO priority
+        // Create per-purpose write thread with URGENT_AUDIO priority.
+        // Priority is set at thread creation time (not lazily on first feedPcm)
+        // so every write runs at the correct priority from the start.
         writeExecutor = Executors.newSingleThreadExecutor { r ->
             Thread(r, "AudioWrite-$purpose").apply {
                 isDaemon = true
+                priority = Thread.MAX_PRIORITY
+                // Also set the Android-specific audio thread priority
+                try {
+                    android.os.Process.setThreadPriority(
+                        android.os.Process.THREAD_PRIORITY_URGENT_AUDIO
+                    )
+                } catch (_: Exception) {}
             }
         }
 
@@ -130,19 +133,19 @@ class AudioPurposeSlot(
      * Submit PCM to per-purpose write thread. Non-blocking for the caller —
      * the blocking AudioTrack.write() runs on this slot's own thread,
      * so one purpose stalling doesn't block others.
+     *
+     * Double-checks [active] inside the executor to handle the race where
+     * [stop] is called between the outer check and the executor executing.
      */
     fun feedPcm(data: ByteArray) {
         if (!active.get()) return
         val executor = writeExecutor ?: return
 
         executor.execute {
-            val track = audioTrack ?: return@execute
+            // Re-check active inside the executor thread — [stop] may have
+            // fired between the outer check and this runnable executing.
             if (!active.get()) return@execute
-
-            // Set thread priority on first call (executor reuses one thread)
-            if (totalWriteCalls == 0L) {
-                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-            }
+            val track = audioTrack ?: return@execute
 
             // Measure inter-frame gap
             val nowNs = System.nanoTime()
@@ -173,7 +176,8 @@ class AudioPurposeSlot(
     }
 
     fun setVolume(volume: Float) {
-        audioTrack?.setVolume(volume.coerceIn(0f, 1f))
+        // Volume may exceed 1.0 from coordinator gain (user offset up to +100 → 2.0x)
+        audioTrack?.setVolume(volume.coerceIn(0f, 2f))
     }
 
     /**
@@ -205,8 +209,6 @@ class AudioPurposeSlot(
     }
 
     val isActive: Boolean get() = active.get()
-    val ringBufferAvailable: Int get() = 0
-    val ringBufferCapacity: Int get() = 0
 
     /**
      * How long this slot has been idle (no frames received) in ms.

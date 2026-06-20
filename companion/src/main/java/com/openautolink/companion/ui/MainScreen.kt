@@ -768,18 +768,8 @@ private fun BtDevicePickerDialog(
 
 // ── WiFi Auto-Start Config ─────────────────────────────────────────────
 
-@SuppressLint("MissingPermission")
-private fun currentSsid(context: Context): String? {
-    return try {
-        val wm = context.applicationContext
-            .getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-        @Suppress("DEPRECATION")
-        val raw = wm.connectionInfo?.ssid?.replace("\"", "") ?: return null
-        if (raw.isBlank() || raw == "<unknown ssid>") null else raw
-    } catch (_: Exception) {
-        null
-    }
-}
+private fun currentSsid(context: Context): String? =
+    com.openautolink.companion.CompanionPrefs.currentSsid(context)
 
 @SuppressLint("MissingPermission")
 private fun scanSsids(context: Context): List<String> {

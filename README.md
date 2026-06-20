@@ -95,7 +95,6 @@ The phone is the access point; the car is a client. Single-phone optimized — s
 
 - **Car Hotspot mode (default)** — phones join the car's built-in WiFi like home WiFi. Multi-phone support: switch the active phone with one tap, no hotspot toggling
 - **Phone Hotspot mode** — phone is the AP, car is the client. Simpler single-phone fallback for cars without a built-in hotspot
-- **USB cable support** — AOA v2 direct connection for wired setups
 - **aasdk v1.6 native protocol** — battle-tested C++ AA library via JNI, not a reimplementation
 - **EV battery data in Android Auto** — battery %, range, fuel type, charge port forwarded from VHAL into AA. Google Maps shows battery level alongside navigation
 - **H.264, H.265, and VP9** video with auto-negotiation. Up to 4K with AA Developer Mode
@@ -291,11 +290,10 @@ The original architecture used an SBC (single-board computer) running a C++ brid
 | Doc | Purpose |
 |-----|---------|
 | [Architecture](docs/architecture.md) | Component islands and system structure |
+| [Networking](docs/networking.md) | Active app/companion networking architecture |
 | [Embedded Knowledge](docs/embedded-knowledge.md) | Lessons from real-car testing — **read before touching video/audio/VHAL** |
-| [USB Transport Plan](docs/usb-transport-plan.md) | AOA v2 design and implementation |
 | [Local Testing](docs/testing.md) | Emulator testing, remote diagnostics, no-ADB debugging |
-| [Wire Protocol](docs/protocol.md) | OAL protocol details (bridge-mode reference) |
-| [Multi-Phone Plan](docs/multi-phone.md) | Multi-phone design over Car Hotspot (TCP/mDNS) |
+| [USB Transport Plan](docs/usb-transport-plan.md) | AOA v2 design (planned, not yet implemented) |
 | [HUR Feature Comparison](docs/headunit-revived-feature-comparison.md) | Feature parity tracking vs Headunit Revived |
 
 ## Known Issues

@@ -18,7 +18,8 @@ class TcpSyslogSink(
         private const val WRITE_TIMEOUT_MS = 3000
     }
 
-    private val monitor = java.lang.Object()
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+    private val monitor = java.lang.Object()  // wait/notifyAll needed for producer-consumer
     private val queue = LinkedList<ByteArray>()
     private var queuedBytes = 0
     private var droppedMessages = 0L
@@ -78,7 +79,8 @@ class TcpSyslogSink(
             } ?: continue
 
             try {
-                if (socket == null || socket!!.isClosed || !socket!!.isConnected) {
+                val s = socket
+                if (s == null || s.isClosed || !s.isConnected) {
                     socket = Socket().apply {
                         soTimeout = WRITE_TIMEOUT_MS
                         connect(InetSocketAddress(HOST, PORT), CONNECT_TIMEOUT_MS)

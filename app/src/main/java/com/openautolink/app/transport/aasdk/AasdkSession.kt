@@ -98,6 +98,13 @@ class AasdkSession(
     private var explicitStop = false
 
     /**
+     * When true, onSessionStopped skips auto-reconnect. Set by [SessionManager.onIgnitionOffOrLocked].
+     * Cleared when [clearIgnitionBlock] is called ([SessionManager.onIgnitionOn]).
+     */
+    @Volatile
+    private var reconnectBlockedByIgnition = false
+
+    /**
      * Generation counter incremented by each [startTcp] call. [onSessionStopped]
      * captures the generation at the time it fires and only schedules a reconnect
      * if the generation matches the current one. This prevents stale callbacks
@@ -220,6 +227,21 @@ class AasdkSession(
         startTcp()
     }
 
+    /**
+     * Blocks auto-reconnect until [clearIgnitionBlock] is called.
+     * Used when the car ignition turns OFF to prevent wasted TCP attempts on dead WiFi.
+     */
+    fun blockReconnectByIgnition() {
+        reconnectBlockedByIgnition = true
+        OalLog.i(TAG, "Auto-reconnect blocked by ignition OFF")
+    }
+
+    /** Clears the ignition block so normal auto-reconnect can resume. */
+    fun clearIgnitionBlock() {
+        reconnectBlockedByIgnition = false
+        OalLog.i(TAG, "Auto-reconnect unblocked (ignition ON)")
+    }
+
     // -- Input forwarding (app → phone via native aasdk) --
 
     fun sendTouchEvent(action: Int, pointerId: Int, x: Float, y: Float, pointerCount: Int) {
@@ -237,10 +259,6 @@ class AasdkSession(
     fun sendGpsLocation(lat: Double, lon: Double, alt: Double,
                         speed: Float, bearing: Float, timestampMs: Long) {
         AasdkNative.nativeSendGpsLocation(lat, lon, alt, speed, bearing, timestampMs)
-    }
-
-    fun sendVehicleSensor(sensorType: Int, data: ByteArray) {
-        AasdkNative.nativeSendVehicleSensor(sensorType, data)
     }
 
     fun sendSpeed(speedMmPerS: Int) = AasdkNative.nativeSendSpeed(speedMmPerS)
@@ -295,9 +313,6 @@ class AasdkSession(
 
         // Phone-initiated user exit (Exit button in AA app launcher) — treat
         // as an explicit stop so the auto-reconnect path below is skipped.
-        // MainActivity will background the app in response to the
-        // PhoneDisconnected(reason) message; user re-launches our icon to come
-        // back, which starts a fresh session.
         if (reason == "byebye_user_selection") {
             explicitStop = true
         }
@@ -312,9 +327,8 @@ class AasdkSession(
             _controlMessages.emit(ControlMessage.PhoneDisconnected(reason = reason))
 
             // Auto-reconnect if this wasn't an explicit stop (e.g., car sleep/wake,
-            // phone disconnect). Restart the transport connector after a delay so it
-            // retries connecting once WiFi comes back.
-            if (!explicitStop) {
+            // phone disconnect). Also skip when ignition is OFF (car shut down).
+            if (!explicitStop && !reconnectBlockedByIgnition) {
                 consecutiveReconnectFailures++
                 _reconnectAttempt.value = consecutiveReconnectFailures
 
@@ -519,7 +533,7 @@ class AasdkSession(
     }
 
     override fun onAudioFocusRequest(focusType: Int) {
-        // Audio focus is handled by the native layer — always grants
+        // No-op: audio focus is handled by the native layer which always grants
     }
 
     /** Coalesce native onError log spam: at most one log per second per

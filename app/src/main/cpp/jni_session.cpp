@@ -166,12 +166,27 @@ void JniSession::releaseEnv(bool attached)
     if (attached) jvm_->DetachCurrentThread();
 }
 
+// Clears a pending JNI exception after a Kotlin callback call.
+// Without this, a single Kotlin-side throw poisons the JNI environment
+// for all subsequent calls on the same thread.
+static void clearJniException(JNIEnv* env, const char* context)
+{
+    if (env && env->ExceptionCheck()) {
+        LOGE("JNI exception in %s; clearing", context);
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+    }
+}
+
 void JniSession::callVoidCallback(jmethodID method)
 {
     if (!callbackRef_ || !method) return;
     bool attached;
     JNIEnv* env = getEnv(attached);
-    if (env) env->CallVoidMethod(callbackRef_, method);
+    if (env) {
+        env->CallVoidMethod(callbackRef_, method);
+        clearJniException(env, "callVoidCallback");
+    }
     releaseEnv(attached);
 }
 
@@ -310,8 +325,11 @@ void JniSession::start(JNIEnv* env, jobject transportPipe, jobject callback, job
                 JNIEnv* env = getEnv(attached);
                 if (env) {
                     jstring msg = env->NewStringUTF(e.what());
-                    env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
-                    env->DeleteLocalRef(msg);
+                    if (msg) {
+                        env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
+                        clearJniException(env, "onError(handshake)");
+                        env->DeleteLocalRef(msg);
+                    }
                 }
                 releaseEnv(attached);
             }
@@ -432,8 +450,11 @@ void JniSession::stop()
         if (env) {
             if (!sessionStoppedFired_.exchange(true) && cbMethods_.onSessionStopped) {
                 jstring reason = env->NewStringUTF(stopReason_.c_str());
-                env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
-                env->DeleteLocalRef(reason);
+                if (reason) {
+                    env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, reason);
+                    clearJniException(env, "onSessionStopped(stop)");
+                    env->DeleteLocalRef(reason);
+                }
             }
             env->DeleteGlobalRef(callbackRef_);
             callbackRef_ = nullptr;
@@ -567,6 +588,7 @@ void JniSession::onAudioFocusRequest(
         if (env) {
             env->CallVoidMethod(callbackRef_, cbMethods_.onAudioFocusRequest,
                                 static_cast<jint>(request.audio_focus_type()));
+            clearJniException(env, "onAudioFocusRequest");
         }
         releaseEnv(attached);
     }
@@ -629,7 +651,9 @@ void JniSession::onByeByeResponse(
     const aap_protobuf::service::control::message::ByeByeResponse& /*response*/)
 {
     LOGI("ByeBye response received");
-    stop();
+    // stop() joins ioThread_, so detach to avoid self-join if called from the strand
+    auto self = shared_from_this();
+    std::thread([self] { self->stop(); }).detach();
 }
 
 void JniSession::onBatteryStatusNotification(
@@ -644,6 +668,7 @@ void JniSession::onBatteryStatusNotification(
         if (env) {
             env->CallVoidMethod(callbackRef_, cbMethods_.onPhoneBattery,
                                 static_cast<jint>(level), static_cast<jboolean>(charging));
+            clearJniException(env, "onPhoneBattery");
         }
         releaseEnv(attached);
     }
@@ -661,6 +686,7 @@ void JniSession::onVoiceSessionRequest(
         if (env) {
             env->CallVoidMethod(callbackRef_, cbMethods_.onVoiceSession,
                                 static_cast<jboolean>(active));
+            clearJniException(env, "onVoiceSession");
         }
         releaseEnv(attached);
     }
@@ -743,8 +769,11 @@ void JniSession::triggerAbort(const std::string& reason)
         JNIEnv* env = getEnv(attached);
         if (env) {
             jstring r = env->NewStringUTF(reason.c_str());
-            env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, r);
-            env->DeleteLocalRef(r);
+            if (r) {
+                env->CallVoidMethod(callbackRef_, cbMethods_.onSessionStopped, r);
+                clearJniException(env, "onSessionStopped(triggerAbort)");
+                env->DeleteLocalRef(r);
+            }
         }
         releaseEnv(attached);
     }
@@ -793,8 +822,11 @@ void JniSession::reportChannelError(const char* channelName, const aasdk::error:
         JNIEnv* env = getEnv(attached);
         if (env) {
             jstring msg = env->NewStringUTF(e.what());
-            env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
-            env->DeleteLocalRef(msg);
+            if (msg) {
+                env->CallVoidMethod(callbackRef_, cbMethods_.onError, msg);
+                clearJniException(env, "onError(reportChannelError)");
+                env->DeleteLocalRef(msg);
+            }
         }
         releaseEnv(attached);
     }
@@ -836,6 +868,7 @@ void JniSession::onMediaChannelSetupRequest(
         if (env) {
             env->CallVoidMethod(callbackRef_, cbMethods_.onVideoCodecConfigured,
                                 static_cast<jint>(request.type()));
+            clearJniException(env, "onVideoCodecConfigured");
         }
         releaseEnv(attached);
     }
@@ -981,6 +1014,7 @@ void JniSession::onMediaWithTimestampIndication(
                                 static_cast<jint>(sdrConfig_.videoWidth),
                                 static_cast<jint>(sdrConfig_.videoHeight),
                                 flags);
+            clearJniException(env, "onVideoFrame");
             env->DeleteLocalRef(jdata);
         }
         releaseEnv(attached);
@@ -1978,6 +2012,7 @@ void JniSession::dispatchAudioFrame(const uint8_t* data, size_t size,
                             jdata, static_cast<jint>(purpose),
                             static_cast<jint>(sampleRate),
                             static_cast<jint>(channels));
+        clearJniException(env, "onAudioFrame");
         env->DeleteLocalRef(jdata);
     }
     releaseEnv(attached);
@@ -1991,6 +2026,7 @@ void JniSession::dispatchMicRequest(bool open)
     if (env) {
         env->CallVoidMethod(callbackRef_, cbMethods_.onMicRequest,
                             static_cast<jboolean>(open));
+        clearJniException(env, "onMicRequest");
     }
     releaseEnv(attached);
 }
@@ -2003,6 +2039,7 @@ void JniSession::dispatchNavStatus(int status)
     if (env) {
         env->CallVoidMethod(callbackRef_, cbMethods_.onNavigationStatus,
                             static_cast<jint>(status));
+        clearJniException(env, "onNavigationStatus");
     }
     releaseEnv(attached);
 }
@@ -2024,6 +2061,7 @@ void JniSession::dispatchNavTurn(const std::string& maneuver, const std::string&
         }
         env->CallVoidMethod(callbackRef_, cbMethods_.onNavigationTurn,
                             jmaneuver, jroad, jicon);
+        clearJniException(env, "onNavigationTurn");
         env->DeleteLocalRef(jmaneuver);
         env->DeleteLocalRef(jroad);
         if (jicon) env->DeleteLocalRef(jicon);
@@ -2045,6 +2083,7 @@ void JniSession::dispatchNavDistance(int distanceMeters, int etaSeconds,
                             static_cast<jint>(distanceMeters),
                             static_cast<jint>(etaSeconds),
                             jdist, junit);
+        clearJniException(env, "onNavigationDistance");
         if (jdist) env->DeleteLocalRef(jdist);
         if (junit) env->DeleteLocalRef(junit);
     }
@@ -2094,6 +2133,7 @@ void JniSession::dispatchNavFullState(
             static_cast<jlong>(timeToArrivalSeconds),
             static_cast<jint>(destDistanceMeters),
             jdestDistDisplay, jdestDistUnit);
+        clearJniException(env, "onNavigationFullState");
 
         if (jmaneuver) env->DeleteLocalRef(jmaneuver);
         if (jroad) env->DeleteLocalRef(jroad);
@@ -2130,6 +2170,7 @@ void JniSession::dispatchMediaMetadata(const std::string& title, const std::stri
         }
         env->CallVoidMethod(callbackRef_, cbMethods_.onMediaMetadata,
                             jtitle, jartist, jalbum, jart);
+        clearJniException(env, "onMediaMetadata");
         env->DeleteLocalRef(jtitle);
         env->DeleteLocalRef(jartist);
         env->DeleteLocalRef(jalbum);
@@ -2147,6 +2188,7 @@ void JniSession::dispatchMediaPlayback(int state, long long positionMs)
         env->CallVoidMethod(callbackRef_, cbMethods_.onMediaPlayback,
                             static_cast<jint>(state),
                             static_cast<jlong>(positionMs));
+        clearJniException(env, "onMediaPlayback");
     }
     releaseEnv(attached);
 }
@@ -2160,6 +2202,7 @@ void JniSession::dispatchPhoneStatus(int signalStrength, int callState)
         env->CallVoidMethod(callbackRef_, cbMethods_.onPhoneStatus,
                             static_cast<jint>(signalStrength),
                             static_cast<jint>(callState));
+        clearJniException(env, "onPhoneStatus");
     }
     releaseEnv(attached);
 }

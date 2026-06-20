@@ -1,8 +1,13 @@
 # USB Mode
 
-Last reviewed against code: May 3, 2026.
+> **Planned — not yet implemented.** The `transport/usb/` package does not exist
+> in the current codebase. This document describes the design for a future USB
+> AOA v2 transport. The current implementation supports WiFi transport only
+> (Car Hotspot and Phone Hotspot modes).
 
-OpenAutoLink supports a direct wired Android Auto transport over USB. In this mode the AAOS app talks to the phone through Android Open Accessory v2 (AOA v2) and then feeds that byte stream into the same native `aasdk` session used by the WiFi transports.
+Last reviewed against code: June 19, 2026.
+
+OpenAutoLink plans to support a direct wired Android Auto transport over USB. In this mode the AAOS app would talk to the phone through Android Open Accessory v2 (AOA v2) and then feed that byte stream into the same native `aasdk` session used by the WiFi transports.
 
 ## Overview
 
@@ -57,11 +62,11 @@ flowchart LR
 
 | Component | File | Responsibility |
 |------|------|----------------|
-| Attach entrypoint | `app/src/main/java/com/openautolink/app/transport/usb/UsbAttachedActivity.kt` | Receives `USB_DEVICE_ATTACHED` intents and forwards relevant devices to `MainActivity` when USB transport is selected. |
+| Attach entrypoint | *(not yet implemented)* `transport/usb/UsbAttachedActivity.kt` | Would receive `USB_DEVICE_ATTACHED` intents and forward relevant devices to `MainActivity` when USB transport is selected. |
 | Activity handoff | `app/src/main/java/com/openautolink/app/MainActivity.kt` | On attach intent, checks `directTransport == "usb"` and calls `ProjectionViewModel.connect()`. |
-| Transport orchestration | `app/src/main/java/com/openautolink/app/transport/usb/UsbConnectionManager.kt` | Owns attach/detach handling, permission requests, AOA switch, endpoint selection, device tracking, and UI-visible USB status. |
-| AOA handshake | `app/src/main/java/com/openautolink/app/transport/usb/UsbAccessoryMode.kt` | Sends `GET_PROTOCOL`, `SEND_STRING`, and `START` control transfers to enter accessory mode. |
-| USB stream wrapper | `app/src/main/java/com/openautolink/app/transport/usb/UsbTransportPipe.kt` | Exposes bulk endpoints as blocking streams for the native transport pipe. |
+| Transport orchestration | *(not yet implemented)* `transport/usb/UsbConnectionManager.kt` | Would own attach/detach handling, permission requests, AOA switch, endpoint selection, device tracking, and UI-visible USB status. |
+| AOA handshake | *(not yet implemented)* `transport/usb/UsbAccessoryMode.kt` | Would send `GET_PROTOCOL`, `SEND_STRING`, and `START` control transfers to enter accessory mode. |
+| USB stream wrapper | *(not yet implemented)* `transport/usb/UsbTransportPipe.kt` | Would expose bulk endpoints as blocking streams for the native transport pipe. |
 | Native AA transport | `app/src/main/java/com/openautolink/app/transport/aasdk/AasdkSession.kt` | Starts `aasdk` on top of the USB stream pair and handles reconnect/backoff. |
 | Session orchestration | `app/src/main/java/com/openautolink/app/session/SessionManager.kt` | Maps USB transport state into app session state and handles sleep/wake recovery. |
 

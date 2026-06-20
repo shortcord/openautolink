@@ -1,5 +1,10 @@
 # Bridge OTA Update System — As-Built Documentation
 
+> **Bridge-mode only.** This document describes the OTA update system for the
+> SBC bridge binary. The current app/companion architecture does not use a
+> bridge — the AAOS app runs aasdk natively via JNI. This document is preserved
+> for the `bridge-mode` branch.
+
 ## Overview
 
 The bridge binary (`openautolink-headless`) on the SBC is automatically updated by the car app over the existing OAL TCP control channel. This allows bridge-only releases without requiring users to rebuild their AAB or touch the SBC.

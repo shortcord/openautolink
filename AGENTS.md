@@ -5,7 +5,7 @@
 - OpenAutoLink is a wireless Android Auto project for AAOS head units.
 - The active Android code is split into two Gradle modules:
   - `app/` — AAOS head-unit app, Kotlin/Compose plus aasdk JNI C++.
-  - `companion/` — phone-side Android app, Kotlin/Compose and Nearby Connections.
+  - `companion/` — phone-side Android app, Kotlin/Compose, TCP server for AA byte pipe relay.
 - Native Android integration lives in `app/src/main/cpp/`; always check the Kotlin and C++ sides together when changing JNI-facing behavior.
 - `external/opencardev-aasdk/` is a forked aasdk submodule used by the app. Do not leave dirty submodule edits; commit them in the submodule and update the parent pointer when that is intentional.
 - `external/opencardev-openauto/` is reference material unless a task explicitly says otherwise.

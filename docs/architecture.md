@@ -1,6 +1,6 @@
 # OpenAutoLink Architecture
 
-Last reviewed against code: May 12, 2026.
+Last reviewed against code: June 19, 2026.
 
 OpenAutoLink is currently a bridgeless AAOS projection stack. The AAOS app runs the Android Auto head-unit protocol through aasdk C++ in-process via JNI. The phone companion app does not decode or interpret Android Auto; it starts a local Android Auto wireless session on the phone and relays that byte stream to the car app.
 
@@ -36,14 +36,14 @@ The TCP socket between the apps is a single bidirectional AA byte pipe. Video, a
 
 | Area | Current code | Responsibility |
 |------|--------------|----------------|
-| Discovery | `transport/PhoneDiscovery.kt`, `transport/direct/TcpConnector.kt` | Finds a running companion with mDNS, UDP broadcast, TCP identity probes, gateway fallback, or manual IP. |
+| Discovery | `transport/PhoneDiscovery.kt`, `transport/hotspot/TcpConnector.kt` | Finds a running companion with mDNS, UDP broadcast, TCP identity probes, gateway fallback, or manual IP. |
 | AA transport | `transport/aasdk/AasdkSession.kt`, `AasdkTransportPipe.kt` | Wraps a connected `Socket` or USB pipe as blocking streams for native aasdk. |
 | AA protocol | `app/src/main/cpp/jni_session.*`, `jni_channel_handlers.*`, `jni_transport.*` | Version exchange, TLS/auth, service discovery response, heartbeat, channel handling, JNI callbacks. |
 | Session orchestration | `session/SessionManager.kt` | Connects transport output to video, audio, input, navigation, diagnostics, VHAL, GNSS, and IMU islands. |
 | Media | `video/`, `audio/` | Decodes projected video, plays per-purpose audio, captures mic audio when requested. |
 | Vehicle/input forwarding | `input/` | Sends touch, steering wheel, GNSS, IMU, and VHAL sensor data to the phone through aasdk. |
 
-`AasdkSession.transportMode` supports `"hotspot"`, `"nearby"`, and `"usb"` in code, but the app/companion workflow reviewed here is the TCP/hotspot path. Nearby transport code remains in the tree, while the phone companion UI currently forces stale Nearby preferences back to TCP.
+`AasdkSession.transportMode` supports `"hotspot"` and `"usb"` in code, but the app/companion workflow reviewed here is the TCP/hotspot path. USB transport code is planned but not yet implemented (no `transport/usb/` package exists in the current tree).
 
 ### Phone Companion (`companion/`)
 
@@ -205,7 +205,7 @@ The current islands still follow the original independence rule: public flows an
 |--------|---------|-------|
 | Transport | `com.openautolink.app.transport` | Discovery, TCP connector, aasdk session, optional USB/Nearby code. |
 | Video | `com.openautolink.app.video` | `MediaCodecDecoder` consumes `VideoFrame` callbacks from aasdk. It waits for codec config/keyframes and can request IDR. |
-| Audio | `com.openautolink.app.audio` | Per-purpose `AudioTrack` playback, ring buffers, mic capture. |
+| Audio | `com.openautolink.app.audio` | Per-purpose `AudioTrack` playback, AAC-LC decode, mic capture. |
 | Input | `com.openautolink.app.input` | Touch scaling, steering wheel mapping, GNSS, VHAL, IMU, EV energy model sensors. |
 | Navigation | `com.openautolink.app.navigation` | Maneuver state, icon rendering, cluster integration. |
 | UI | `com.openautolink.app.ui` | Compose projection, settings, diagnostics, phone chooser. |
@@ -242,6 +242,8 @@ sequenceDiagram
     TH->>GM: NavigationManager trip relay
 ```
 
+Both session paths share common state-collection and retry logic via `ClusterSessionDelegate`, which debounces `ClusterNavigationState.state` at 200ms and retries `navigationStarted()`/`updateTrip()` failures up to 3 times with 2s exponential backoff.
+
 There are two service session paths:
 
 | Path | Code | Purpose |
@@ -260,4 +262,4 @@ GM Templates Host also attempts to insert maneuver icons into `content://com.goo
 - Android NSD is the supported platform mechanism for local DNS-SD discovery and resolution. OpenAutoLink uses `_openautolink._tcp` plus TXT attributes for stable phone identity. Official docs: <https://developer.android.com/develop/connectivity/wifi/use-nsd>.
 - The companion uses a foreground service because keeping the phone-side listener and proxy alive is user-visible connection work. Android foreground services are required to show a notification. Official docs: <https://developer.android.com/develop/background-work/services/fgs>.
 - `CarWifiManager` uses `WifiNetworkSpecifier`, which Android documents as the API for requesting a Wi-Fi network and, on supported devices, local-only concurrent connections. Official docs: <https://developer.android.com/reference/android/net/wifi/WifiNetworkSpecifier>.
-- Nearby Connections remains in code as a legacy/alternate transport. Google documents stream payload handling and peer-to-peer strategies, including `P2P_POINT_TO_POINT`, but the companion currently forces its UI transport mode to TCP. Official docs: <https://developers.google.com/nearby/connections/android/exchange-data> and <https://developers.google.com/android/reference/com/google/android/gms/nearby/connection/Strategy>.
+- Nearby Connections remains in code as a legacy/alternate transport, but the companion no longer uses it. The companion UI forces transport mode to TCP.

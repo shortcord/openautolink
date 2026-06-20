@@ -35,60 +35,64 @@ object NalParser {
     fun h265NalType(nalByte: Byte): Int = (nalByte.toInt() shr 1) and 0x3F
 
     /**
-     * Find the first NAL unit start code in the data and return the NAL type.
+     * Find the first NAL unit start code and return the NAL type byte (raw).
      * Start codes: 0x00 0x00 0x00 0x01 or 0x00 0x00 0x01
      * Returns -1 if no start code found.
      */
-    fun findFirstH264NalType(data: ByteArray, offset: Int = 0): Int {
+    private fun findFirstNalTypeByte(data: ByteArray, offset: Int = 0): Int {
         val pos = findStartCode(data, offset)
         if (pos < 0) return -1
         val nalBytePos = pos + startCodeLength(data, pos)
         if (nalBytePos >= data.size) return -1
-        return h264NalType(data[nalBytePos])
+        return data[nalBytePos].toInt() and 0xFF
     }
 
-    /**
-     * Find the first NAL unit start code in H.265 data and return the NAL type.
-     * Returns -1 if no start code found.
-     */
+    fun findFirstH264NalType(data: ByteArray, offset: Int = 0): Int {
+        val raw = findFirstNalTypeByte(data, offset)
+        return if (raw < 0) -1 else raw and 0x1F
+    }
+
     fun findFirstH265NalType(data: ByteArray, offset: Int = 0): Int {
-        val pos = findStartCode(data, offset)
-        if (pos < 0) return -1
-        val nalBytePos = pos + startCodeLength(data, pos)
-        if (nalBytePos >= data.size) return -1
-        return h265NalType(data[nalBytePos])
+        val raw = findFirstNalTypeByte(data, offset)
+        return if (raw < 0) -1 else (raw shr 1) and 0x3F
     }
 
     /**
      * Check if H.264 data contains codec config (SPS or PPS).
      */
     fun isH264CodecConfig(data: ByteArray): Boolean {
-        val nalType = findFirstH264NalType(data)
-        return nalType == H264_NAL_SPS || nalType == H264_NAL_PPS
+        val raw = findFirstNalTypeByte(data)
+        if (raw < 0) return false
+        val h264Type = raw and 0x1F
+        return h264Type == H264_NAL_SPS || h264Type == H264_NAL_PPS
     }
 
     /**
      * Check if H.264 data is an IDR (keyframe).
      */
     fun isH264Idr(data: ByteArray): Boolean {
-        val nalType = findFirstH264NalType(data)
-        return nalType == H264_NAL_IDR
+        val raw = findFirstNalTypeByte(data)
+        return raw >= 0 && (raw and 0x1F) == H264_NAL_IDR
     }
 
     /**
      * Check if H.265 data contains codec config (VPS, SPS, or PPS).
      */
     fun isH265CodecConfig(data: ByteArray): Boolean {
-        val nalType = findFirstH265NalType(data)
-        return nalType == H265_NAL_VPS || nalType == H265_NAL_SPS || nalType == H265_NAL_PPS
+        val raw = findFirstNalTypeByte(data)
+        if (raw < 0) return false
+        val h265Type = (raw shr 1) and 0x3F
+        return h265Type == H265_NAL_VPS || h265Type == H265_NAL_SPS || h265Type == H265_NAL_PPS
     }
 
     /**
      * Check if H.265 data is an IDR (keyframe).
      */
     fun isH265Idr(data: ByteArray): Boolean {
-        val nalType = findFirstH265NalType(data)
-        return nalType == H265_NAL_IDR_W_RADL || nalType == H265_NAL_IDR_N_LP
+        val raw = findFirstNalTypeByte(data)
+        if (raw < 0) return false
+        val h265Type = (raw shr 1) and 0x3F
+        return h265Type == H265_NAL_IDR_W_RADL || h265Type == H265_NAL_IDR_N_LP
     }
 
     /**
@@ -97,15 +101,7 @@ object NalParser {
      */
     fun collectH264NalTypes(data: ByteArray): List<Int> {
         val types = mutableListOf<Int>()
-        var offset = 0
-        while (offset < data.size) {
-            val pos = findStartCode(data, offset)
-            if (pos < 0) break
-            val nalBytePos = pos + startCodeLength(data, pos)
-            if (nalBytePos >= data.size) break
-            types.add(h264NalType(data[nalBytePos]))
-            offset = nalBytePos + 1
-        }
+        forEachNalUnit(data) { nalBytePos -> types.add(h264NalType(data[nalBytePos])) }
         return types
     }
 
@@ -114,54 +110,73 @@ object NalParser {
      */
     fun collectH265NalTypes(data: ByteArray): List<Int> {
         val types = mutableListOf<Int>()
-        var offset = 0
-        while (offset < data.size) {
-            val pos = findStartCode(data, offset)
-            if (pos < 0) break
-            val nalBytePos = pos + startCodeLength(data, pos)
-            if (nalBytePos >= data.size) break
-            types.add(h265NalType(data[nalBytePos]))
-            offset = nalBytePos + 1
-        }
+        forEachNalUnit(data) { nalBytePos -> types.add(h265NalType(data[nalBytePos])) }
         return types
     }
 
     /**
      * Check if data contains an IDR NAL unit (H.264 type 5, or H.265 types 19/20).
      * Scans all NAL units in the buffer — handles combined SPS+PPS+IDR frames.
+     *
+     * Optimized: checks the raw NAL byte directly rather than calling separate
+     * H.264 and H.265 type extractors on every NAL unit.
      */
     fun containsIdr(data: ByteArray): Boolean {
+        var found = false
+        forEachNalUnit(data) { nalBytePos ->
+            val raw = data[nalBytePos].toInt() and 0xFF
+            // H.264 IDR = type 5 → raw byte & 0x1F == 5
+            // H.265 IDR_W_RADL = type 19 → (raw >> 1) & 0x3F == 19
+            // H.265 IDR_N_LP = type 20 → (raw >> 1) & 0x3F == 20
+            if ((raw and 0x1F) == H264_NAL_IDR || ((raw shr 1) and 0x3F) == H265_NAL_IDR_W_RADL || ((raw shr 1) and 0x3F) == H265_NAL_IDR_N_LP) {
+                found = true; return@forEachNalUnit
+            }
+        }
+        return found
+    }
+
+    /**
+     * Iterate over each NAL unit in the data, calling [action] with the
+     * position of the NAL type byte (immediately after the start code).
+     * Stops early if [action] calls `return@forEachNalUnit`.
+     */
+    inline fun forEachNalUnit(data: ByteArray, action: (nalBytePos: Int) -> Unit) {
         var offset = 0
         while (offset < data.size) {
             val pos = findStartCode(data, offset)
             if (pos < 0) break
             val nalBytePos = pos + startCodeLength(data, pos)
             if (nalBytePos >= data.size) break
-            val h264Type = h264NalType(data[nalBytePos])
-            if (h264Type == H264_NAL_IDR) return true
-            // Also check H.265 IDR types
-            val h265Type = h265NalType(data[nalBytePos])
-            if (h265Type == H265_NAL_IDR_W_RADL || h265Type == H265_NAL_IDR_N_LP) return true
+            action(nalBytePos)
             offset = nalBytePos + 1
         }
-        return false
     }
 
     /**
      * Find the position of the next start code (0x000001 or 0x00000001) starting from offset.
      * Returns -1 if not found.
+     *
+     * Optimization: when a non-zero byte is found, skip past it immediately since
+     * start codes must begin with 0x00. When a single 0x00 is followed by non-zero,
+     * skip both bytes (two consecutive zeros are required for any start code).
      */
     fun findStartCode(data: ByteArray, offset: Int = 0): Int {
         if (data.size < offset + 3) return -1
         var i = offset
-        while (i < data.size - 2) {
-            if (data[i] == 0.toByte() && data[i + 1] == 0.toByte()) {
-                if (data[i + 2] == 1.toByte()) return i // 3-byte start code
-                if (i < data.size - 3 && data[i + 2] == 0.toByte() && data[i + 3] == 1.toByte()) {
-                    return i // 4-byte start code
+        val scanLimit = data.size - 3
+        while (i < scanLimit) {
+            if (data[i] == 0.toByte()) {
+                if (data[i + 1] == 0.toByte()) {
+                    if (data[i + 2] == 1.toByte()) return i
+                    if (i < data.size - 3 && data[i + 2] == 0.toByte() && data[i + 3] == 1.toByte()) {
+                        return i
+                    }
                 }
+                // data[i]==0 but data[i+1]!=0 — skip past the zero
+                i += 2
+            } else {
+                i++
             }
-            i++
         }
         return -1
     }
@@ -185,21 +200,14 @@ object NalParser {
      * Returns Pair(width, height) or null if SPS cannot be parsed.
      */
     fun parseSpsResolution(data: ByteArray): Pair<Int, Int>? {
-        // Find SPS NAL
-        var offset = 0
-        while (offset < data.size) {
-            val pos = findStartCode(data, offset)
-            if (pos < 0) break
-            val scLen = startCodeLength(data, pos)
-            val nalBytePos = pos + scLen
-            if (nalBytePos >= data.size) break
-            val nalType = h264NalType(data[nalBytePos])
-            if (nalType == H264_NAL_SPS) {
-                return parseSpsNal(data, nalBytePos)
+        var result: Pair<Int, Int>? = null
+        forEachNalUnit(data) { nalBytePos ->
+            if (h264NalType(data[nalBytePos]) == H264_NAL_SPS) {
+                result = parseSpsNal(data, nalBytePos)
+                return@forEachNalUnit
             }
-            offset = nalBytePos + 1
         }
-        return null
+        return result
     }
 
     private fun parseSpsNal(data: ByteArray, nalStart: Int): Pair<Int, Int>? {
@@ -326,20 +334,14 @@ object NalParser {
      * Returns Pair(width, height) or null if SPS cannot be parsed.
      */
     fun parseH265SpsResolution(data: ByteArray): Pair<Int, Int>? {
-        var offset = 0
-        while (offset < data.size) {
-            val pos = findStartCode(data, offset)
-            if (pos < 0) break
-            val scLen = startCodeLength(data, pos)
-            val nalBytePos = pos + scLen
-            if (nalBytePos + 1 >= data.size) break
-            val nalType = h265NalType(data[nalBytePos])
-            if (nalType == H265_NAL_SPS) {
-                return parseH265SpsNal(data, nalBytePos)
+        var result: Pair<Int, Int>? = null
+        forEachNalUnit(data) { nalBytePos ->
+            if (nalBytePos + 1 < data.size && h265NalType(data[nalBytePos]) == H265_NAL_SPS) {
+                result = parseH265SpsNal(data, nalBytePos)
+                return@forEachNalUnit
             }
-            offset = nalBytePos + 1
         }
-        return null
+        return result
     }
 
     private fun parseH265SpsNal(data: ByteArray, nalStart: Int): Pair<Int, Int>? {

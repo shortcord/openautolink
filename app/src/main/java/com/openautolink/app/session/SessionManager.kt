@@ -526,7 +526,7 @@ class SessionManager(
                 ctx,
                 sendMessage = { vd ->
                     val session = aasdkSession ?: return@VehicleDataForwarderImpl
-                    vd.speedKmh?.let { session.sendSpeed((it / 3.6f * 1000).toInt()) }
+                    vd.speedKmh?.let { session.sendSpeed(kmhToMmPerS(it)) }
                     // Edge-trigger the low-cadence properties so each
                     // transition fires the phone exactly once. Spamming
                     // nightMode 10×/s while it's steady-state may have
@@ -1356,6 +1356,7 @@ class SessionManager(
     fun onIgnitionOffOrLocked() {
         OalLog.i(TAG, "Ignition OFF or LOCK — suppressing auto-reconnect")
         DiagnosticLog.i("transport", "Ignition OFF/LOCK: suppressing auto-reconnect")
+        aasdkSession?.blockReconnectByIgnition()
     }
 
     /**
@@ -1367,6 +1368,7 @@ class SessionManager(
     fun onIgnitionOn(gearPosition: Int) {
         OalLog.i(TAG, "Ignition ON (gear=$gearPosition) — resuming normal reconnect logic")
         DiagnosticLog.i("transport", "Ignition ON: resuming auto-reconnect")
+        aasdkSession?.clearIgnitionBlock()
     }
 
     /**
@@ -1646,7 +1648,7 @@ class SessionManager(
             is ControlMessage.Button -> session.sendKeyEvent(message.keycode, message.down)
             is ControlMessage.KeyframeRequest -> session.requestKeyframe()
             is ControlMessage.VehicleData -> {
-                message.speedKmh?.let { session.sendSpeed((it / 3.6f * 1000).toInt()) }
+                message.speedKmh?.let { session.sendSpeed(kmhToMmPerS(it)) }
                 // Same edge-trigger discipline as the inline sendMessage path
                 // in start() — see lastSent* fields. Necessary because both
                 // paths share these state vars; without it, manual injections
@@ -1663,9 +1665,6 @@ class SessionManager(
                 message.driving?.let {
                     if (lastSentDriving != it) { lastSentDriving = it; session.sendDrivingStatus(it) }
                 }
-            }
-            is ControlMessage.Gnss -> {
-                // GPS forwarded via LocationListener, not control messages
             }
             else -> {}
         }
@@ -2032,3 +2031,6 @@ class SessionManager(
         )
     }
 }
+
+/** Convert km/h to mm/s (the unit the AA protocol uses for speed). */
+private fun kmhToMmPerS(kmh: Float): Int = (kmh / 3.6f * 1000).toInt()

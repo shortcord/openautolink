@@ -11,24 +11,16 @@ import androidx.car.app.model.ActionStrip
 import androidx.car.app.model.Template
 import androidx.car.app.navigation.NavigationManager
 import androidx.car.app.navigation.NavigationManagerCallback
-import androidx.car.app.navigation.model.Destination
 import androidx.car.app.navigation.model.MessageInfo
 import androidx.car.app.navigation.model.NavigationTemplate
-import androidx.car.app.navigation.model.Step
-import androidx.car.app.navigation.model.TravelEstimate
-import androidx.car.app.navigation.model.Trip
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.openautolink.app.navigation.ManeuverState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import java.time.Duration
-import java.time.ZonedDateTime
 
 /**
  * GM AAOS cluster session — relays Trip data via NavigationManager.updateTrip().
@@ -53,8 +45,6 @@ class ClusterMainSession : Session() {
         )
 
         private const val ARRIVAL_TIMEOUT_MS = 10_000L
-        private const val RETRY_DELAY_MS = 2_000L
-        private const val MAX_RETRY_ATTEMPTS = 3
 
         @Volatile
         private var primarySession: ClusterMainSession? = null
@@ -80,13 +70,13 @@ class ClusterMainSession : Session() {
     }
 
     private var navigationManager: NavigationManager? = null
-    private var scope: CoroutineScope? = null
-    private var isNavigating = false
     private var isPrimary = false
-    private var hasSeenActiveNav = false
     private var arrivalTimeoutJob: Job? = null
-    private var retryJob: Job? = null
     private var sessionRegistered = false
+    private val sessionScope = CoroutineScope(Dispatchers.Main)
+
+    // Shared navigation delegate — handles state collection, debounce, retry
+    private lateinit var delegate: ClusterSessionDelegate
 
     override fun onCreateScreen(intent: Intent): Screen {
         if (!sessionRegistered) {
@@ -105,6 +95,24 @@ class ClusterMainSession : Session() {
             return RelayScreen(carContext)
         }
 
+        delegate = ClusterSessionDelegate(
+            navigationManager = { navigationManager },
+            carContext = { carContext },
+        ).apply {
+            onManeuverUpdate = { maneuver -> handleManeuverUpdate(maneuver) }
+            onNavCleared = {
+                retryJob?.cancel()
+                retryJob = null
+                arrivalTimeoutJob?.cancel()
+                arrivalTimeoutJob = null
+            }
+            onIdle = {
+                retryJob?.cancel()
+                retryJob = null
+            }
+            setup()
+        }
+
         try {
             navigationManager = carContext.getCarService(NavigationManager::class.java)
             Log.i(TAG, "NavigationManager obtained")
@@ -115,15 +123,12 @@ class ClusterMainSession : Session() {
         navigationManager?.setNavigationManagerCallback(object : NavigationManagerCallback {
             override fun onStopNavigation() {
                 Log.i(TAG, "onStopNavigation callback from Templates Host")
-                // Do NOT set isNavigating = false — GM's Templates Host may call this
-                // spuriously. We only end navigation on explicit nav_state_clear or
-                // arrival timeout. Re-calling navigationStarted() to re-assert nav.
                 try {
                     navigationManager?.navigationStarted()
                     Log.i(TAG, "Re-asserted navigationStarted() after onStopNavigation")
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to re-assert navigationStarted(): ${e.message}")
-                    isNavigating = false
+                    delegate.isNavigating = false
                 }
             }
 
@@ -136,17 +141,10 @@ class ClusterMainSession : Session() {
         // Templates Host to create ClusterTurnCardActivity on the cluster display.
         try {
             navigationManager?.navigationStarted()
-            isNavigating = true
+            delegate.isNavigating = true
             Log.i(TAG, "navigationStarted() called")
         } catch (e: Exception) {
             Log.w(TAG, "navigationStarted() failed: ${e.message}")
-        }
-
-        val sessionScope = CoroutineScope(Dispatchers.Main)
-        scope = sessionScope
-
-        sessionScope.launch {
-            collectNavigationState()
         }
 
         lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -156,19 +154,17 @@ class ClusterMainSession : Session() {
                     Log.i(TAG, "Primary session destroyed")
                     DiagnosticLog.i("cluster", "ClusterMainSession destroyed")
                     arrivalTimeoutJob?.cancel()
-                    retryJob?.cancel()
-                    retryJob = null
+                    arrivalTimeoutJob = null
                     clearManeuverIconCache()
-                    if (isNavigating) {
+                    if (delegate.isNavigating) {
                         try {
                             navigationManager?.navigationEnded()
                         } catch (e: Exception) {
                             Log.e(TAG, "navigationEnded() failed on destroy: ${e.message}")
                         }
-                        isNavigating = false
+                        delegate.isNavigating = false
                     }
-                    scope?.cancel()
-                    scope = null
+                    delegate.cleanup()
                     navigationManager = null
                 }
                 if (sessionRegistered) {
@@ -182,160 +178,24 @@ class ClusterMainSession : Session() {
         return RelayScreen(carContext)
     }
 
-    private suspend fun collectNavigationState() {
-        var debounceJob: Job? = null
-
-        ClusterNavigationState.state.collectLatest { maneuver ->
-            debounceJob?.cancel()
-            debounceJob = scope?.launch {
-                delay(200)
-                processStateUpdate(maneuver)
-            }
-        }
-    }
-
-    private fun processStateUpdate(maneuver: ManeuverState?) {
-        processStateUpdate(maneuver, retryAttempt = 0)
-    }
-
-    private fun processStateUpdate(maneuver: ManeuverState?, retryAttempt: Int) {
-        val navManager = navigationManager ?: return
-
-        if (maneuver != null) {
-            hasSeenActiveNav = true
-
-            if (!isNavigating) {
-                try {
-                    navManager.navigationStarted()
-                    isNavigating = true
-                    Log.i(TAG, "navigationStarted() (re-start)")
-                } catch (e: Exception) {
-                    Log.e(TAG, "navigationStarted() failed: ${e.message}")
-                    DiagnosticLog.e("cluster", "navigationStarted() failed: ${e.message}")
-                    scheduleRetry(maneuver, retryAttempt)
-                    return
-                }
-            }
-
-            try {
-                val trip = buildTrip(maneuver)
-                navManager.updateTrip(trip)
-                DiagnosticLog.d("cluster", "Trip: ${maneuver.type} dist=${maneuver.distanceMeters}m road=${maneuver.roadName} lanes=${maneuver.lanes?.size ?: 0}")
-            } catch (e: Exception) {
-                Log.e(TAG, "updateTrip() failed: ${e.message}")
-                DiagnosticLog.e("cluster", "updateTrip() failed: ${e.message}")
-                scheduleRetry(maneuver, retryAttempt)
-                return
-            }
-
-            retryJob?.cancel()
-            retryJob = null
-
-            // Arrival timeout for terminal maneuver types
-            val maneuverName = maneuver.type.name.lowercase()
-            if (TERMINAL_TYPES.any { maneuverName.contains(it) }) {
-                if (arrivalTimeoutJob?.isActive != true) {
-                    arrivalTimeoutJob = scope?.launch {
-                        delay(ARRIVAL_TIMEOUT_MS)
-                        if (isNavigating) {
-                            Log.i(TAG, "Arrival timeout — ending navigation")
-                            try { navManager.navigationEnded() } catch (_: Exception) {}
-                            isNavigating = false
-                        }
+    private fun handleManeuverUpdate(maneuver: ManeuverState) {
+        // Arrival timeout for terminal maneuver types
+        val maneuverName = maneuver.type.name.lowercase()
+        if (TERMINAL_TYPES.any { maneuverName.contains(it) }) {
+            if (arrivalTimeoutJob?.isActive != true) {
+                arrivalTimeoutJob = sessionScope.launch {
+                    delay(ARRIVAL_TIMEOUT_MS)
+                    if (delegate.isNavigating) {
+                        Log.i(TAG, "Arrival timeout — ending navigation")
+                        try { navigationManager?.navigationEnded() } catch (_: Exception) {}
+                        delegate.isNavigating = false
                     }
                 }
-            } else {
-                arrivalTimeoutJob?.cancel()
-                arrivalTimeoutJob = null
             }
-        } else if (isNavigating && hasSeenActiveNav) {
-            retryJob?.cancel()
-            retryJob = null
+        } else {
             arrivalTimeoutJob?.cancel()
             arrivalTimeoutJob = null
-            Log.i(TAG, "navigationEnded() — nav cleared")
-            try {
-                navManager.navigationEnded()
-            } catch (e: Exception) {
-                Log.e(TAG, "navigationEnded() failed: ${e.message}")
-            }
-            isNavigating = false
-        } else {
-            retryJob?.cancel()
-            retryJob = null
         }
-    }
-
-    private fun scheduleRetry(maneuver: ManeuverState, retryAttempt: Int) {
-        if (retryAttempt >= MAX_RETRY_ATTEMPTS) {
-            Log.w(TAG, "Cluster update retry limit reached")
-            return
-        }
-        retryJob?.cancel()
-        retryJob = scope?.launch {
-            delay(RETRY_DELAY_MS)
-            if (ClusterNavigationState.state.value == maneuver) {
-                processStateUpdate(maneuver, retryAttempt + 1)
-            }
-        }
-    }
-
-    private fun buildTrip(maneuver: ManeuverState): Trip {
-        val tripBuilder = Trip.Builder()
-        val eta = ZonedDateTime.now().plus(
-            Duration.ofSeconds((maneuver.etaSeconds ?: 0).toLong())
-        )
-
-        val maneuverObj = buildManeuver(maneuver, carContext)
-        val stepBuilder = Step.Builder()
-        stepBuilder.setManeuver(maneuverObj)
-        // Use cue text if available (richer instruction from modern proto), else road name
-        val cueText = maneuver.cue ?: maneuver.roadName
-        cueText?.let { stepBuilder.setCue(it) }
-        maneuver.roadName?.let { stepBuilder.setRoad(it) }
-
-        // Add lane guidance from modern NavigationState
-        maneuver.lanes?.let { laneInfoList ->
-            if (laneInfoList.isNotEmpty()) {
-                for (lane in buildLanes(laneInfoList)) {
-                    stepBuilder.addLane(lane)
-                }
-            }
-        }
-
-        val distance = toDistance(
-            maneuver.distanceMeters ?: 0,
-            ClusterNavigationState.distanceUnits,
-            maneuver.displayDistance,
-            maneuver.displayDistanceUnit
-        )
-        val stepEstimate = TravelEstimate.Builder(distance, eta).build()
-        tripBuilder.addStep(stepBuilder.build(), stepEstimate)
-
-        // Add destination info when available (address + arrival ETA + remaining distance)
-        maneuver.destination?.let { destAddress ->
-            val destBuilder = Destination.Builder()
-            destBuilder.setName(destAddress)
-            destBuilder.setAddress(destAddress)
-
-            val destDistance = toDistance(
-                maneuver.destDistanceMeters ?: maneuver.distanceMeters ?: 0,
-                ClusterNavigationState.distanceUnits,
-                maneuver.destDistanceDisplay,
-                maneuver.destDistanceUnit
-            )
-            val destEta = if (maneuver.timeToArrivalSeconds != null && maneuver.timeToArrivalSeconds > 0) {
-                ZonedDateTime.now().plus(Duration.ofSeconds(maneuver.timeToArrivalSeconds))
-            } else {
-                eta
-            }
-            val destEstimate = TravelEstimate.Builder(destDistance, destEta).build()
-            tripBuilder.addDestination(destBuilder.build(), destEstimate)
-        }
-
-        tripBuilder.setLoading(false)
-
-        return tripBuilder.build()
     }
 
     private class RelayScreen(carContext: CarContext) : Screen(carContext) {

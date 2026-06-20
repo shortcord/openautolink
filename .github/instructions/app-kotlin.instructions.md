@@ -20,7 +20,7 @@ When implementing or modifying any app code that communicates with the JNI layer
 - **MVVM** with StateFlow — ViewModels expose `StateFlow<UiState>`, composables collect
 - **Repository pattern** — interfaces in domain layer, implementations in data layer
 - **Component islands** — each island (transport, video, audio, input, ui, navigation, session) is an independent package with a public API surface and internal implementation
-- **Dependency injection** — constructor injection, no service locators. Manual DI or Hilt
+- **Dependency injection** — constructor injection, no service locators. Manual DI
 
 ## Package Structure
 ```
@@ -32,7 +32,10 @@ com.openautolink.app/
 ├── ui/          # Compose screens + ViewModels
 ├── navigation/  # Nav state + cluster
 ├── session/     # Session orchestrator
-└── di/          # Dependency injection setup
+├── data/        # DataStore preferences, EV profiles, known phones
+├── cluster/     # Cluster service sessions and delegate
+├── media/       # Media browser and session
+└── diagnostics/ # Logging, telemetry, remote debug tools
 ```
 
 ## Coroutines

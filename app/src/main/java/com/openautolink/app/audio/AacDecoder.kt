@@ -1,7 +1,6 @@
 package com.openautolink.app.audio
 
 import android.media.MediaCodec
-import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaCodecInfo
 import android.util.Log
@@ -75,11 +74,14 @@ class AacDecoder(
         codec = null
     }
 
-    /** Queue an AAC frame for decoding. Non-blocking, drops if queue full. */
+    /**
+     * Queue an AAC frame for decoding. Non-blocking.
+     * When the queue is full, drops the oldest frame to make room — keeps the
+     * decoder fed with the most recent data rather than blocking the caller.
+     */
     fun queueAacFrame(data: ByteArray) {
         if (!inputQueue.offer(data)) {
-            // Queue full — drop oldest and add new
-            inputQueue.poll()
+            inputQueue.poll() // drop oldest
             inputQueue.offer(data)
         }
     }
@@ -89,7 +91,8 @@ class AacDecoder(
         val bufferInfo = MediaCodec.BufferInfo()
 
         while (running) {
-            // Feed input
+            // Feed input — poll with a short timeout so we also service
+            // the output drain regularly when no input is arriving.
             val aacFrame = inputQueue.poll(5, TimeUnit.MILLISECONDS)
             if (aacFrame != null) {
                 val inputIndex = mc.dequeueInputBuffer(DEQUEUE_TIMEOUT_US)
@@ -101,9 +104,11 @@ class AacDecoder(
                 }
             }
 
-            // Drain output
+            // Drain all available output — dequeueOutputBuffer with 0 timeout
+            // since we already waited above. This avoids unnecessary spinning
+            // when no output is ready.
             while (running) {
-                val outputIndex = mc.dequeueOutputBuffer(bufferInfo, DEQUEUE_TIMEOUT_US)
+                val outputIndex = mc.dequeueOutputBuffer(bufferInfo, 0)
                 if (outputIndex >= 0) {
                     val outputBuffer = mc.getOutputBuffer(outputIndex) ?: break
                     if (bufferInfo.size > 0) {
@@ -114,7 +119,7 @@ class AacDecoder(
                     }
                     mc.releaseOutputBuffer(outputIndex, false)
                 } else {
-                    break // No more output available
+                    break // INFO_TRY_AGAIN_LATER — no more output available right now
                 }
             }
         }

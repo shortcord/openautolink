@@ -1,6 +1,11 @@
 # Embedded Knowledge — Lessons from carlink_native
 
-Hard-won knowledge from the original CPC200 adapter app. These findings were validated on real hardware (2024 Chevrolet Blazer EV, Raspberry Pi CM5, Khadas VIM4). **Read this before building any video, audio, or vehicle integration code.**
+Hard-won knowledge from the original CPC200 adapter app and subsequent OpenAutoLink development. These findings were validated on real hardware (2024 Chevrolet Blazer EV, Raspberry Pi CM5, Khadas VIM4). **Read this before building any video, audio, or vehicle integration code.**
+
+> **Note:** Sections marked with "Bridge (SBC)" describe the historical bridge-mode
+> setup. The current app/companion architecture runs aasdk natively on the AAOS
+> head unit via JNI — no SBC, no bridge. The VHAL, display, video, and audio
+> lessons remain fully relevant to the current architecture.
 
 ---
 
@@ -161,7 +166,7 @@ The bridge sends audio with `purpose` and `sample_rate`. Routing:
 ```
 purpose=MEDIA + 48kHz stereo    → Media AudioTrack (USAGE_MEDIA)
 purpose=NAVIGATION + 16kHz mono → Nav AudioTrack (USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
-purpose=ASSISTANT + 16kHz mono  → Siri AudioTrack (USAGE_ASSISTANT)
+purpose=ASSISTANT + 16kHz mono  → Assistant AudioTrack (USAGE_ASSISTANT)
 purpose=PHONE_CALL + 8kHz mono  → Call AudioTrack (USAGE_VOICE_COMMUNICATION)
 purpose=ALERT + 24kHz mono      → Alert AudioTrack (USAGE_NOTIFICATION_RINGTONE)
 ```
@@ -172,9 +177,9 @@ purpose=ALERT + 24kHz mono      → Alert AudioTrack (USAGE_NOTIFICATION_RINGTON
 - On underrun: fill with silence, don't stall. Track underrun count for diagnostics
 - Navigation audio automatically ducks media (AAOS handles via AudioAttributes) — no manual volume needed
 
-### Ring Buffer
-- 500ms capacity absorbs TCP jitter
-- Lock-free SPSC (single producer/single consumer) is sufficient — one TCP thread produces, one AudioTrack thread consumes
+### Per-Purpose Buffering
+- Each `AudioPurposeSlot` has its own dedicated single-thread executor and internal buffer
+- `AudioTrack.getMinBufferSize() * 4` minimum buffer per slot absorbs TCP jitter
 - On overflow: drop oldest (not newest). Freshest audio is always more relevant
 
 ### Microphone Capture
@@ -189,7 +194,7 @@ purpose=ALERT + 24kHz mono      → Alert AudioTrack (USAGE_NOTIFICATION_RINGTON
 
 ### Coordinate Scaling
 - Android MotionEvent coordinates are in screen space
-- Bridge expects video-space coordinates (the AA resolution, e.g. 1920×1080)
+- aasdk expects video-space coordinates (the AA resolution, e.g. 1920×1080)
 - Scale: `videoX = (screenX / surfaceWidth) * videoWidth`
 - Multi-touch: POINTER_DOWN (action 5) and POINTER_UP (action 6) with pointer index encoded in upper bits
 
@@ -207,16 +212,20 @@ purpose=ALERT + 24kHz mono      → Alert AudioTrack (USAGE_NOTIFICATION_RINGTON
 - Always check `isPropertyAvailable()` before subscribing — not all properties exist on all cars
 - Use reflection to access `android.car.Car` — the API isn't in the standard SDK
 - Properties include: speed, gear, turn signals, battery level, fuel level, tire pressure, ambient temp, steering angle
-- Send as JSON on control channel → bridge → aasdk SensorBatch → phone
+- Sent through aasdk sensor channel → phone
 
 ### GNSS
 - Android LocationManager → NMEA sentences ($GPRMC, $GPGGA)
 - Fine location permission required
-- Send raw NMEA strings to bridge → aasdk sensor channel → phone's Google Maps
+- Send raw NMEA strings through aasdk sensor channel → phone's Google Maps
 
 ---
 
-## Bridge (SBC) Lessons
+## Bridge (SBC) Lessons — Historical
+
+> The following sections describe the bridge-mode setup (SBC hardware running
+> aasdk C++ and BT scripts). These are preserved for reference but are not
+> part of the current app/companion architecture.
 
 ### Wireless AA Flow (End-to-End, PROVEN)
 ```
@@ -268,12 +277,12 @@ purpose=ALERT + 24kHz mono      → Alert AudioTrack (USAGE_NOTIFICATION_RINGTON
 
 ## What NOT to Carry Forward
 
-These patterns from carlink_native are **anti-patterns** for the new app:
+These patterns from carlink_native are **anti-patterns** for the current app:
 
-1. **CPC200 protocol** — the new app uses OAL protocol (JSON control + binary media). No magic headers, no inverted checksums, no heartbeat-gated writes
+1. **CPC200 protocol** — the current app uses aasdk natively via JNI. No custom framing, no magic headers, no heartbeat-gated writes
 2. **DeviceWrapper abstraction** — no USB adapter support. TCP only
 3. **God-object CarlinkManager** — replaced by Session orchestrator + independent islands
 4. **Fake USB identity in TcpDeviceWrapper** — no pretending TCP is USB
-5. **AdapterDriver init sequence** — no 50-packet handshake. Simple JSON `hello` exchange
+5. **AdapterDriver init sequence** — no 50-packet handshake. Simple aasdk version exchange
 6. **Heartbeat-gated writes** — TCP has proper flow control. Send when ready
-7. **Conditional UI for USB vs bridge mode** — there is only bridge mode
+7. **Conditional UI for USB vs bridge mode** — there is only direct mode (app/companion)

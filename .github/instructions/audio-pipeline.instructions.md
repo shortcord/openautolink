@@ -10,7 +10,7 @@ Audio from the bridge carries a `purpose` field. Each purpose gets its own pre-a
 |---------|----------------------|-------------|----------|-------------|
 | Media | USAGE_MEDIA | 48000 Hz | Stereo | Music, podcasts (default) |
 | Navigation | USAGE_ASSISTANCE_NAVIGATION_GUIDANCE | 16000 Hz | Mono | Turn-by-turn prompts |
-| Siri/Assistant | USAGE_ASSISTANT | 16000 Hz | Mono | Voice assistant active |
+| Assistant | USAGE_ASSISTANT | 16000 Hz | Mono | Voice assistant active |
 | Phone Call | USAGE_VOICE_COMMUNICATION | 8000 Hz | Mono | Active call |
 | Alert | USAGE_NOTIFICATION_RINGTONE | 24000 Hz | Mono | Incoming call ring, system alerts |
 
@@ -20,9 +20,9 @@ Audio from the bridge carries a `purpose` field. Each purpose gets its own pre-a
 - Set `THREAD_PRIORITY_URGENT_AUDIO` on playback threads
 - Buffer size: `AudioTrack.getMinBufferSize() * 2` minimum
 
-## Ring Buffer (Jitter Absorption)
-- 500ms ring buffer between TCP read thread and AudioTrack write thread
-- Lock-free SPSC (single-producer single-consumer) preferred
+## Per-Purpose Buffering
+- Each `AudioPurposeSlot` has its own dedicated single-thread executor and internal buffer
+- `AudioTrack.getMinBufferSize() * 4` minimum buffer per slot
 - On underrun: write silence, don't block. Log underrun count for diagnostics
 - On overflow: drop oldest samples (not newest)
 

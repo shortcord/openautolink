@@ -20,6 +20,4 @@ fun ConnectionState.toSessionState(): SessionState = when (this) {
     ConnectionState.DISCONNECTED -> SessionState.IDLE
     ConnectionState.CONNECTING -> SessionState.CONNECTING
     ConnectionState.CONNECTED -> SessionState.CONNECTED
-    ConnectionState.PHONE_CONNECTED -> SessionState.STREAMING
-    ConnectionState.STREAMING -> SessionState.STREAMING
 }

@@ -195,19 +195,17 @@ class TcpAdvertiser(
             try {
                 val proxy = AaProxy(
                     preConnectedSocket = null,
-                    listener = object : AaProxy.Listener {
-                        override fun onConnected() {
-                            CompanionLog.i(TAG, "AA flowing through warm proxy")
-                            aaConnectWatchdog?.cancel()
-                            aaConnectWatchdog = null
-                            aaLaunchAttempts = 0
-                            stateListener.onProxyConnected()
-                        }
-                        override fun onDisconnected() {
-                            CompanionLog.i(TAG, "Warm proxy disconnected")
-                            stateListener.onProxyDisconnected()
-                            isLaunching = false
-                        }
+                    onBridgeActive = {
+                        CompanionLog.i(TAG, "AA flowing through warm proxy")
+                        aaConnectWatchdog?.cancel()
+                        aaConnectWatchdog = null
+                        aaLaunchAttempts = 0
+                        stateListener.onProxyConnected()
+                    },
+                    onBridgeClosed = {
+                        CompanionLog.i(TAG, "Warm proxy disconnected")
+                        stateListener.onProxyDisconnected()
+                        isLaunching = false
                     },
                 )
                 activeProxy = proxy
@@ -269,10 +267,7 @@ class TcpAdvertiser(
                 if (r <= 0) break
                 read += r
             }
-            val isProbe = read == 5 &&
-                buf[0] == 'O'.code.toByte() && buf[1] == 'A'.code.toByte() &&
-                buf[2] == 'L'.code.toByte() && buf[3] == '?'.code.toByte() &&
-                buf[4] == '\n'.code.toByte()
+            val isProbe = read == 5 && String(buf, 0, read) == "OAL?\n"
             if (!isProbe) {
                 CompanionLog.d(TAG, "Identity probe from $remoteIp: bad/empty request ($read bytes)")
                 return
@@ -281,9 +276,7 @@ class TcpAdvertiser(
                 com.openautolink.companion.CompanionPrefs.NAME,
                 Context.MODE_PRIVATE,
             )
-            val phoneId = com.openautolink.companion.CompanionPrefs.getOrCreatePhoneId(prefs)
-            val friendlyName = com.openautolink.companion.CompanionPrefs.getFriendlyName(prefs)
-            val response = "OAL!$phoneId\t$friendlyName\n".toByteArray(Charsets.UTF_8)
+            val response = com.openautolink.companion.CompanionPrefs.identityResponseBytes(prefs)
             socket.getOutputStream().apply {
                 write(response)
                 flush()
@@ -337,9 +330,7 @@ class TcpAdvertiser(
                         com.openautolink.companion.CompanionPrefs.NAME,
                         Context.MODE_PRIVATE,
                     )
-                    val phoneId = com.openautolink.companion.CompanionPrefs.getOrCreatePhoneId(prefs)
-                    val friendlyName = com.openautolink.companion.CompanionPrefs.getFriendlyName(prefs)
-                    val reply = "OAL!$phoneId\t$friendlyName\n".toByteArray(Charsets.UTF_8)
+                    val reply = com.openautolink.companion.CompanionPrefs.identityResponseBytes(prefs)
                     val replyPacket = java.net.DatagramPacket(
                         reply, reply.size, packet.address, packet.port,
                     )
@@ -405,24 +396,21 @@ class TcpAdvertiser(
             try {
                 val proxy = AaProxy(
                     preConnectedSocket = carSocket,
-                    listener = object : AaProxy.Listener {
-                        override fun onConnected() {
-                            CompanionLog.i(TAG, "AA flowing through TCP proxy")
-                            // AA is alive — cancel the watchdog and reset retry counter.
-                            aaConnectWatchdog?.cancel()
-                            aaConnectWatchdog = null
-                            aaLaunchAttempts = 0
-                            stateListener.onProxyConnected()
-                        }
-
-                        override fun onDisconnected() {
-                            val remoteIp = carSocket.inetAddress?.hostAddress ?: "unknown"
-                            CompanionLog.i(TAG, "AA local proxy disconnected; car socket remote=$remoteIp")
-                            stateListener.onProxyDisconnected()
-                            // Re-accept next connection
-                            isLaunching = false
-                            CompanionLog.i(TAG, "TCP listener ready for next car connection on 0.0.0.0:$PORT")
-                        }
+                    onBridgeActive = {
+                        CompanionLog.i(TAG, "AA flowing through TCP proxy")
+                        // AA is alive — cancel the watchdog and reset retry counter.
+                        aaConnectWatchdog?.cancel()
+                        aaConnectWatchdog = null
+                        aaLaunchAttempts = 0
+                        stateListener.onProxyConnected()
+                    },
+                    onBridgeClosed = {
+                        val remoteIp = carSocket.inetAddress?.hostAddress ?: "unknown"
+                        CompanionLog.i(TAG, "AA local proxy disconnected; car socket remote=$remoteIp")
+                        stateListener.onProxyDisconnected()
+                        // Re-accept next connection
+                        isLaunching = false
+                        CompanionLog.i(TAG, "TCP listener ready for next car connection on 0.0.0.0:$PORT")
                     },
                 )
                 activeProxy = proxy

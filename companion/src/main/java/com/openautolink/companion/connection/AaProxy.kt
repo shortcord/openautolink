@@ -25,12 +25,9 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class AaProxy(
     private val preConnectedSocket: Socket? = null,
-    private val listener: Listener? = null,
+    private val onBridgeActive: (() -> Unit)? = null,
+    private val onBridgeClosed: (() -> Unit)? = null,
 ) {
-    interface Listener {
-        fun onConnected()
-        fun onDisconnected()
-    }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var serverSocket: ServerSocket? = null
@@ -113,7 +110,7 @@ class AaProxy(
                 activeCarSocket = carSocket
                 activeBridges.incrementAndGet()
                 bridgeActive = true
-                listener?.onConnected()
+                onBridgeActive?.invoke()
 
                 CompanionLog.i(TAG, "Bridge established: AA <-> Car")
 
@@ -133,7 +130,7 @@ class AaProxy(
                 runCatching { aaSocket.close() }
                 // Don't close carSocket here — let the TcpAdvertiser manage it via cleanup()
                 if (bridgeActive && activeBridges.decrementAndGet() <= 0) {
-                    listener?.onDisconnected()
+                onBridgeClosed?.invoke()
                 }
             }
         }
@@ -193,16 +190,18 @@ class AaProxy(
      */
     private fun sendDisconnectSignal() {
         val socket = activeCarSocket ?: return
-        Thread {
+        scope.launch {
             try {
                 CompanionLog.i(TAG, "Sending disconnect signal")
                 val signal = ByteArray(16) { 0xFF.toByte() }
-                socket.getOutputStream().write(signal)
-                socket.getOutputStream().flush()
+                withContext(Dispatchers.IO) {
+                    socket.getOutputStream().write(signal)
+                    socket.getOutputStream().flush()
+                }
             } catch (e: Exception) {
                 CompanionLog.w(TAG, "Disconnect signal failed: ${e.message}")
             }
-        }.start()
+        }
     }
 
     companion object {

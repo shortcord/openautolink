@@ -21,13 +21,14 @@ The app is a transparent window to Android Auto. The projection surface is the U
 Opened from overlay button or from ProjectionScreen when disconnected.
 
 **Sections:**
-- **Connection**: Bridge IP (text field), mDNS discover button, connection status indicator
-- **Video**: Codec picker (H.264/H.265/VP9), resolution tier (maps to 800×480 through 1920×1080), FPS (30/60)
-- **Audio**: (reserved — no user-configurable audio settings initially)
-- **Display**: Display mode picker (see Display Modes below), overlay button visibility toggles
-- **About**: App version, bridge firmware version (from hello), device info
-
-Changes that affect the bridge require "Apply & Reconnect" — bridge must restart its AA session with new quality parameters.
+- **Connection**: Connection mode, known phones, connection status indicator
+- **Video**: Codec picker (H.264/H.265/VP9), resolution tier, FPS (30/60), DPI, margins
+- **Audio**: Per-purpose volume offsets (media/navigation/assistant)
+- **Display**: Display mode picker (see Display Modes below), overlay button visibility toggles, custom viewport editor
+- **Input**: Custom key remapping
+- **EV**: EV energy model tuning (driving rate mode, profile database)
+- **Diagnostics**: System info, network probe, VHAL browser, remote log server, logs
+- **About**: App version, device info
 
 ## Display Modes
 
@@ -64,8 +65,9 @@ Developer-facing. Accessible from Settings or a long-press gesture.
 
 **Tabs:**
 - **System**: Android version, display resolution/DPI, SoC, available codecs with HW/SW indicator
-- **Network**: Bridge IP, control/video/audio TCP state, bytes transferred, latency
-- **Bridge**: Bridge-reported stats (from control channel `stats` messages)
+- **Network**: Interface IPs, ping/TCP probe, port scanner
+- **Car**: Live VHAL properties (speed, gear, battery, charge state, etc.)
+- **Debug**: Remote log server, ADB port scan, system properties, developer settings launcher
 - **Logs**: Scrollable log view with severity filter, export button
 
 ## AAOS Wide-Screen Layout Patterns

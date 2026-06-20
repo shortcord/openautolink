@@ -628,33 +628,36 @@ class VehicleDataForwarderImpl(
         sendMessage(data)
     }
 
-    private fun buildVehicleData(): ControlMessage.VehicleData {
-        // Resolve property IDs from VehiclePropertyIds (same runtime resolution as registration)
-        fun propId(name: String): Int? = resolveIntConstant("android.car.VehiclePropertyIds", name)
+    // Cached property IDs — resolved once via reflection at init time, reused
+    // on every throttledSend (~500ms) to avoid Class.forName + getField overhead.
+    private val cachedPropIds = mutableMapOf<String, Int?>()
 
-        val speedId = propId("PERF_VEHICLE_SPEED")
-        val gearId = propId("GEAR_SELECTION")
-        val parkBrakeId = propId("PARKING_BRAKE_ON")
-        val nightId = propId("NIGHT_MODE")
-        val evBatteryId = propId("EV_BATTERY_LEVEL")
-        val evCapId = propId("INFO_EV_BATTERY_CAPACITY")
-        val tempId = propId("ENV_OUTSIDE_TEMPERATURE")
-        val chargeRateId = propId("EV_BATTERY_INSTANTANEOUS_CHARGE_RATE")
-        val rangeId = propId("RANGE_REMAINING")
-        val rpmId = propId("PERF_ENGINE_RPM")
-        val portOpenId = propId("EV_CHARGE_PORT_OPEN")
-        val portConnId = propId("EV_CHARGE_PORT_CONNECTED")
-        val ignitionId = propId("IGNITION_STATE")
-        // Extended properties
-        val distUnitsId = propId("DISTANCE_DISPLAY_UNITS")
-        val chargeStateId = propId("EV_CHARGE_STATE")
-        val chargeTimeId = propId("EV_CHARGE_TIME_REMAINING")
-        val curCapId = propId("EV_CURRENT_BATTERY_CAPACITY")
-        val battTempId = propId("EV_BATTERY_AVERAGE_TEMPERATURE")
-        val chargeLimitId = propId("EV_CHARGE_PERCENT_LIMIT")
-        val chargeDrawId = propId("EV_CHARGE_CURRENT_DRAW_LIMIT")
-        val regenId = propId("EV_BRAKE_REGENERATION_LEVEL")
-        val stopModeId = propId("EV_STOPPING_MODE")
+    private fun cachedPropId(name: String): Int? =
+        cachedPropIds.getOrPut(name) { resolveIntConstant("android.car.VehiclePropertyIds", name) }
+
+    private fun buildVehicleData(): ControlMessage.VehicleData {
+        val speedId = cachedPropId("PERF_VEHICLE_SPEED")
+        val gearId = cachedPropId("GEAR_SELECTION")
+        val parkBrakeId = cachedPropId("PARKING_BRAKE_ON")
+        val nightId = cachedPropId("NIGHT_MODE")
+        val evBatteryId = cachedPropId("EV_BATTERY_LEVEL")
+        val evCapId = cachedPropId("INFO_EV_BATTERY_CAPACITY")
+        val tempId = cachedPropId("ENV_OUTSIDE_TEMPERATURE")
+        val chargeRateId = cachedPropId("EV_BATTERY_INSTANTANEOUS_CHARGE_RATE")
+        val rangeId = cachedPropId("RANGE_REMAINING")
+        val rpmId = cachedPropId("PERF_ENGINE_RPM")
+        val portOpenId = cachedPropId("EV_CHARGE_PORT_OPEN")
+        val portConnId = cachedPropId("EV_CHARGE_PORT_CONNECTED")
+        val ignitionId = cachedPropId("IGNITION_STATE")
+        val distUnitsId = cachedPropId("DISTANCE_DISPLAY_UNITS")
+        val chargeStateId = cachedPropId("EV_CHARGE_STATE")
+        val chargeTimeId = cachedPropId("EV_CHARGE_TIME_REMAINING")
+        val curCapId = cachedPropId("EV_CURRENT_BATTERY_CAPACITY")
+        val battTempId = cachedPropId("EV_BATTERY_AVERAGE_TEMPERATURE")
+        val chargeLimitId = cachedPropId("EV_CHARGE_PERCENT_LIMIT")
+        val chargeDrawId = cachedPropId("EV_CHARGE_CURRENT_DRAW_LIMIT")
+        val regenId = cachedPropId("EV_BRAKE_REGENERATION_LEVEL")
+        val stopModeId = cachedPropId("EV_STOPPING_MODE")
 
         val speed = speedId?.let { (currentValues[it] as? Float)?.let { v -> v * 3.6f } } // m/s → km/h
         val gearInt = gearId?.let { currentValues[it] as? Int }
@@ -691,16 +694,16 @@ class VehicleDataForwarderImpl(
         val evStoppingMode = stopModeId?.let { currentValues[it] as? Int }
 
         // Round-6 additions
-        val odometerKm = propId("PERF_ODOMETER")?.let { (currentValues[it] as? Float)?.let { v -> v / 1000f } }
-        val tirePressures = propId("TIRE_PRESSURE")?.let { id ->
+        val odometerKm = cachedPropId("PERF_ODOMETER")?.let { (currentValues[it] as? Float)?.let { v -> v / 1000f } }
+        val tirePressures = cachedPropId("TIRE_PRESSURE")?.let { id ->
             // TIRE_PRESSURE is per-area (one float per wheel). Per-area cache
             // entries arrive keyed by combined propId|areaId — until that
             // routing lands, surface whichever single scalar is present so
             // the diag screen can at least show one value.
             (currentValues[id] as? Float)?.let { listOf(it) }
         }
-        val absActive = propId("ABS_ACTIVE")?.let { currentValues[it] as? Boolean }
-        val tcActive = propId("TRACTION_CONTROL_ACTIVE")?.let { currentValues[it] as? Boolean }
+        val absActive = cachedPropId("ABS_ACTIVE")?.let { currentValues[it] as? Boolean }
+        val tcActive = cachedPropId("TRACTION_CONTROL_ACTIVE")?.let { currentValues[it] as? Boolean }
 
         // HistoryProvider — latest sample (or null when patched / unavailable).
         // Cached snapshot is refreshed by historyPoller every 5s; we just read.
@@ -794,13 +797,6 @@ class VehicleDataForwarderImpl(
         64 -> "3"    // GEAR_3
         128 -> "4"   // GEAR_4
         else -> "D"
-    }
-
-    private fun turnSignalToString(signal: Int): String = when (signal) {
-        0 -> "none"
-        1 -> "right"
-        2 -> "left"
-        else -> "none"
     }
 
     private fun cleanup() {

@@ -7,6 +7,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import com.openautolink.app.diagnostics.OalLog
+import com.openautolink.app.transport.OalProtocol
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,8 +42,8 @@ class TcpConnector(
 ) {
     companion object {
         private const val TAG = "OAL-TcpConn"
-        const val COMPANION_PORT = 5277
-        const val NSD_SERVICE_TYPE = "_openautolink._tcp"
+        const val COMPANION_PORT = OalProtocol.AA_PORT
+        const val NSD_SERVICE_TYPE = OalProtocol.MDNS_SERVICE_TYPE
         private const val CONNECT_TIMEOUT_MS = 5000
         /**
          * Retry configuration for connection attempts.
@@ -275,13 +276,7 @@ class TcpConnector(
         return false
     }
 
-    /** Format delay for logging. */
-    private fun formatDelay(ms: Long): String {
-        return when {
-            ms < 1000 -> "${ms}ms"
-            else -> "${ms / 1000}s"
-        }
-    }
+    private fun formatDelay(ms: Long): String = if (ms < 1000) "${ms}ms" else "${ms / 1000}s"
 
     private fun startNsdDiscovery() {
         try {

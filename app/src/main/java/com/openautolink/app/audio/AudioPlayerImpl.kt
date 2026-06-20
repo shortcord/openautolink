@@ -152,11 +152,8 @@ class AudioPlayerImpl(private val audioManager: AudioManager) : AudioPlayer {
         audioBytesReceived += frame.data.size
         val now = System.currentTimeMillis()
         if (now - lastAudioLogTime >= 2000) {
-            val ringBuf = slot.ringBufferAvailable
-            val ringCap = slot.ringBufferCapacity
-            val fillPct = if (ringCap > 0) (ringBuf * 100 / ringCap) else 0
             Log.i(TAG, "audio: frames=$audioFrameCount bytes=$audioBytesReceived " +
-                    "thisFrame=${frame.data.size}B ring=$ringBuf/$ringCap (${fillPct}%) " +
+                    "thisFrame=${frame.data.size}B " +
                     "written=${slot.framesWritten.get()} underruns=${slot.underrunCount.get()}")
             // Detailed per-slot diagnostics for remote viewing
             for ((p, s) in slots) {
@@ -285,40 +282,40 @@ class AudioPlayerImpl(private val audioManager: AudioManager) : AudioPlayer {
         // Re-apply coordinator volumes after resuming
         val actions = AudioPurpose.entries
             .filter { slots[it]?.isActive == true }
-            .let { activePurposes ->
-                activePurposes.map { purpose ->
-                    coordinator.onPurposeStarted(purpose)
-                }.flatten()
-            }
+            .flatMap { coordinator.onPurposeStarted(it) }
         applyVolumeActions(actions)
         updateStats()
     }
 
     private fun updateStats() {
-        val active = slots.filter { it.value.isActive }.keys
-        val underruns = slots.mapValues { it.value.underrunCount.get() }
-            .filter { it.value > 0 }
+        val prev = _stats.value
+        val active = mutableSetOf<AudioPurpose>()
+        val underruns = mutableMapOf<AudioPurpose, Long>()
+        val written = mutableMapOf<AudioPurpose, Long>()
+        val maxWrite = mutableMapOf<AudioPurpose, Long>()
+        val slowW = mutableMapOf<AudioPurpose, Long>()
+        val maxGap = mutableMapOf<AudioPurpose, Long>()
+        val hwUr = mutableMapOf<AudioPurpose, Long>()
 
-        // Log new underruns since last stats update
-        val prevUnderruns = _stats.value.underruns
-        for ((purpose, count) in underruns) {
-            val prev = prevUnderruns[purpose] ?: 0L
-            if (count > prev) {
-                DiagnosticLog.w("audio", "Underrun on $purpose: $count total (+${count - prev})")
+        for ((purpose, slot) in slots) {
+            if (slot.isActive) active.add(purpose)
+            val u = slot.underrunCount.get()
+            if (u > 0) {
+                underruns[purpose] = u
+                val prevU = prev.underruns[purpose] ?: 0L
+                if (u > prevU) {
+                    DiagnosticLog.w("audio", "Underrun on $purpose: $u total (+${u - prevU})")
+                }
             }
+            val fw = slot.framesWritten.get()
+            if (fw > 0) written[purpose] = fw
+            if (slot.totalWriteCalls > 0) {
+                maxWrite[purpose] = slot.maxWriteMs
+                maxGap[purpose] = slot.maxGapMs
+            }
+            if (slot.slowWriteCount > 0) slowW[purpose] = slot.slowWriteCount
+            if (slot.hwUnderrunCount > 0) hwUr[purpose] = slot.hwUnderrunCount
         }
-
-        val written = slots.mapValues { it.value.framesWritten.get() }
-            .filter { it.value > 0 }
-
-        val maxWrite = slots.filter { it.value.totalWriteCalls > 0 }
-            .mapValues { it.value.maxWriteMs }
-        val slowW = slots.filter { it.value.slowWriteCount > 0 }
-            .mapValues { it.value.slowWriteCount }
-        val maxGap = slots.filter { it.value.totalWriteCalls > 0 }
-            .mapValues { it.value.maxGapMs }
-        val hwUr = slots.filter { it.value.hwUnderrunCount > 0 }
-            .mapValues { it.value.hwUnderrunCount }
 
         _stats.value = AudioStats(
             activePurposes = active,
