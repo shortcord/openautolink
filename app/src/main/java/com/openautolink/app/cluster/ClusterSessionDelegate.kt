@@ -32,6 +32,7 @@ class ClusterSessionDelegate(
         private const val MAX_RETRY_ATTEMPTS = 3
     }
 
+    @Volatile
     var isNavigating = false
     var hasSeenActiveNav = false
 
@@ -137,5 +138,37 @@ class ClusterSessionDelegate(
         retryJob = null
         scope?.cancel()
         scope = null
+    }
+
+    /**
+     * Cancel any pending retry job. Callers should use this when they need to
+     * interrupt an in-flight retry — the delegate also cancels before invoking
+     * the nav-cleared/idle callbacks, so this is only needed from outside
+     * (e.g. force-end on user exit).
+     */
+    fun cancelRetryJob() {
+        retryJob?.cancel()
+        retryJob = null
+    }
+
+    /**
+     * End the active navigation: call [NavigationManager.navigationEnded]
+     * and reset [isNavigating]. Safe to call multiple times — the second
+     * call short-circuits when the delegate isn't navigating. Used by
+     * [ClusterMainSession.endActiveNavigation] for the user-exit path and
+     * by the session's `onDestroy`.
+     */
+    fun endNavigation() {
+        if (!isNavigating) return
+        val navManager = navigationManager() ?: run {
+            isNavigating = false
+            return
+        }
+        try {
+            navManager.navigationEnded()
+        } catch (e: Exception) {
+            Log.e(TAG, "navigationEnded() failed: ${e.message}")
+        }
+        isNavigating = false
     }
 }

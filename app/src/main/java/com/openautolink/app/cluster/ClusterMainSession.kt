@@ -58,13 +58,16 @@ class ClusterMainSession : Session() {
          */
         fun endActiveNavigation() {
             val session = primarySession ?: return
-            try {
-                session.navigationManager?.navigationEnded()
-                session.isNavigating = false
+            // Cancel the 10s arrival-timeout coroutine so it can't fire a
+            // second navigationEnded() after we return.
+            session.arrivalTimeoutJob?.cancel()
+            session.arrivalTimeoutJob = null
+            val delegate = session.delegate ?: return
+            val wasNavigating = delegate.isNavigating
+            delegate.endNavigation()
+            if (wasNavigating) {
                 Log.i(TAG, "navigationEnded() forced on user exit")
                 DiagnosticLog.i("cluster", "navigationEnded() forced on user exit")
-            } catch (e: Exception) {
-                Log.w(TAG, "endActiveNavigation() failed: ${e.message}")
             }
         }
     }
@@ -75,8 +78,10 @@ class ClusterMainSession : Session() {
     private var sessionRegistered = false
     private val sessionScope = CoroutineScope(Dispatchers.Main)
 
-    // Shared navigation delegate — handles state collection, debounce, retry
-    private lateinit var delegate: ClusterSessionDelegate
+    // Shared navigation delegate — handles state collection, debounce, retry.
+    // Nullable so the companion [endActiveNavigation] can safely route through
+    // it before [onCreateScreen] has assigned it.
+    private var delegate: ClusterSessionDelegate? = null
 
     override fun onCreateScreen(intent: Intent): Screen {
         if (!sessionRegistered) {
@@ -101,15 +106,10 @@ class ClusterMainSession : Session() {
         ).apply {
             onManeuverUpdate = { maneuver -> handleManeuverUpdate(maneuver) }
             onNavCleared = {
-                retryJob?.cancel()
-                retryJob = null
                 arrivalTimeoutJob?.cancel()
                 arrivalTimeoutJob = null
             }
-            onIdle = {
-                retryJob?.cancel()
-                retryJob = null
-            }
+            onIdle = { /* delegate already cleared retry state */ }
             setup()
         }
 
@@ -128,7 +128,7 @@ class ClusterMainSession : Session() {
                     Log.i(TAG, "Re-asserted navigationStarted() after onStopNavigation")
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to re-assert navigationStarted(): ${e.message}")
-                    delegate.isNavigating = false
+                    delegate?.isNavigating = false
                 }
             }
 
@@ -141,7 +141,7 @@ class ClusterMainSession : Session() {
         // Templates Host to create ClusterTurnCardActivity on the cluster display.
         try {
             navigationManager?.navigationStarted()
-            delegate.isNavigating = true
+            delegate?.isNavigating = true
             Log.i(TAG, "navigationStarted() called")
         } catch (e: Exception) {
             Log.w(TAG, "navigationStarted() failed: ${e.message}")
@@ -156,15 +156,9 @@ class ClusterMainSession : Session() {
                     arrivalTimeoutJob?.cancel()
                     arrivalTimeoutJob = null
                     clearManeuverIconCache()
-                    if (delegate.isNavigating) {
-                        try {
-                            navigationManager?.navigationEnded()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "navigationEnded() failed on destroy: ${e.message}")
-                        }
-                        delegate.isNavigating = false
-                    }
-                    delegate.cleanup()
+                    delegate?.endNavigation()
+                    delegate?.cleanup()
+                    delegate = null
                     navigationManager = null
                 }
                 if (sessionRegistered) {
@@ -185,11 +179,7 @@ class ClusterMainSession : Session() {
             if (arrivalTimeoutJob?.isActive != true) {
                 arrivalTimeoutJob = sessionScope.launch {
                     delay(ARRIVAL_TIMEOUT_MS)
-                    if (delegate.isNavigating) {
-                        Log.i(TAG, "Arrival timeout — ending navigation")
-                        try { navigationManager?.navigationEnded() } catch (_: Exception) {}
-                        delegate.isNavigating = false
-                    }
+                    delegate?.endNavigation()
                 }
             }
         } else {
